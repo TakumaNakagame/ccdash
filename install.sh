@@ -32,8 +32,12 @@ esac
 TAG="${CCDASH_VERSION:-}"
 if [ -z "$TAG" ]; then
   API="https://api.github.com/repos/${REPO}/releases/latest"
+  # NB: use `*` instead of `\+` for the captured group — BSD sed (macOS)
+  # doesn't accept the GNU `\+` ERE-style quantifier in BRE mode and
+  # silently produces no match, which is what was making this script
+  # fail on a stock macOS install.
   TAG="$(curl -fsSL "$API" \
-    | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]\+\)".*/\1/p' \
+    | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
     | head -n1)"
   if [ -z "${TAG:-}" ]; then
     echo "ccdash: failed to resolve latest release tag from $API" >&2
