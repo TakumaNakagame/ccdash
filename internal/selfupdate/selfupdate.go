@@ -96,7 +96,14 @@ func latestAsset(ctx context.Context) (tag, assetURL, sumURL string, err error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", "", fmt.Errorf("github api: %s", resp.Status)
+		// 403 + secondary-rate-limit body is the most common cause; surface
+		// a hint so the operator can switch to an explicit-version flow
+		// (currently only via the install script's CCDASH_VERSION env).
+		hint := ""
+		if resp.StatusCode == http.StatusForbidden {
+			hint = " — likely GitHub anonymous API rate limit (60/hr)"
+		}
+		return "", "", "", fmt.Errorf("github api: %s%s", resp.Status, hint)
 	}
 	var rel struct {
 		TagName string `json:"tag_name"`

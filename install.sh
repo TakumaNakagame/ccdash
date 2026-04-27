@@ -25,14 +25,23 @@ case "$ARCH_RAW" in
   *) echo "ccdash: unsupported arch '$ARCH_RAW'" >&2; exit 1 ;;
 esac
 
-# Resolve the latest release tag without needing jq.
-API="https://api.github.com/repos/${REPO}/releases/latest"
-TAG="$(curl -fsSL "$API" \
-  | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]\+\)".*/\1/p' \
-  | head -n1)"
-if [ -z "${TAG:-}" ]; then
-  echo "ccdash: failed to resolve latest release tag from $API" >&2
-  exit 1
+# Resolve the release tag. Operators can short-circuit the GitHub API
+# round-trip by setting CCDASH_VERSION=v1.2.3 — useful when:
+#   - the host is rate-limited on the GitHub anonymous API (60/hr)
+#   - they want a specific historical release rather than latest
+TAG="${CCDASH_VERSION:-}"
+if [ -z "$TAG" ]; then
+  API="https://api.github.com/repos/${REPO}/releases/latest"
+  TAG="$(curl -fsSL "$API" \
+    | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]\+\)".*/\1/p' \
+    | head -n1)"
+  if [ -z "${TAG:-}" ]; then
+    echo "ccdash: failed to resolve latest release tag from $API" >&2
+    echo "ccdash: GitHub may have rate-limited you (anonymous limit is 60/hr)" >&2
+    echo "ccdash: workaround — re-run with an explicit version, e.g.:" >&2
+    echo "ccdash:   CCDASH_VERSION=v0.1.0 sh install.sh" >&2
+    exit 1
+  fi
 fi
 
 BIN="ccdash-${OS}-${ARCH}"
