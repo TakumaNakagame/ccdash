@@ -1331,7 +1331,10 @@ var (
 	groupHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("237"))
 	tabActiveStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("12"))
 	confirmBannerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
-	tabInactiveStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Background(lipgloss.Color("236"))
+	// Inactive tabs were on bg 236 + fg 8 — both grays, basically illegible.
+	// Drop the background so inactive labels read against the terminal
+	// default and bump the fg to 250 (light gray) for solid contrast.
+	tabInactiveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	approvalRowStyle   = lipgloss.NewStyle().Background(lipgloss.Color("58")).Foreground(lipgloss.Color("15"))
 	approvalLabelStyle = lipgloss.NewStyle().Background(lipgloss.Color("11")).Foreground(lipgloss.Color("0")).Bold(true)
 	statusActive      = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // bright green: busy
