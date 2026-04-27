@@ -446,9 +446,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// The fresh sessionsMsg from refresh() will reset selSess to
 		// defaultSelectionIdx() when the previous selection is gone.
 		return m, m.refresh()
-	case "tab":
+	case "tab", "l":
 		return m, m.cycleProject(1)
-	case "shift+tab":
+	case "shift+tab", "h":
 		return m, m.cycleProject(-1)
 	case "R":
 		next, err := settings.Set(m.ctx, m.db, m.settings, "auto_repo_tabs", !m.settings.AutoRepoTabs)
@@ -1366,7 +1366,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  tab tabs  / search  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/tab  x/X arch  ctrl+x arch-tab  o trans  , settings  q quit"
+	keys := "↑/↓ sel  h/l tabs  / search  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/tab  x/X arch  ctrl+x arch-tab  o trans  , settings  q quit"
 	if m.pane == paneSettings {
 		keys = "↑/↓ select · space toggle · enter edit · esc back"
 	}
