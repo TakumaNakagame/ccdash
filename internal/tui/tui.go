@@ -27,10 +27,14 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
-func Run(ctx context.Context, d *db.DB) error {
+func Run(ctx context.Context, d *db.DB, lockTab string) error {
 	m := newModel(ctx, d)
 	if s, err := settings.Load(ctx, d); err == nil {
 		m.settings = s
+	}
+	if lockTab != "" {
+		m.projectFilter = lockTab
+		m.tabLocked = true
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
@@ -91,6 +95,11 @@ type model struct {
 	// to bulk-archive the current tab; the next keystroke is treated as
 	// the y/n confirmation rather than a normal shortcut.
 	awaitTabArchiveConfirm bool
+
+	// tabLocked is set when the operator launched ccdash with --tab
+	// <name>. The tab strip is hidden, h/l/Tab/Shift+Tab become no-ops,
+	// and the projectFilter never changes.
+	tabLocked bool
 
 	// settings page state
 	settingsSel    int
@@ -447,8 +456,16 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// defaultSelectionIdx() when the previous selection is gone.
 		return m, m.refresh()
 	case "tab", "l":
+		if m.tabLocked {
+			m.flash = "tab is locked via --tab flag"
+			return m, nil
+		}
 		return m, m.cycleProject(1)
 	case "shift+tab", "h":
+		if m.tabLocked {
+			m.flash = "tab is locked via --tab flag"
+			return m, nil
+		}
 		return m, m.cycleProject(-1)
 	case "R":
 		next, err := settings.Set(m.ctx, m.db, m.settings, "auto_repo_tabs", !m.settings.AutoRepoTabs)
@@ -875,7 +892,12 @@ func (m *model) archiveCurrentTab() tea.Cmd {
 	// next entry from the still-current m.allSessions (which still
 	// includes the soon-to-be-archived rows), then applyProjectFilter
 	// scopes m.sessions to the new tab so they aren't visible there.
-	cycleCmd := m.cycleProject(1)
+	// We skip the cycle when --tab pinned the operator: they explicitly
+	// asked to stay on this tab.
+	var cycleCmd tea.Cmd
+	if !m.tabLocked {
+		cycleCmd = m.cycleProject(1)
+	}
 	return tea.Batch(
 		cycleCmd,
 		func() tea.Msg {
@@ -1324,6 +1346,9 @@ func (m *model) renderHeader() string {
 	if m.searchQuery != "" {
 		leftLabel += " " + pendingStyle.Render("🔍 "+shorten(m.searchQuery, 30))
 	}
+	if m.tabLocked {
+		leftLabel += " " + subtitleStyle.Render("(locked)")
+	}
 	if m.showArchived || m.projectFilter != "" || m.searchQuery != "" {
 		left = leftLabel
 		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -1401,6 +1426,11 @@ func (m *model) renderFooter() string {
 // ‹ / › arrows so the operator knows there's more off-screen.
 func (m *model) renderTabBar() string {
 	if m.pane != paneSessions {
+		return ""
+	}
+	if m.tabLocked {
+		// --tab pinned the operator to a single bucket; the strip would
+		// be a one-button row that does nothing useful.
 		return ""
 	}
 	tabs := m.uniqueProjects()

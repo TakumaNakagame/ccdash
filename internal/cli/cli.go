@@ -30,6 +30,7 @@ import (
 func Root(version string) *cobra.Command {
 	var keepServer bool
 	var showVersion bool
+	var initialTab string
 	root := &cobra.Command{
 		Use:     "ccdash",
 		Short:   "Local dashboard for Claude Code sessions",
@@ -53,12 +54,14 @@ the TUI exits, so events are captured even while you're not watching. Use
 				fmt.Println(version)
 				return nil
 			}
-			return runTUI(cmd.Context(), keepServer)
+			return runTUI(cmd.Context(), keepServer, initialTab)
 		},
 	}
 	root.Flags().BoolVarP(&keepServer, "keep-server", "k", false,
 		"keep a detached collector running after the TUI exits")
 	root.Flags().BoolVar(&showVersion, "version", false, "print version and exit")
+	root.Flags().StringVar(&initialTab, "tab", "",
+		"lock the dashboard to a single tab (repo or user-named); hides the tab strip and disables tab cycling")
 	root.AddCommand(serverCmd())
 	root.AddCommand(claudeCmd())
 	root.AddCommand(sessionsCmd())
@@ -295,19 +298,22 @@ func uninstallHooksCmd() *cobra.Command {
 
 func tuiCmd() *cobra.Command {
 	var keepServer bool
+	var initialTab string
 	c := &cobra.Command{
 		Use:   "tui",
 		Short: "Open the dashboard TUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI(cmd.Context(), keepServer)
+			return runTUI(cmd.Context(), keepServer, initialTab)
 		},
 	}
 	c.Flags().BoolVarP(&keepServer, "keep-server", "k", false,
 		"keep a detached collector running after the TUI exits")
+	c.Flags().StringVar(&initialTab, "tab", "",
+		"lock the dashboard to a single tab")
 	return c
 }
 
-func runTUI(ctx context.Context, keepServer bool) error {
+func runTUI(ctx context.Context, keepServer bool, lockTab string) error {
 	d, err := openDB()
 	if err != nil {
 		return err
@@ -354,7 +360,7 @@ func runTUI(ctx context.Context, keepServer bool) error {
 		}()
 	}
 
-	tuiErr := tui.Run(ctx, d)
+	tuiErr := tui.Run(ctx, d, lockTab)
 
 	cancelServer()
 	if embedded && serverDone != nil {
