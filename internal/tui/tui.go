@@ -59,6 +59,9 @@ type model struct {
 	tailMessages []transcript.Message
 	tailPath     string
 	tailMtime    time.Time
+	// tailScroll offsets the right-pane view from the latest line. 0 means
+	// "auto-scroll to newest"; positive means "show this many lines older".
+	tailScroll int
 
 	// transcript view state
 	transcriptMessages []transcript.Message
@@ -240,23 +243,41 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleMouse routes wheel events to either the session selection or the
-// transcript scroll, depending on which view is active. We don't bother with
-// X/Y zoning yet — a single sensible action per pane is enough for MVP.
+// handleMouse routes wheel events. In the modal transcript view, scrolling
+// always moves through that buffer. In the sessions view, the X coordinate
+// of the wheel event decides whether we scroll the session list (left) or
+// the transcript tail (right).
 func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	const wheelStep = 3
-	switch msg.Type {
-	case tea.MouseWheelUp:
-		if m.pane == paneTranscript {
+	if m.pane == paneTranscript {
+		switch msg.Type {
+		case tea.MouseWheelUp:
 			bodyHeight := m.transcriptVisibleHeight()
 			m.transcriptScroll = clamp(m.transcriptScroll-wheelStep, 0, m.maxTranscriptScroll(bodyHeight))
+		case tea.MouseWheelDown:
+			bodyHeight := m.transcriptVisibleHeight()
+			m.transcriptScroll = clamp(m.transcriptScroll+wheelStep, 0, m.maxTranscriptScroll(bodyHeight))
+		}
+		return m, nil
+	}
+	leftW := m.width / 2
+	if leftW < 30 {
+		leftW = 30
+	}
+	inRight := msg.X >= leftW+3 // 3-col separator
+	switch msg.Type {
+	case tea.MouseWheelUp:
+		if inRight {
+			m.tailScroll += wheelStep
 			return m, nil
 		}
 		return m, m.move(-1)
 	case tea.MouseWheelDown:
-		if m.pane == paneTranscript {
-			bodyHeight := m.transcriptVisibleHeight()
-			m.transcriptScroll = clamp(m.transcriptScroll+wheelStep, 0, m.maxTranscriptScroll(bodyHeight))
+		if inRight {
+			m.tailScroll -= wheelStep
+			if m.tailScroll < 0 {
+				m.tailScroll = 0
+			}
 			return m, nil
 		}
 		return m, m.move(1)
@@ -411,6 +432,7 @@ func (m *model) move(delta int) tea.Cmd {
 	if m.selSess != prev {
 		m.tailPath = ""
 		m.tailMtime = time.Time{}
+		m.tailScroll = 0 // reset scroll when changing sessions
 		return m.loadTailCmd()
 	}
 	return nil
@@ -426,6 +448,7 @@ func (m *model) jumpTo(idx int) tea.Cmd {
 	m.selSess = clamp(idx, 0, len(m.sessions)-1)
 	m.tailPath = ""
 	m.tailMtime = time.Time{}
+	m.tailScroll = 0
 	return m.loadTailCmd()
 }
 
@@ -757,8 +780,7 @@ func (m *model) renderTranscriptTail(width, height int) string {
 	var lines []string
 	for i, msg := range m.tailMessages {
 		if i > 0 {
-			// Don't insert a blank line between a tool call and its result —
-			// keep them visually attached as one logical block.
+			// Keep a tool call and its result visually attached.
 			if msg.Kind != transcript.KindToolResult {
 				lines = append(lines, "")
 			}
@@ -768,11 +790,26 @@ func (m *model) renderTranscriptTail(width, height int) string {
 	if height < 1 {
 		height = 1
 	}
-	start := len(lines) - height
+	// Clamp scroll: 0 = newest at bottom; max = top of buffer.
+	maxScroll := len(lines) - height
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.tailScroll > maxScroll {
+		m.tailScroll = maxScroll
+	}
+	end := len(lines) - m.tailScroll
+	if end > len(lines) {
+		end = len(lines)
+	}
+	if end < 1 {
+		end = 1
+	}
+	start := end - height
 	if start < 0 {
 		start = 0
 	}
-	return strings.Join(lines[start:], "\n")
+	return strings.Join(lines[start:end], "\n")
 }
 
 // approvalsForSelected returns pending approvals for the currently selected
