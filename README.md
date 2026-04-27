@@ -17,7 +17,19 @@ them in a TUI.
 not yet implemented — pending approvals are recorded but Claude Code falls back
 to its built-in interactive prompt.
 
-## Build
+## Install
+
+One-liner that grabs the latest release binary for the current OS/arch
+into `$HOME/.local/bin` (override with `CCDASH_INSTALL_DIR=...`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/TakumaNakagame/ccdash/main/install.sh | sh
+```
+
+Already installed? `ccdash update` checks GitHub for a newer release and
+replaces the binary in-place — no need to rerun the curl line.
+
+## Build from source
 
 ```sh
 go build -o ./bin/ccdash ./cmd/ccdash

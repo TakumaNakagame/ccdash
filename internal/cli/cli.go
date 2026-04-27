@@ -21,16 +21,19 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/hookcfg"
 	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/takumanakagame/ccmanage/internal/selfupdate"
 	"github.com/takumanakagame/ccmanage/internal/server"
 	"github.com/takumanakagame/ccmanage/internal/tui"
 	"github.com/takumanakagame/ccmanage/internal/wrapper"
 )
 
-func Root() *cobra.Command {
+func Root(version string) *cobra.Command {
 	var keepServer bool
+	var showVersion bool
 	root := &cobra.Command{
-		Use:   "ccdash",
-		Short: "Local dashboard for Claude Code sessions",
+		Use:     "ccdash",
+		Short:   "Local dashboard for Claude Code sessions",
+		Version: version,
 		Long: `ccdash is a local TUI dashboard for monitoring multiple Claude Code sessions.
 
 Quick start:
@@ -46,11 +49,16 @@ the TUI exits, so events are captured even while you're not watching. Use
 'ccdash server' for a foreground collector (e.g. as a systemd user unit).`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if showVersion {
+				fmt.Println(version)
+				return nil
+			}
 			return runTUI(cmd.Context(), keepServer)
 		},
 	}
 	root.Flags().BoolVarP(&keepServer, "keep-server", "k", false,
 		"keep a detached collector running after the TUI exits")
+	root.Flags().BoolVar(&showVersion, "version", false, "print version and exit")
 	root.AddCommand(serverCmd())
 	root.AddCommand(claudeCmd())
 	root.AddCommand(sessionsCmd())
@@ -59,7 +67,29 @@ the TUI exits, so events are captured even while you're not watching. Use
 	root.AddCommand(installHooksCmd())
 	root.AddCommand(uninstallHooksCmd())
 	root.AddCommand(tuiCmd())
+	root.AddCommand(updateCmd(version))
 	return root
+}
+
+func updateCmd(currentVersion string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "update",
+		Short: "Replace this binary with the latest GitHub release",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Printf("ccdash: current version %s\n", currentVersion)
+			res, err := selfupdate.Run(cmd.Context(), currentVersion)
+			if err != nil {
+				return err
+			}
+			if res.NoOp {
+				fmt.Printf("ccdash: %s\n", res.Reason)
+				return nil
+			}
+			fmt.Printf("ccdash: upgraded to %s\n", res.NewVersion)
+			fmt.Printf("ccdash: replaced %s\n", res.BinaryPath)
+			return nil
+		},
+	}
 }
 
 func serverCmd() *cobra.Command {
