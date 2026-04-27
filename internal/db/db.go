@@ -194,8 +194,9 @@ func (d *DB) UpdateApprovalStatus(ctx context.Context, id int64, status model.Ap
 }
 
 // ResolvePendingByToolUseID closes any pending approval whose tool_use_id
-// matches. We call this from PostToolUse / PostToolUseFailure handlers to
-// clean up approvals once the tool actually ran.
+// matches. PermissionRequest hooks don't carry a tool_use_id today, so this
+// is best-effort; ResolveOldestPendingForTool is the fallback that actually
+// fires for most cases.
 func (d *DB) ResolvePendingByToolUseID(ctx context.Context, sessionID, toolUseID string, status model.ApprovalStatus) error {
 	if toolUseID == "" {
 		return nil
@@ -205,6 +206,41 @@ func (d *DB) ResolvePendingByToolUseID(ctx context.Context, sessionID, toolUseID
 		SET status = ?, decided_at = ?
 		WHERE session_id = ? AND tool_use_id = ? AND status = 'pending'
 	`, string(status), time.Now().UTC().Unix(), sessionID, toolUseID)
+	return err
+}
+
+// ResolveOldestPendingForTool closes the single oldest pending approval that
+// matches session_id + tool name. We call this from PostToolUse handlers as a
+// fallback because PermissionRequest payloads don't include tool_use_id —
+// matching by tool name is good enough in practice since approvals are
+// processed FIFO by Claude.
+func (d *DB) ResolveOldestPendingForTool(ctx context.Context, sessionID, tool string, status model.ApprovalStatus) error {
+	if sessionID == "" || tool == "" {
+		return nil
+	}
+	_, err := d.sql.ExecContext(ctx, `
+		UPDATE approvals
+		SET status = ?, decided_at = ?
+		WHERE id = (
+			SELECT id FROM approvals
+			WHERE session_id = ? AND tool = ? AND status = 'pending'
+			ORDER BY ts ASC LIMIT 1
+		)
+	`, string(status), time.Now().UTC().Unix(), sessionID, tool)
+	return err
+}
+
+// MarkStalePendingTimeout flips pending approvals older than `age` to
+// 'timeout'. We run this from the server's discovery loop so the dashboard
+// doesn't accumulate phantom approvals when hooks land out of order or when
+// Claude's own 30-second hook timeout has already elapsed.
+func (d *DB) MarkStalePendingTimeout(ctx context.Context, age time.Duration) error {
+	cutoff := time.Now().UTC().Add(-age).Unix()
+	_, err := d.sql.ExecContext(ctx, `
+		UPDATE approvals
+		SET status = 'timeout', decided_at = ?
+		WHERE status = 'pending' AND ts < ?
+	`, time.Now().UTC().Unix(), cutoff)
 	return err
 }
 

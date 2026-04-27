@@ -95,6 +95,11 @@ func (s *Server) discoveryLoop(ctx context.Context) {
 }
 
 func (s *Server) refreshDiscovery(ctx context.Context) error {
+	// Sweep stale approvals first — anything pending for longer than Claude's
+	// own 30-second hook timeout cannot still be waiting on us.
+	if err := s.db.MarkStalePendingTimeout(ctx, 45*time.Second); err != nil {
+		log.Printf("approval sweep: %v", err)
+	}
 	discovered, err := discovery.Scan(ctx, "")
 	if err != nil {
 		return err
@@ -330,7 +335,13 @@ func (s *Server) handlePostTool(w http.ResponseWriter, r *http.Request) {
 		Summary:   summary,
 		Payload:   raw,
 	})
-	_ = s.db.ResolvePendingByToolUseID(r.Context(), p.SessionID, p.ToolUseID, model.ApprovalResolved)
+	if err := s.db.ResolvePendingByToolUseID(r.Context(), p.SessionID, p.ToolUseID, model.ApprovalResolved); err != nil {
+		log.Printf("resolve approval: %v", err)
+	}
+	// PermissionRequest hooks don't carry tool_use_id, so the call above only
+	// matches when we got lucky. Fall back to closing the oldest pending
+	// approval with the same session+tool — that's almost always the one.
+	_ = s.db.ResolveOldestPendingForTool(r.Context(), p.SessionID, p.ToolName, model.ApprovalResolved)
 	writeOK(w, nil)
 }
 
@@ -353,6 +364,7 @@ func (s *Server) handlePostToolFailure(w http.ResponseWriter, r *http.Request) {
 		Payload:   raw,
 	})
 	_ = s.db.ResolvePendingByToolUseID(r.Context(), p.SessionID, p.ToolUseID, model.ApprovalFailed)
+	_ = s.db.ResolveOldestPendingForTool(r.Context(), p.SessionID, p.ToolName, model.ApprovalFailed)
 	writeOK(w, nil)
 }
 
