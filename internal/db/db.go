@@ -56,6 +56,9 @@ func (d *DB) migrate() error {
 			transcript_path TEXT,
 			model TEXT,
 			title TEXT,
+			custom_title TEXT,
+			archived INTEGER NOT NULL DEFAULT 0,
+			favorite INTEGER NOT NULL DEFAULT 0,
 			first_seen INTEGER NOT NULL,
 			last_seen INTEGER NOT NULL,
 			status TEXT NOT NULL
@@ -96,6 +99,9 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN proc_pid INTEGER`,
 		`ALTER TABLE sessions ADD COLUMN pane TEXT`,
 		`ALTER TABLE sessions ADD COLUMN title TEXT`,
+		`ALTER TABLE sessions ADD COLUMN custom_title TEXT`,
+		`ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE sessions ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE approvals ADD COLUMN tool_use_id TEXT`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
@@ -244,17 +250,27 @@ func (d *DB) MarkStalePendingTimeout(ctx context.Context, age time.Duration) err
 	return err
 }
 
-func (d *DB) ListSessions(ctx context.Context) ([]model.Session, error) {
+// ListSessions returns sessions matching the archived flag. When archived is
+// false you get the working set (favorites first, then by last_seen DESC);
+// when true you get the archive view ordered the same way.
+func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, error) {
+	archivedInt := 0
+	if archived {
+		archivedInt = 1
+	}
 	rows, err := d.sql.QueryContext(ctx, `
 		SELECT s.session_id, s.cwd, COALESCE(s.repo,''), COALESCE(s.branch,''), COALESCE(s.commit_hash,''),
 		       COALESCE(s.wrapper_pid,0), COALESCE(s.proc_pid,0), COALESCE(s.pane,''),
 		       COALESCE(s.tmux_pane,''), COALESCE(s.tmux_session,''),
-		       COALESCE(s.transcript_path,''), COALESCE(s.model,''), COALESCE(s.title,''),
+		       COALESCE(s.transcript_path,''), COALESCE(s.model,''),
+		       COALESCE(s.title,''), COALESCE(s.custom_title,''),
+		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
 		       s.first_seen, s.last_seen, s.status,
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending
 		FROM sessions s
-		ORDER BY s.last_seen DESC
-	`)
+		WHERE COALESCE(s.archived,0) = ?
+		ORDER BY COALESCE(s.favorite,0) DESC, s.last_seen DESC
+	`, archivedInt)
 	if err != nil {
 		return nil, err
 	}
@@ -264,19 +280,51 @@ func (d *DB) ListSessions(ctx context.Context) ([]model.Session, error) {
 		var s model.Session
 		var first, last int64
 		var status string
+		var arch, fav int
 		if err := rows.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
 			&s.WrapperPID, &s.ProcPID, &s.Pane,
 			&s.TmuxPane, &s.TmuxSession,
-			&s.TranscriptPath, &s.Model, &s.Title,
+			&s.TranscriptPath, &s.Model,
+			&s.Title, &s.CustomTitle,
+			&arch, &fav,
 			&first, &last, &status, &s.PendingCount); err != nil {
 			return nil, err
 		}
 		s.FirstSeen = time.Unix(first, 0).UTC()
 		s.LastSeen = time.Unix(last, 0).UTC()
 		s.Status = model.SessionStatus(status)
+		s.Archived = arch != 0
+		s.Favorite = fav != 0
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// SetArchived flips the archived flag.
+func (d *DB) SetArchived(ctx context.Context, sessionID string, archived bool) error {
+	v := 0
+	if archived {
+		v = 1
+	}
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET archived = ? WHERE session_id = ?`, v, sessionID)
+	return err
+}
+
+// SetFavorite flips the favorite flag.
+func (d *DB) SetFavorite(ctx context.Context, sessionID string, favorite bool) error {
+	v := 0
+	if favorite {
+		v = 1
+	}
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET favorite = ? WHERE session_id = ?`, v, sessionID)
+	return err
+}
+
+// SetCustomTitle stores an operator-supplied title that overrides the
+// transcript-derived one in the UI. Pass an empty string to clear.
+func (d *DB) SetCustomTitle(ctx context.Context, sessionID, title string) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET custom_title = ? WHERE session_id = ?`, title, sessionID)
+	return err
 }
 
 func (d *DB) ListEvents(ctx context.Context, sessionID string, limit int) ([]model.Event, error) {

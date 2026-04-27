@@ -67,6 +67,11 @@ type model struct {
 	// "auto-scroll to newest"; positive means "show this many lines older".
 	tailScroll int
 
+	// list mode + inline editor state
+	showArchived bool
+	editingTitle bool
+	titleBuffer  string
+
 	// transcript view state
 	transcriptMessages []transcript.Message
 	transcriptScroll   int
@@ -94,9 +99,10 @@ func tickCmd() tea.Cmd {
 }
 
 func (m *model) refresh() tea.Cmd {
+	archived := m.showArchived
 	cmds := []tea.Cmd{
 		func() tea.Msg {
-			ss, err := m.db.ListSessions(m.ctx)
+			ss, err := m.db.ListSessions(m.ctx, archived)
 			if err != nil {
 				return errMsg{err}
 			}
@@ -293,6 +299,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.pane == paneTranscript {
 		return m.handleKeyTranscript(msg)
 	}
+	if m.editingTitle {
+		return m.handleKeyTitleEdit(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
@@ -314,8 +323,120 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.decideApproval("allow")
 	case "d":
 		return m, m.decideApproval("deny")
+	case "x":
+		return m, m.toggleArchiveCurrent()
+	case "X":
+		m.showArchived = !m.showArchived
+		m.selSess = 0
+		m.tailScroll = 0
+		return m, m.refresh()
+	case "f":
+		return m, m.toggleFavoriteCurrent()
+	case "t":
+		return m, m.startTitleEdit()
 	}
 	return m, nil
+}
+
+// handleKeyTitleEdit consumes keystrokes while the rename input is active.
+// We avoid the larger key map here so typed letters land in the buffer
+// rather than triggering global shortcuts.
+func (m *model) handleKeyTitleEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		cmd := m.commitTitleEdit()
+		m.editingTitle = false
+		m.titleBuffer = ""
+		return m, cmd
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.editingTitle = false
+		m.titleBuffer = ""
+		return m, nil
+	case tea.KeyBackspace:
+		runes := []rune(m.titleBuffer)
+		if len(runes) > 0 {
+			m.titleBuffer = string(runes[:len(runes)-1])
+		}
+	case tea.KeySpace:
+		m.titleBuffer += " "
+	case tea.KeyRunes:
+		m.titleBuffer += string(msg.Runes)
+	}
+	return m, nil
+}
+
+func (m *model) toggleArchiveCurrent() tea.Cmd {
+	if len(m.sessions) == 0 {
+		return nil
+	}
+	s := m.sessions[m.selSess]
+	want := !s.Archived
+	sid := s.SessionID
+	verb := "archived"
+	if !want {
+		verb = "unarchived"
+	}
+	return func() tea.Msg {
+		if err := m.db.SetArchived(m.ctx, sid, want); err != nil {
+			return attachDoneMsg{err: err}
+		}
+		return attachDoneMsg{msg: verb + " " + shortID(sid)}
+	}
+}
+
+func (m *model) toggleFavoriteCurrent() tea.Cmd {
+	if len(m.sessions) == 0 {
+		return nil
+	}
+	s := m.sessions[m.selSess]
+	want := !s.Favorite
+	sid := s.SessionID
+	verb := "favorited"
+	if !want {
+		verb = "unfavorited"
+	}
+	return func() tea.Msg {
+		if err := m.db.SetFavorite(m.ctx, sid, want); err != nil {
+			return attachDoneMsg{err: err}
+		}
+		return attachDoneMsg{msg: verb + " " + shortID(sid)}
+	}
+}
+
+func (m *model) startTitleEdit() tea.Cmd {
+	if len(m.sessions) == 0 {
+		return nil
+	}
+	s := m.sessions[m.selSess]
+	m.editingTitle = true
+	m.titleBuffer = s.CustomTitle
+	if m.titleBuffer == "" {
+		m.titleBuffer = s.Title
+	}
+	return nil
+}
+
+func (m *model) commitTitleEdit() tea.Cmd {
+	if len(m.sessions) == 0 {
+		return nil
+	}
+	s := m.sessions[m.selSess]
+	sid := s.SessionID
+	title := strings.TrimSpace(m.titleBuffer)
+	// If the buffer matches the auto-derived title we treat it as "clear
+	// the override" so the auto title takes over again.
+	if title == strings.TrimSpace(s.Title) {
+		title = ""
+	}
+	return func() tea.Msg {
+		if err := m.db.SetCustomTitle(m.ctx, sid, title); err != nil {
+			return attachDoneMsg{err: err}
+		}
+		if title == "" {
+			return attachDoneMsg{msg: "cleared custom title for " + shortID(sid)}
+		}
+		return attachDoneMsg{msg: "set title: " + shorten(title, 60)}
+	}
 }
 
 // decideApproval sends the operator's allow/deny choice to the embedded
@@ -397,7 +518,10 @@ func (m *model) openTranscript() tea.Cmd {
 		return nil
 	}
 	path := s.TranscriptPath
-	title := s.Title
+	title := s.DisplayTitle()
+	if title == "" {
+		title = s.DisplayTitle()
+	}
 	if title == "" {
 		title = shortID(s.SessionID)
 	}
@@ -582,6 +706,14 @@ func (m *model) renderHeader() string {
 	if gap < 1 {
 		gap = 1
 	}
+	if m.showArchived {
+		// Make the title bar tell the operator they're in the archive view.
+		left = titleStyle.Render("ccdash") + " " + subtitleStyle.Render("[archive]")
+		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right)
+		if gap < 1 {
+			gap = 1
+		}
+	}
 	bar := left + strings.Repeat(" ", gap) + right
 	// Single-line rule under the title bar to separate header from body.
 	// Count is computed from the rune's display width because '─' is East
@@ -599,7 +731,15 @@ func (m *model) renderHeader() string {
 }
 
 func (m *model) renderFooter() string {
-	keys := "↑/↓ select  enter attach  a allow  d deny  o transcript  r refresh  q quit"
+	if m.editingTitle {
+		prompt := "rename: " + m.titleBuffer + "▏"
+		hint := subtitleStyle.Render("enter save · esc cancel")
+		return pendingStyle.Render(prompt) + "  " + hint
+	}
+	keys := "↑/↓ select  enter attach  a/d allow/deny  f fav  t rename  x archive  X archived view  o transcript  q quit"
+	if m.showArchived {
+		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  q quit"
+	}
 	if m.pane == paneTranscript {
 		keys = "↑/↓ scroll  pgup/pgdn page  g/G top/end  r reload  esc/q back"
 	}
@@ -710,9 +850,12 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	statusDot := renderStatusDot(s.Status)
 	age := runewidth.FillRight(humanDuration(time.Since(s.LastSeen)), 4)
 
-	title := s.Title
+	title := s.DisplayTitle()
 	if title == "" {
 		title = "(no prompt yet)"
+	}
+	if s.Favorite {
+		title = "★ " + title
 	}
 	if s.PendingCount > 0 {
 		title = "⚠ " + title

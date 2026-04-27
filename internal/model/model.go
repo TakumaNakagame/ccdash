@@ -27,11 +27,23 @@ type Session struct {
 	TmuxSession    string        `json:"tmux_session,omitempty"`
 	TranscriptPath string        `json:"transcript_path,omitempty"`
 	Model          string        `json:"model,omitempty"`
-	Title          string        `json:"title,omitempty"`
+	Title          string        `json:"title,omitempty"`        // auto-derived from transcript
+	CustomTitle    string        `json:"custom_title,omitempty"` // operator override; takes precedence
+	Archived       bool          `json:"archived,omitempty"`
+	Favorite       bool          `json:"favorite,omitempty"`
 	FirstSeen      time.Time     `json:"first_seen"`
 	LastSeen       time.Time     `json:"last_seen"`
 	Status         SessionStatus `json:"status"`
 	PendingCount   int           `json:"pending_count,omitempty"`
+}
+
+// DisplayTitle returns the operator-set title when present, otherwise the
+// auto-derived one from the transcript.
+func (s Session) DisplayTitle() string {
+	if s.CustomTitle != "" {
+		return s.CustomTitle
+	}
+	return s.Title
 }
 
 type EventType string

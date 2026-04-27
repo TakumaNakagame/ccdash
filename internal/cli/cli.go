@@ -108,7 +108,7 @@ func sessionsCmd() *cobra.Command {
 				return err
 			}
 			defer d.Close()
-			ss, err := d.ListSessions(cmd.Context())
+			ss, err := d.ListSessions(cmd.Context(), false)
 			if err != nil {
 				return err
 			}
