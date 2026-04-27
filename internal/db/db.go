@@ -105,6 +105,7 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN summary TEXT`,
 		`ALTER TABLE sessions ADD COLUMN summary_status TEXT`,
 		`ALTER TABLE sessions ADD COLUMN summary_at INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN user_tab TEXT`,
 		`ALTER TABLE approvals ADD COLUMN tool_use_id TEXT`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
@@ -273,7 +274,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.wrapper_pid,0), COALESCE(s.proc_pid,0), COALESCE(s.pane,''),
 		       COALESCE(s.tmux_pane,''), COALESCE(s.tmux_session,''),
 		       COALESCE(s.transcript_path,''), COALESCE(s.model,''),
-		       COALESCE(s.title,''), COALESCE(s.custom_title,''),
+		       COALESCE(s.title,''), COALESCE(s.custom_title,''), COALESCE(s.user_tab,''),
 		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
 		       COALESCE(s.summary,''), COALESCE(s.summary_status,''), COALESCE(s.summary_at,0),
 		       s.first_seen, s.last_seen, s.status,
@@ -296,7 +297,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.WrapperPID, &s.ProcPID, &s.Pane,
 			&s.TmuxPane, &s.TmuxSession,
 			&s.TranscriptPath, &s.Model,
-			&s.Title, &s.CustomTitle,
+			&s.Title, &s.CustomTitle, &s.UserTab,
 			&arch, &fav,
 			&s.Summary, &s.SummaryStatus, &sumAt,
 			&first, &last, &status, &s.PendingCount); err != nil {
@@ -339,6 +340,14 @@ func (d *DB) SetFavorite(ctx context.Context, sessionID string, favorite bool) e
 // transcript-derived one in the UI. Pass an empty string to clear.
 func (d *DB) SetCustomTitle(ctx context.Context, sessionID, title string) error {
 	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET custom_title = ? WHERE session_id = ?`, title, sessionID)
+	return err
+}
+
+// SetUserTab assigns a session to an operator-named tab. The tab key is
+// just a string — empty clears the assignment so the session falls back to
+// its repo-based group.
+func (d *DB) SetUserTab(ctx context.Context, sessionID, tab string) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET user_tab = ? WHERE session_id = ?`, tab, sessionID)
 	return err
 }
 

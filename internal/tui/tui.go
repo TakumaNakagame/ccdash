@@ -73,6 +73,7 @@ type model struct {
 	// list mode + inline editor state
 	showArchived  bool
 	editingTitle  bool
+	editingTab    bool
 	titleBuffer   string
 	projectFilter string // "" = All; otherwise repo / cwd basename
 
@@ -316,7 +317,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.pane == paneTranscript {
 		return m.handleKeyTranscript(msg)
 	}
-	if m.editingTitle {
+	if m.editingTitle || m.editingTab {
 		return m.handleKeyTitleEdit(msg)
 	}
 	switch msg.String() {
@@ -379,6 +380,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.toggleFavoriteCurrent()
 	case "t":
 		return m, m.startTitleEdit()
+	case "T":
+		return m, m.startTabEdit()
 	case "s":
 		return m, m.summarizeCurrent()
 	}
@@ -401,9 +404,14 @@ func (m *model) applyProjectFilter() {
 	m.sessions = out
 }
 
-// projectOf names the project a session belongs to, prefering the repo
-// basename ccdash already populated and falling back to the cwd basename.
+// projectOf names the group a session belongs to. Operator-set user_tab
+// wins; otherwise we fall back to the repo basename, then the cwd
+// basename, so sessions still bucket sensibly without any explicit
+// labeling.
 func projectOf(s mdl.Session) string {
+	if s.UserTab != "" {
+		return s.UserTab
+	}
 	if s.Repo != "" {
 		return s.Repo
 	}
@@ -516,12 +524,19 @@ func (m *model) summarizeCurrent() tea.Cmd {
 func (m *model) handleKeyTitleEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEnter:
-		cmd := m.commitTitleEdit()
-		m.editingTitle = false
+		var cmd tea.Cmd
+		if m.editingTab {
+			cmd = m.commitTabEdit()
+			m.editingTab = false
+		} else {
+			cmd = m.commitTitleEdit()
+			m.editingTitle = false
+		}
 		m.titleBuffer = ""
 		return m, cmd
 	case tea.KeyEsc, tea.KeyCtrlC:
 		m.editingTitle = false
+		m.editingTab = false
 		m.titleBuffer = ""
 		return m, nil
 	case tea.KeyBackspace:
@@ -586,6 +601,33 @@ func (m *model) startTitleEdit() tea.Cmd {
 		m.titleBuffer = s.Title
 	}
 	return nil
+}
+
+func (m *model) startTabEdit() tea.Cmd {
+	if len(m.sessions) == 0 {
+		return nil
+	}
+	m.editingTab = true
+	m.titleBuffer = m.sessions[m.selSess].UserTab
+	return nil
+}
+
+func (m *model) commitTabEdit() tea.Cmd {
+	if len(m.sessions) == 0 {
+		return nil
+	}
+	s := m.sessions[m.selSess]
+	sid := s.SessionID
+	tab := strings.TrimSpace(m.titleBuffer)
+	return func() tea.Msg {
+		if err := m.db.SetUserTab(m.ctx, sid, tab); err != nil {
+			return attachDoneMsg{err: err}
+		}
+		if tab == "" {
+			return attachDoneMsg{msg: "cleared tab for " + shortID(sid)}
+		}
+		return attachDoneMsg{msg: "tab: " + tab}
+	}
 }
 
 func (m *model) commitTitleEdit() tea.Cmd {
@@ -920,7 +962,12 @@ func (m *model) renderFooter() string {
 		hint := subtitleStyle.Render("enter save · esc cancel")
 		return pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  tab project  J/K right-line  pgup/pgdn right-page  enter attach  a/A/d allow/keep/deny  s sum  f fav  t rename  x arch  X arch-view  o trans  q quit"
+	if m.editingTab {
+		prompt := "tab: " + m.titleBuffer + "▏"
+		hint := subtitleStyle.Render("enter assign · esc cancel · empty=clear")
+		return pendingStyle.Render(prompt) + "  " + hint
+	}
+	keys := "↑/↓ sel  tab tabs  J/K right-line  pgup/pgdn right-page  enter attach  a/A/d allow/keep/deny  s sum  f fav  t rename  T set-tab  x arch  X arch-view  o trans  q quit"
 	if m.showArchived {
 		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  q quit"
 	}

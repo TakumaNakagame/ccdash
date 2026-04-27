@@ -29,6 +29,7 @@ type Session struct {
 	Model          string        `json:"model,omitempty"`
 	Title          string        `json:"title,omitempty"`        // auto-derived from transcript
 	CustomTitle    string        `json:"custom_title,omitempty"` // operator override; takes precedence
+	UserTab        string        `json:"user_tab,omitempty"`     // operator-named tab; overrides repo-based grouping
 	Archived       bool          `json:"archived,omitempty"`
 	Favorite       bool          `json:"favorite,omitempty"`
 	Summary        string        `json:"summary,omitempty"`
