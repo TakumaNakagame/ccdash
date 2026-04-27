@@ -327,6 +327,28 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.jumpTo(0)
 	case "G", "end":
 		return m, m.jumpTo(-1)
+	case "J":
+		// 1-line scroll of the right-pane transcript toward the newest.
+		// tailScroll==0 means "auto-tail at the bottom"; we never go
+		// negative.
+		if m.tailScroll > 0 {
+			m.tailScroll--
+		}
+		return m, nil
+	case "K":
+		// 1-line scroll toward older content.
+		m.tailScroll++
+		return m, nil
+	case "pgdown":
+		step := m.tailHalfPage()
+		m.tailScroll -= step
+		if m.tailScroll < 0 {
+			m.tailScroll = 0
+		}
+		return m, nil
+	case "pgup":
+		m.tailScroll += m.tailHalfPage()
+		return m, nil
 	case "r":
 		return m, m.refresh()
 	case "enter":
@@ -354,6 +376,19 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.summarizeCurrent()
 	}
 	return m, nil
+}
+
+// tailHalfPage approximates half the right pane's visible height. We don't
+// know the exact pane size at key-handler time (it depends on the summary
+// section, approval section, and header), so we use half the terminal
+// height as a reasonable upper bound. The scroll is clamped at render
+// time so over-shooting is harmless.
+func (m *model) tailHalfPage() int {
+	step := m.height / 2
+	if step < 1 {
+		step = 1
+	}
+	return step
 }
 
 type summaryDoneMsg struct {
@@ -794,7 +829,7 @@ func (m *model) renderFooter() string {
 		hint := subtitleStyle.Render("enter save · esc cancel")
 		return pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  enter attach  a allow  A keep-allow  d deny  s summary  f fav  t rename  x archive  X archived  o transcript  q quit"
+	keys := "↑/↓ sel  J/K right-line  pgup/pgdn right-page  enter attach  a/A/d allow/keep/deny  s summary  f fav  t rename  x archive  X archived  o transcript  q quit"
 	if m.showArchived {
 		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  q quit"
 	}
