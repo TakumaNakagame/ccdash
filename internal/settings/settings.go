@@ -45,7 +45,10 @@ const (
 	keyBellOnPending     = "bell_on_pending"
 	keyNewestAtBottom    = "newest_at_bottom"
 	keyLayoutMode        = "layout_mode"
-	keyVerticalAutoCols  = "vertical_auto_cols"
+	// KeyVerticalAutoCols is exported so the TUI can annotate this row
+	// with the live terminal width.
+	KeyVerticalAutoCols  = "vertical_auto_cols"
+	keyVerticalAutoCols  = KeyVerticalAutoCols
 	keyApproveEnabled    = "approve_enabled"
 
 	// Legacy keys retained only for one-shot migration on Load.

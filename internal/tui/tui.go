@@ -1520,6 +1520,16 @@ func (m *model) renderSettingsBody(height int) string {
 			} else {
 				valStr = fmt.Sprintf("%d", cur)
 			}
+			// Show the live terminal width next to the auto-vertical
+			// threshold so the operator can pick a value relative to
+			// their current window.
+			if s.Key == settings.KeyVerticalAutoCols {
+				marker := "≥ threshold"
+				if m.width < cur {
+					marker = "< threshold ⇒ vertical"
+				}
+				valStr += "  " + subtitleStyle.Render(fmt.Sprintf("(now: %d cols, %s)", m.width, marker))
+			}
 		case settings.KindAction:
 			valStr = pendingStyle.Render("[run]")
 		case settings.KindEnum:
