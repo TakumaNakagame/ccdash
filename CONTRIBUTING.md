@@ -31,9 +31,11 @@ ccdash                       # TUI 起動
 
 開発中は `ccdash` でなく `~/go/bin/ccdash` のフルパスで動かすと、リリース版 (`~/.local/bin/ccdash` 等) と切り分けられます。
 
-詳しいアーキテクチャ・hook の仕様調査・将来の宿題は以下:
+詳しいアーキテクチャと運用ガイドは以下:
 
-- [`docs/research.md`](./docs/research.md) — Phase 0 で確認した Claude Code hook の挙動
+- [`docs/usage_jp.md`](./docs/usage_jp.md) — エンドユーザー向け使い方ガイド (日本語)
+- [`docs/usage_en.md`](./docs/usage_en.md) — same in English
+- [`CLAUDE.md`](./CLAUDE.md) — AI 開発支援向けのアーキテクチャブリーフ
 - [`task.md`](./task.md) — 元々の要件・進捗メモ
 
 ## コーディング規約

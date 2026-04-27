@@ -26,6 +26,9 @@ control over approvals.
 | **Settings page** | `,` opens a persisted preferences modal: layout (auto / vertical / horizontal), refresh rate, summary timeout, secure-mode toggles, and an "observation only" preset. |
 | **Self-update** | `ccdash update` pulls the latest GitHub release in place. |
 
+Hands-on walkthroughs:
+[English usage guide](./docs/usage_en.md) · [日本語 使い方](./docs/usage_jp.md)
+
 ## Install
 
 ```sh
@@ -238,7 +241,8 @@ internal/hookcfg/               install-hooks settings.json merge
 internal/wrapper/               `ccdash claude` exec wrapper
 internal/paths/                 state dir / db / settings paths
 internal/gitinfo/               git repo / branch / commit lookup
-docs/research.md                Phase 0 research on Claude Code hook spec
+docs/usage_en.md                hands-on usage guide (English)
+docs/usage_jp.md                hands-on usage guide (Japanese)
 install.sh                      curl-installable shell installer
 .github/workflows/              CI + release pipelines
 ```
@@ -253,15 +257,20 @@ install.sh                      curl-installable shell installer
   header so install / uninstall are idempotent and don't collide with
   user hooks
 
-## コントリビュート
+## Contributing
 
-バグ報告・機能提案・PR 歓迎です。詳しくは [CONTRIBUTING.md](./CONTRIBUTING.md) を参照してください。CI が通る PR は早めに見ます。
+Bug reports, feature requests, and pull requests are welcome. See
+[CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide. Anything that
+makes CI green gets a fast read.
 
-## ライセンス
+## License
 
 [MIT](./LICENSE) © 2026 kameneko
 
 ## AI-assisted development
 
-このプロジェクトは [Claude Code](https://claude.com/claude-code) (Anthropic) による支援を受けて開発されています。コミット履歴に `Co-Authored-By: Claude` が並んでいるのはそのためです。AI が書いたコードもメンテナーがレビュー・採用した時点で責任を持ちます。
+This project is built with help from [Claude Code](https://claude.com/claude-code)
+(Anthropic). The `Co-Authored-By: Claude` lines in the commit log
+reflect that. AI-generated code is still owned by the maintainer once
+it's reviewed and merged.
 </content>
