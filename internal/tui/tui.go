@@ -720,6 +720,7 @@ var (
 	selectedRow       = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("15"))
 	pendingStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
 	pendingRowStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	groupHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("8")).Background(lipgloss.Color("235"))
 	approvalRowStyle   = lipgloss.NewStyle().Background(lipgloss.Color("58")).Foreground(lipgloss.Color("15"))
 	approvalLabelStyle = lipgloss.NewStyle().Background(lipgloss.Color("11")).Foreground(lipgloss.Color("0")).Bold(true)
 	statusActive      = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // bright green: busy
@@ -835,48 +836,125 @@ func (m *model) renderSessionsList(width, height int) string {
 		return lipgloss.NewStyle().Width(width).Height(height).
 			Render(subtitleStyle.Render("no sessions yet"))
 	}
-	const rowsPerSession = 2
-	// Reserve one line for the "n/N" indicator at the bottom.
-	maxItems := (height - 1) / rowsPerSession
-	if maxItems < 1 {
-		maxItems = 1
+
+	// Build a flat list of "rows" — header rows (1 line each) and session
+	// rows (2 lines each) interleaved by date bucket. We render everything
+	// to a single line slice and then pick a window that keeps the selected
+	// session visible. This is simpler than tracking variable-height
+	// blocks individually.
+	type rowEntry struct {
+		lines      []string
+		sessionIdx int // -1 for headers
 	}
-	// Scroll window so the selection is always visible. We track a sliding
-	// window via m.sessScroll; clamp it on every render in case the underlying
-	// list shrank between ticks.
-	if m.selSess < m.sessScroll {
-		m.sessScroll = m.selSess
+
+	now := time.Now()
+	var rows []rowEntry
+	prevBucket := ""
+	for i, s := range m.sessions {
+		bucket := bucketFor(s, now)
+		if bucket != prevBucket {
+			label := bucket
+			if bucket == bucketFavorites {
+				label = "★ " + bucket
+			}
+			rows = append(rows, rowEntry{
+				lines:      []string{groupHeaderStyle.Render(padRight(label, width))},
+				sessionIdx: -1,
+			})
+			prevBucket = bucket
+		}
+		row := m.renderSessionRow(s, i == m.selSess, width)
+		// renderSessionRow returns a 2-line block ending with "\n"; split.
+		lines := strings.Split(strings.TrimRight(row, "\n"), "\n")
+		rows = append(rows, rowEntry{lines: lines, sessionIdx: i})
 	}
-	if m.selSess >= m.sessScroll+maxItems {
-		m.sessScroll = m.selSess - maxItems + 1
+
+	// Flatten rows into a line slice and remember where each session lands.
+	var allLines []string
+	sessionLineStart := make([]int, len(m.sessions))
+	for _, r := range rows {
+		if r.sessionIdx >= 0 {
+			sessionLineStart[r.sessionIdx] = len(allLines)
+		}
+		allLines = append(allLines, r.lines...)
+	}
+
+	// Reserve one line at the bottom for the "n/N" indicator.
+	visibleH := height - 1
+	if visibleH < 2 {
+		visibleH = 2
+	}
+
+	// Adjust scroll so the selected session's lines (2 of them) stay in view.
+	selStart := sessionLineStart[m.selSess]
+	selEnd := selStart + 2 // session rows are always 2 lines
+	if m.sessScroll > selStart {
+		m.sessScroll = selStart
+		// Pull in the preceding header if there is one and it fits.
+		if m.sessScroll > 0 {
+			m.sessScroll--
+		}
+	}
+	if selEnd > m.sessScroll+visibleH {
+		m.sessScroll = selEnd - visibleH
 	}
 	if m.sessScroll < 0 {
 		m.sessScroll = 0
 	}
-	if m.sessScroll > maxInt(0, len(m.sessions)-maxItems) {
-		m.sessScroll = maxInt(0, len(m.sessions)-maxItems)
+	maxScroll := len(allLines) - visibleH
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.sessScroll > maxScroll {
+		m.sessScroll = maxScroll
 	}
 
-	end := m.sessScroll + maxItems
-	if end > len(m.sessions) {
-		end = len(m.sessions)
+	end := m.sessScroll + visibleH
+	if end > len(allLines) {
+		end = len(allLines)
 	}
 
-	var b strings.Builder
-	for i := m.sessScroll; i < end; i++ {
-		s := m.sessions[i]
-		selected := i == m.selSess
-		b.WriteString(m.renderSessionRow(s, selected, width))
-	}
-
-	indicator := fmt.Sprintf("%d-%d / %d", m.sessScroll+1, end, len(m.sessions))
-	if m.sessScroll > 0 || end < len(m.sessions) {
+	body := strings.Join(allLines[m.sessScroll:end], "\n")
+	indicator := fmt.Sprintf("%d / %d sessions", m.selSess+1, len(m.sessions))
+	if m.sessScroll > 0 || end < len(allLines) {
 		indicator += "  ↑↓ to scroll"
 	}
-	b.WriteString(subtitleStyle.Render(indicator))
-	// Constrain to the requested width AND height so JoinHorizontal with the
-	// events pane doesn't accidentally make the row taller than `height`.
-	return lipgloss.NewStyle().Width(width).Height(height).Render(b.String())
+	return lipgloss.NewStyle().Width(width).Height(height).Render(body + "\n" + subtitleStyle.Render(indicator))
+}
+
+const bucketFavorites = "Favorites"
+
+// bucketFor returns the group label that a session belongs to. Favorites
+// always go to the top regardless of date; everything else is bucketed by
+// last_seen.
+func bucketFor(s mdl.Session, now time.Time) string {
+	if s.Favorite {
+		return bucketFavorites
+	}
+	if s.LastSeen.IsZero() {
+		return "Unknown"
+	}
+	t := s.LastSeen.Local()
+	today := now.Local()
+	if sameYMD(t, today) {
+		return "Today"
+	}
+	if sameYMD(t, today.AddDate(0, 0, -1)) {
+		return "Yesterday"
+	}
+	if t.After(today.AddDate(0, 0, -7)) {
+		return "This week"
+	}
+	if t.After(today.AddDate(0, -1, 0)) {
+		return "Earlier this month"
+	}
+	return t.Format("January 2006")
+}
+
+func sameYMD(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
 }
 
 // renderSessionRow renders one session as a 2-line block:
