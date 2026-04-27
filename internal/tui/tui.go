@@ -664,7 +664,7 @@ func (m *model) mouseInRightPane(msg tea.MouseMsg) bool {
 	headerH := countLines(m.renderHeader())
 	tabH := 0
 	if m.renderTabBar() != "" {
-		tabH = 1
+		tabH = 2
 	}
 	footerH := countLines(m.renderFooter())
 	bodyHeight := m.height - headerH - tabH - footerH
@@ -1134,7 +1134,9 @@ func (m *model) View() string {
 	headerH := countLines(header)
 	tabH := 0
 	if tabBar != "" {
-		tabH = 1
+		// Tab strip + a blank "breathing room" line below it so the body
+		// doesn't visually butt right up against the tabs.
+		tabH = 2
 	}
 	footerH := countLines(footer)
 	bodyHeight := m.height - headerH - tabH - footerH
@@ -1144,7 +1146,7 @@ func (m *model) View() string {
 	body := clampLines(m.renderBody(bodyHeight), bodyHeight)
 	parts := []string{header}
 	if tabBar != "" {
-		parts = append(parts, tabBar)
+		parts = append(parts, tabBar, "")
 	}
 	parts = append(parts, body, footer)
 	out := lipgloss.JoinVertical(lipgloss.Left, parts...)
