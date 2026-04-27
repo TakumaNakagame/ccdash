@@ -233,6 +233,35 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsMsg:
 		prev := m.currentSessionID()
 		m.allSessions = []mdl.Session(msg)
+		// If the tab the operator was looking at vanished (its last
+		// session got archived, removed, or moved to a different tab),
+		// step onto the next available tab so the body isn't blank.
+		// --tab pinned operators stay put; that's their explicit ask.
+		if !m.tabLocked && m.projectFilter != "" {
+			projects := m.uniqueProjects()
+			present := false
+			for _, p := range projects {
+				if p == m.projectFilter {
+					present = true
+					break
+				}
+			}
+			if !present {
+				from := m.projectFilter
+				next := ""
+				if len(projects) > 1 {
+					next = projects[1]
+				}
+				m.projectFilter = next
+				if next == "" {
+					m.flash = fmt.Sprintf("'%s' tab emptied → All", from)
+				} else {
+					m.flash = fmt.Sprintf("'%s' tab emptied → '%s'", from, next)
+				}
+				m.tailPath = ""
+				m.tailMtime = time.Time{}
+			}
+		}
 		m.applyProjectFilter()
 		// Try to keep the cursor on the same session as before; only
 		// fall back to defaultSelectionIdx (newest) when the previous
