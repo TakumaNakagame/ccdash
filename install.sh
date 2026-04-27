@@ -63,12 +63,26 @@ if curl -fsSL -o "$TMP.sha256" "$SUMURL" 2>/dev/null; then
   fi
 fi
 
-chmod +x "$TMP"
+# Set 0755 explicitly — `mktemp` creates files mode 0600, and `chmod +x`
+# alone preserves the group/other "no read" bits, leaving the binary
+# unreadable to anything outside the owner.
+chmod 0755 "$TMP"
 mv "$TMP" "$INSTALL_DIR/ccdash"
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *) echo "ccdash: $INSTALL_DIR is not on your PATH — add it to your shell rc";;
 esac
+
+# Warn when a different ccdash will still win on PATH (e.g. an earlier
+# go-install dev build). Operators usually want the freshly installed
+# binary to be the one they invoke.
+PATH_BIN="$(command -v ccdash 2>/dev/null || true)"
+if [ -n "$PATH_BIN" ] && [ "$PATH_BIN" != "$INSTALL_DIR/ccdash" ]; then
+  echo "ccdash: warning — another ccdash is earlier on PATH:"
+  echo "  $PATH_BIN"
+  echo "  $INSTALL_DIR/ccdash (just installed)"
+  echo "ccdash: remove the older one, or reorder PATH so $INSTALL_DIR comes first."
+fi
 
 echo "ccdash: installed. Try: $INSTALL_DIR/ccdash --version"
