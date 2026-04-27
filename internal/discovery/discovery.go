@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/takumanakagame/ccmanage/internal/redact"
 )
 
 type Discovered struct {
@@ -177,5 +179,8 @@ func cleanTitle(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
-	return strings.TrimSpace(s)
+	// The transcript may contain prompts that pasted in API keys / tokens
+	// when the user was debugging an integration; mask before persisting
+	// the result as a session title.
+	return redact.String(strings.TrimSpace(s))
 }

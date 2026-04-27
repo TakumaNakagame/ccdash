@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/takumanakagame/ccmanage/internal/redact"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
@@ -27,7 +28,7 @@ func Run(ctx context.Context, transcriptPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load transcript: %w", err)
 	}
-	digest := buildDigest(msgs, 32*1024) // ~32KB cap keeps prompt comfortable
+	digest := redact.String(buildDigest(msgs, 32*1024)) // ~32KB cap keeps prompt comfortable
 	if strings.TrimSpace(digest) == "" {
 		return "", fmt.Errorf("transcript is empty")
 	}

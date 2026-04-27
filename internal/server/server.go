@@ -19,6 +19,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/gitinfo"
 	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/procmap"
+	"github.com/takumanakagame/ccmanage/internal/redact"
 )
 
 type Server struct {
@@ -215,7 +216,17 @@ func readPayload(r *http.Request) (*hookPayload, json.RawMessage, error) {
 	if err := json.Unmarshal(body, &p); err != nil {
 		return nil, nil, fmt.Errorf("decode payload: %w", err)
 	}
-	return &p, json.RawMessage(body), nil
+	// Mask common secret patterns before anything reaches the DB.
+	masked := redact.JSON(body)
+	p.Prompt = redact.String(p.Prompt)
+	p.Error = redact.String(p.Error)
+	if len(p.ToolInput) > 0 {
+		p.ToolInput = redact.JSON(p.ToolInput)
+	}
+	if len(p.ToolResponse) > 0 {
+		p.ToolResponse = redact.JSON(p.ToolResponse)
+	}
+	return &p, json.RawMessage(masked), nil
 }
 
 func writeOK(w http.ResponseWriter, body any) {
@@ -567,6 +578,9 @@ func summarizeToolInput(tool string, input json.RawMessage) string {
 	if len(input) == 0 {
 		return tool
 	}
+	// Defensive: redact again before computing the human-readable summary
+	// in case the caller skipped the payload-level pass.
+	input = redact.JSON(input)
 	var m map[string]any
 	if err := json.Unmarshal(input, &m); err != nil {
 		return tool
