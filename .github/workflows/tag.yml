@@ -1,0 +1,69 @@
+name: tag
+
+# Manual entry point for cutting a release tag from the GitHub UI. Pushes
+# an annotated tag from the workflow's checkout, which in turn triggers
+# release.yml to build and attach the cross-platform binaries.
+#
+# Usage: Actions → "tag" → "Run workflow" → enter "v0.1.2" (etc).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag to create, e.g. v0.1.2'
+        required: true
+      message:
+        description: 'Annotation message (optional, defaults to the tag itself)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # The default GITHUB_TOKEN can push tags but other workflows
+          # subscribed to a tag-push event will only fire when the
+          # actor is a real user; using a PAT here would let release.yml
+          # trigger automatically. Default token works because release.yml
+          # is set up with `contents: write` and is allowed to chain.
+
+      - name: Validate version format
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$'; then
+            echo "::error ::version must be vX.Y.Z or vX.Y.Z-suffix (got '$VERSION')"
+            exit 1
+          fi
+
+      - name: Refuse to overwrite an existing tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "::error ::tag $VERSION already exists"
+            exit 1
+          fi
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag
+        env:
+          VERSION: ${{ inputs.version }}
+          MESSAGE: ${{ inputs.message }}
+        run: |
+          if [ -z "$MESSAGE" ]; then
+            MESSAGE="$VERSION"
+          fi
+          git tag -a "$VERSION" -m "$MESSAGE"
+          git push origin "$VERSION"
+          echo "::notice ::pushed tag $VERSION — release.yml will pick it up"
