@@ -25,11 +25,12 @@ import (
 )
 
 type Server struct {
-	db    *db.DB
-	mux   *http.ServeMux
-	addr  string
-	srv   *http.Server
-	token string // shared secret; required on every hook + decision request
+	db      *db.DB
+	mux     *http.ServeMux
+	addr    string
+	srv     *http.Server
+	token   string // shared secret; required on every hook + decision request
+	limiter *tokenBucket
 
 	// pending tracks PermissionRequest hooks that are still blocking
 	// inside the handler waiting for an operator decision. The TUI POSTs
@@ -63,6 +64,7 @@ func New(d *db.DB, addr string) *Server {
 		addr:    addr,
 		mux:     http.NewServeMux(),
 		token:   tok,
+		limiter: newTokenBucket(50, 100),
 		pending: map[int64]chan approvalDecision{},
 	}
 	s.routes()
@@ -76,17 +78,23 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	s.mux.HandleFunc("/hooks/session-start", s.requireToken(s.handleSessionStart))
-	s.mux.HandleFunc("/hooks/session-end", s.requireToken(s.handleSessionEnd))
-	s.mux.HandleFunc("/hooks/user-prompt", s.requireToken(s.handleUserPrompt))
-	s.mux.HandleFunc("/hooks/pre-tool", s.requireToken(s.handlePreTool))
-	s.mux.HandleFunc("/hooks/post-tool", s.requireToken(s.handlePostTool))
-	s.mux.HandleFunc("/hooks/post-tool-failure", s.requireToken(s.handlePostToolFailure))
-	s.mux.HandleFunc("/hooks/permission-request", s.requireToken(s.handlePermissionRequest))
-	s.mux.HandleFunc("/hooks/stop", s.requireToken(s.handleStop))
-	s.mux.HandleFunc("/hooks/subagent-stop", s.requireToken(s.handleSubagentStop))
-	s.mux.HandleFunc("/hooks/notification", s.requireToken(s.handleNotification))
-	s.mux.HandleFunc("/approvals/", s.requireToken(s.handleApprovalDecide))
+	// Compose: rate limit → token check → handler. Rate limit comes first
+	// so a flood of unauth'd requests still gets 429 quickly without the
+	// per-request token comparison.
+	wrap := func(h http.HandlerFunc) http.HandlerFunc {
+		return s.rateLimited(s.requireToken(h))
+	}
+	s.mux.HandleFunc("/hooks/session-start", wrap(s.handleSessionStart))
+	s.mux.HandleFunc("/hooks/session-end", wrap(s.handleSessionEnd))
+	s.mux.HandleFunc("/hooks/user-prompt", wrap(s.handleUserPrompt))
+	s.mux.HandleFunc("/hooks/pre-tool", wrap(s.handlePreTool))
+	s.mux.HandleFunc("/hooks/post-tool", wrap(s.handlePostTool))
+	s.mux.HandleFunc("/hooks/post-tool-failure", wrap(s.handlePostToolFailure))
+	s.mux.HandleFunc("/hooks/permission-request", wrap(s.handlePermissionRequest))
+	s.mux.HandleFunc("/hooks/stop", wrap(s.handleStop))
+	s.mux.HandleFunc("/hooks/subagent-stop", wrap(s.handleSubagentStop))
+	s.mux.HandleFunc("/hooks/notification", wrap(s.handleNotification))
+	s.mux.HandleFunc("/approvals/", wrap(s.handleApprovalDecide))
 }
 
 // requireToken wraps a handler so requests without a matching X-Ccdash-Token
