@@ -111,6 +111,7 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN summary_status TEXT`,
 		`ALTER TABLE sessions ADD COLUMN summary_at INTEGER`,
 		`ALTER TABLE sessions ADD COLUMN user_tab TEXT`,
+		`ALTER TABLE sessions ADD COLUMN user_group TEXT`,
 		`ALTER TABLE approvals ADD COLUMN tool_use_id TEXT`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
@@ -126,6 +127,14 @@ func (d *DB) migrate() error {
 	// list is clean after upgrade.
 	if _, err := d.sql.Exec(`DELETE FROM sessions WHERE title LIKE '[ccdash:summary]%' OR custom_title LIKE '[ccdash:summary]%'`); err != nil {
 		return fmt.Errorf("cleanup ccdash:summary sessions: %w", err)
+	}
+	// Migrate the legacy `user_tab` column into `user_group`. The column
+	// was renamed for terminology — "group" is the conceptual bucket; the
+	// tab strip is the UI rendering. We copy values once, then keep the
+	// dormant column around so a downgrade still finds its data. Idempotent
+	// thanks to the IS NULL guard.
+	if _, err := d.sql.Exec(`UPDATE sessions SET user_group = user_tab WHERE (user_group IS NULL OR user_group = '') AND user_tab IS NOT NULL AND user_tab <> ''`); err != nil {
+		return fmt.Errorf("migrate user_tab → user_group: %w", err)
 	}
 	return nil
 }
@@ -279,7 +288,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.wrapper_pid,0), COALESCE(s.proc_pid,0), COALESCE(s.pane,''),
 		       COALESCE(s.tmux_pane,''), COALESCE(s.tmux_session,''),
 		       COALESCE(s.transcript_path,''), COALESCE(s.model,''),
-		       COALESCE(s.title,''), COALESCE(s.custom_title,''), COALESCE(s.user_tab,''),
+		       COALESCE(s.title,''), COALESCE(s.custom_title,''), COALESCE(s.user_group,''),
 		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
 		       COALESCE(s.summary,''), COALESCE(s.summary_status,''), COALESCE(s.summary_at,0),
 		       s.first_seen, s.last_seen, s.status,
@@ -302,7 +311,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.WrapperPID, &s.ProcPID, &s.Pane,
 			&s.TmuxPane, &s.TmuxSession,
 			&s.TranscriptPath, &s.Model,
-			&s.Title, &s.CustomTitle, &s.UserTab,
+			&s.Title, &s.CustomTitle, &s.UserGroup,
 			&arch, &fav,
 			&s.Summary, &s.SummaryStatus, &sumAt,
 			&first, &last, &status, &s.PendingCount); err != nil {
@@ -370,11 +379,11 @@ func (d *DB) SetSetting(ctx context.Context, key, value string) error {
 	return err
 }
 
-// SetUserTab assigns a session to an operator-named tab. The tab key is
-// just a string — empty clears the assignment so the session falls back to
-// its repo-based group.
-func (d *DB) SetUserTab(ctx context.Context, sessionID, tab string) error {
-	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET user_tab = ? WHERE session_id = ?`, tab, sessionID)
+// SetUserGroup assigns a session to an operator-named group (rendered as
+// a tab in the strip). Empty clears the assignment so the session falls
+// back to its repo-based grouping.
+func (d *DB) SetUserGroup(ctx context.Context, sessionID, group string) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET user_group = ? WHERE session_id = ?`, group, sessionID)
 	return err
 }
 

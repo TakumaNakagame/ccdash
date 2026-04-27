@@ -18,10 +18,10 @@ control over approvals.
 | --- | --- |
 | **Session inventory** | Auto-discovered from `~/.claude/sessions/<pid>.json` + transcript JSONLs. Idle / busy / recent / stopped status, age grouping (Today / Yesterday / This week / month buckets), per-session ★ favorites. |
 | **Live transcript** | Right pane streams the latest USER / CLAUDE / TOOL / RESULT exchanges with role-coloured blocks. Tail-reads only the last 256 KB so 30 MB transcripts scroll smoothly. |
-| **Per-session controls** | Rename, custom user-named tab assignment, archive / unarchive, attach via `tmux switch-pane` or `claude --resume`. |
+| **Per-session controls** | Rename, custom user-named group assignment, archive / unarchive, attach via `tmux switch-pane` or `claude --resume`. |
 | **Approvals** | When enabled, pending permission requests appear in a yellow banner; press `a` / `A` (keep) / `d` to allow / keep-allow-for-session / deny without leaving the dashboard. |
 | **Summarize** | `s` spawns `claude -p` against a redacted digest of the transcript and shows a 3-5 bullet summary inline. |
-| **Tabs** | Browser-style strip across the top filters by repo or operator-named tab. Slides on overflow. |
+| **Tabs** | Browser-style strip across the top filters by repo or operator-named group. Slides on overflow. |
 | **Search** | `/` filters the list by case-insensitive substring across title, tab, repo, summary, session id. |
 | **Settings page** | `,` opens a persisted preferences modal: layout (auto / vertical / horizontal), refresh rate, summary timeout, secure-mode toggles, and an "observation only" preset. |
 | **Self-update** | `ccdash update` pulls the latest GitHub release in place. |
@@ -106,9 +106,9 @@ ccdash --version               # report the current version
 | --- | --- |
 | `↑` `↓` / `j` `k` | move selection |
 | `g` / `G` | jump to top / bottom |
-| `tab` / `shift+tab` | cycle project / user-named tabs |
+| `tab` / `shift+tab` | cycle project / user-named groups |
 | `R` | toggle "auto repo tabs" in the cycle |
-| `T` | edit the user-named tab for this session |
+| `T` | edit the user-named group for this session |
 | `t` | rename the session (operator override of auto title) |
 | `f` | toggle ★ favorite (favorites pin to the top) |
 | `x` | archive / unarchive |

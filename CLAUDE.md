@@ -19,7 +19,7 @@ Run:
 ccdash install-hooks         # one-time: writes HTTP hook entries into ~/.claude/settings.json
 ccdash                       # opens the TUI; embeds the collector for the session
 ccdash -k                    # spawns a detached collector, then opens the TUI
-ccdash --tab home-lab        # locks the TUI to a single project / user-named tab
+ccdash --group home-lab        # locks the TUI to a single project / user-named group
 ccdash --version             # prints the build-time main.Version
 ccdash update                # self-update from the latest GitHub release
 ```
@@ -57,7 +57,8 @@ internal/wrapper/               optional `ccdash claude` exec wrapper that adds 
 internal/paths/                 state dir / db / settings paths (XDG-aware)
 internal/gitinfo/               `git -C cwd rev-parse` lookups for repo/branch/commit
 internal/model/                 plain data types (Session / Event / Approval) and DisplayTitle
-docs/research.md                Phase 0 research on Claude Code's hook system (cite this, don't re-research)
+docs/usage_en.md                hands-on usage guide (English)
+docs/usage_jp.md                hands-on usage guide (Japanese)
 task.md                         original product spec; historical, not authoritative
 ```
 
@@ -86,14 +87,14 @@ The TUI render layer dispatches on `Spec.Kind` automatically; you don't normally
 - **Hook entries belong to ccdash via the `X-Ccdash-Managed: true` marker.** `install-hooks` and `uninstall-hooks` use it to round-trip our entries without disturbing the operator's other hooks. Don't touch hook entries that lack the marker.
 - **The auth token rotates only when the file is missing.** On first start `auth.LoadOrCreate` writes a fresh 32 B hex token to `$XDG_STATE_HOME/ccdash/token` (mode 0600). `server.syncInstalledHooks()` re-runs `install-hooks` on boot when the token in `settings.json` doesn't match — but only if `auto_install_sync` is on and there are existing hook entries to update.
 - **The DB is never reset by code.** `migrate()` is `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` only; ignore `duplicate column` errors. Operators can hand-delete `~/.local/state/ccdash/ccdash.sqlite` to start over.
-- **`s.UserTab` wins over `s.Repo` for grouping.** `projectOf(s)` consults UserTab first, then `Repo`, then `filepath.Base(s.Cwd)`. Tab cycle dedupes auto-derived entries against user-named ones, so an operator naming a tab the same as a repo just merges them.
+- **`s.UserGroup` wins over `s.Repo` for grouping.** `groupOf(s)` consults `UserGroup` first, then `Repo`, then `filepath.Base(s.Cwd)`. The tab strip (the UI rendering of groups) dedupes auto-derived entries against user-named ones, so an operator naming a group the same as a repo just merges them.
 - **`s.Title` is the auto-derived first user prompt; `s.CustomTitle` is the operator override.** `Session.DisplayTitle()` centralizes the precedence — never rebuild this logic in a render path. The transcript-derived title gets `redact.String` applied before persistence so a prompt containing an API key doesn't show up in the list.
 - **`internal/transcript.LoadTail` exists for a reason.** The asmr-palyer transcript in this dev environment is ~30 MB; doing a full `Load` on every tab change made selection feel laggy. Use LoadTail for live-tail surfaces; reserve full `Load` for the modal viewer (`o`).
 - **`claude -p` spawns are isolated.** `summarize.Run` invokes claude with `--setting-sources project` and cwd `/tmp` so the summarize subprocess does NOT inherit our hooks (otherwise it would loop back to our collector and pollute the session list). The summary prompt is also prefixed with `[ccdash:summary]` and `discovery.Scan` skips any transcript whose first user prompt starts with that marker.
 - **Approvals fall back from `tool_use_id` to oldest-pending.** PermissionRequest payloads don't include a `tool_use_id`, so PostToolUse handlers call `ResolveOldestPendingForTool` after `ResolvePendingByToolUseID`. The discovery loop also sweeps anything pending > 45 s into `timeout`. Don't rely on tool_use_id alone.
 - **Secure-mode toggles are explicit.** `approve_enabled`, `summary_enabled`, `attach_enabled`, `auto_install_sync` each turn off one risk-bearing capability; the "Apply secure preset" action flips all four. The TUI keys for these features check the flag and flash "<feature> is OFF" when disabled — don't bypass.
 - **Mouse wheel zoning is layout-aware.** `mouseInRightPane` re-derives geometry per-event because vertical layout splits Y instead of X. Auto-vertical decides via `m.width < settings.VerticalAutoCols`.
-- **`tabLocked` (from `--tab`) hides the strip and disables h/l/Tab/Shift+Tab.** It also keeps `archiveCurrentTab` from auto-advancing past the locked tab.
+- **`groupLocked` (from `--group`) hides the strip and disables h/l/Tab/Shift+Tab.** It also keeps `archiveCurrentGroup` from auto-advancing past the locked group. The deprecated `--tab` alias is still accepted (hidden) so existing scripts don't break.
 
 ### Common gotchas
 

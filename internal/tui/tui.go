@@ -27,14 +27,14 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
-func Run(ctx context.Context, d *db.DB, lockTab string) error {
+func Run(ctx context.Context, d *db.DB, lockGroup string) error {
 	m := newModel(ctx, d)
 	if s, err := settings.Load(ctx, d); err == nil {
 		m.settings = s
 	}
-	if lockTab != "" {
-		m.projectFilter = lockTab
-		m.tabLocked = true
+	if lockGroup != "" {
+		m.groupFilter = lockGroup
+		m.groupLocked = true
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
@@ -82,28 +82,28 @@ type model struct {
 	// list mode + inline editor state
 	showArchived  bool
 	editingTitle  bool
-	editingTab    bool
+	editingGroup    bool
 	editingSearch bool
 	titleBuffer   string
-	tabCandIdx    int    // index into filteredTabCandidates(); -1 == "no pick yet"
-	projectFilter string // "" = All; otherwise repo / cwd basename
+	groupCandIdx    int    // index into filteredGroupCandidates(); -1 == "no pick yet"
+	groupFilter string // "" = All; otherwise repo / cwd basename
 	searchQuery   string // "" = no filter; case-insensitive substring search
 
 	settings settings.Settings
 
-	// awaitTabArchiveConfirm is true after the operator pressed ctrl+x
+	// awaitGroupArchiveConfirm is true after the operator pressed ctrl+x
 	// to bulk-archive the current tab; the next keystroke is treated as
 	// the y/n confirmation rather than a normal shortcut.
-	awaitTabArchiveConfirm bool
+	awaitGroupArchiveConfirm bool
 	// awaitSummaryConfirm is the same gate for the 's' summarize
 	// shortcut; spawning claude -p costs an API round trip so we don't
 	// want it to fire on a typo.
 	awaitSummaryConfirm bool
 
-	// tabLocked is set when the operator launched ccdash with --tab
+	// groupLocked is set when the operator launched ccdash with --tab
 	// <name>. The tab strip is hidden, h/l/Tab/Shift+Tab become no-ops,
-	// and the projectFilter never changes.
-	tabLocked bool
+	// and the groupFilter never changes.
+	groupLocked bool
 
 	// settings page state
 	settingsSel    int
@@ -237,22 +237,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// session got archived, removed, or moved to a different tab),
 		// step onto the next available tab so the body isn't blank.
 		// --tab pinned operators stay put; that's their explicit ask.
-		if !m.tabLocked && m.projectFilter != "" {
-			projects := m.uniqueProjects()
+		if !m.groupLocked && m.groupFilter != "" {
+			projects := m.uniqueGroups()
 			present := false
 			for _, p := range projects {
-				if p == m.projectFilter {
+				if p == m.groupFilter {
 					present = true
 					break
 				}
 			}
 			if !present {
-				from := m.projectFilter
+				from := m.groupFilter
 				next := ""
 				if len(projects) > 1 {
 					next = projects[1]
 				}
-				m.projectFilter = next
+				m.groupFilter = next
 				if next == "" {
 					m.flash = fmt.Sprintf("'%s' tab emptied → All", from)
 				} else {
@@ -262,7 +262,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tailMtime = time.Time{}
 			}
 		}
-		m.applyProjectFilter()
+		m.applyGroupFilter()
 		// Try to keep the cursor on the same session as before; only
 		// fall back to defaultSelectionIdx (newest) when the previous
 		// session is no longer present (filter change, archive toggle,
@@ -403,16 +403,16 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.editingSearch {
 		return m.handleKeySearchEdit(msg)
 	}
-	if m.editingTitle || m.editingTab {
+	if m.editingTitle || m.editingGroup {
 		return m.handleKeyTitleEdit(msg)
 	}
-	if m.awaitTabArchiveConfirm {
-		m.awaitTabArchiveConfirm = false
+	if m.awaitGroupArchiveConfirm {
+		m.awaitGroupArchiveConfirm = false
 		switch msg.String() {
 		case "y", "Y":
-			return m, m.archiveCurrentTab()
+			return m, m.archiveCurrentGroup()
 		default:
-			m.flash = "tab archive cancelled"
+			m.flash = "group archive cancelled"
 			return m, nil
 		}
 	}
@@ -490,7 +490,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "x":
 		return m, m.toggleArchiveCurrent()
 	case "ctrl+x":
-		return m, m.promptArchiveCurrentTab()
+		return m, m.promptArchiveCurrentGroup()
 	case "X":
 		m.showArchived = !m.showArchived
 		m.selSess = 0
@@ -499,17 +499,17 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// defaultSelectionIdx() when the previous selection is gone.
 		return m, m.refresh()
 	case "tab", "l":
-		if m.tabLocked {
-			m.flash = "tab is locked via --tab flag"
+		if m.groupLocked {
+			m.flash = "group is locked via --group flag"
 			return m, nil
 		}
-		return m, m.cycleProject(1)
+		return m, m.cycleGroup(1)
 	case "shift+tab", "h":
-		if m.tabLocked {
-			m.flash = "tab is locked via --tab flag"
+		if m.groupLocked {
+			m.flash = "group is locked via --group flag"
 			return m, nil
 		}
-		return m, m.cycleProject(-1)
+		return m, m.cycleGroup(-1)
 	case "R":
 		next, err := settings.Set(m.ctx, m.db, m.settings, "auto_repo_tabs", !m.settings.AutoRepoTabs)
 		if err != nil {
@@ -520,18 +520,18 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// If we just turned auto repos off and the current filter is one
 		// of them, drop it back to All so the operator isn't stuck with
 		// a filter that isn't reachable from the cycle anymore.
-		if !m.settings.AutoRepoTabs && m.projectFilter != "" {
-			projs := m.uniqueProjects()
+		if !m.settings.AutoRepoTabs && m.groupFilter != "" {
+			projs := m.uniqueGroups()
 			present := false
 			for _, p := range projs {
-				if p == m.projectFilter {
+				if p == m.groupFilter {
 					present = true
 					break
 				}
 			}
 			if !present {
-				m.projectFilter = ""
-				m.applyProjectFilter()
+				m.groupFilter = ""
+				m.applyGroupFilter()
 			}
 		}
 		if m.settings.AutoRepoTabs {
@@ -545,7 +545,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "t":
 		return m, m.startTitleEdit()
 	case "T":
-		return m, m.startTabEdit()
+		return m, m.startGroupEdit()
 	case "s":
 		if !m.settings.SummaryEnabled {
 			m.flash = "summarize is OFF (settings ',')"
@@ -574,7 +574,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		if m.searchQuery != "" {
 			m.searchQuery = ""
-			m.applyProjectFilter()
+			m.applyGroupFilter()
 			m.selSess = 0
 			m.flash = "search cleared"
 		}
@@ -583,15 +583,15 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// applyProjectFilter recomputes m.sessions from m.allSessions using the
-// current projectFilter and searchQuery. The two filters compose by
+// applyGroupFilter recomputes m.sessions from m.allSessions using the
+// current groupFilter and searchQuery. The two filters compose by
 // intersection.
-func (m *model) applyProjectFilter() {
+func (m *model) applyGroupFilter() {
 	src := m.allSessions
-	if m.projectFilter != "" {
+	if m.groupFilter != "" {
 		out := make([]mdl.Session, 0, len(src))
 		for _, s := range src {
-			if projectOf(s) == m.projectFilter {
+			if groupOf(s) == m.groupFilter {
 				out = append(out, s)
 			}
 		}
@@ -622,7 +622,7 @@ func (m *model) applyProjectFilter() {
 // to keep the per-keystroke cost predictable.
 func sessionMatchesQuery(s mdl.Session, q string) bool {
 	for _, f := range []string{
-		s.DisplayTitle(), s.UserTab, s.Repo, s.Cwd, s.Branch,
+		s.DisplayTitle(), s.UserGroup, s.Repo, s.Cwd, s.Branch,
 		s.Summary, s.SessionID,
 	} {
 		if strings.Contains(strings.ToLower(f), q) {
@@ -639,7 +639,7 @@ func (m *model) handleKeySearchEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searchQuery = strings.TrimSpace(m.titleBuffer)
 		m.editingSearch = false
 		m.titleBuffer = ""
-		m.applyProjectFilter()
+		m.applyGroupFilter()
 		m.selSess = 0
 		m.sessScroll = 0
 		return m, m.loadTailCmd()
@@ -659,13 +659,13 @@ func (m *model) handleKeySearchEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// projectOf names the group a session belongs to. Operator-set user_tab
+// groupOf names the group a session belongs to. Operator-set user_group
 // wins; otherwise we fall back to the repo basename, then the cwd
 // basename, so sessions still bucket sensibly without any explicit
 // labeling.
-func projectOf(s mdl.Session) string {
-	if s.UserTab != "" {
-		return s.UserTab
+func groupOf(s mdl.Session) string {
+	if s.UserGroup != "" {
+		return s.UserGroup
 	}
 	if s.Repo != "" {
 		return s.Repo
@@ -676,16 +676,16 @@ func projectOf(s mdl.Session) string {
 	return ""
 }
 
-// uniqueProjects returns the labels available for the Tab cycle. User-named
-// tabs (sessions.user_tab) always appear; the auto-derived repo / cwd
-// names appear only when includeAutoRepo is true. The ""-at-front sentinel
-// represents "All / no filter".
-func (m *model) uniqueProjects() []string {
+// uniqueGroups returns the labels available for the tab-strip cycle.
+// User-named groups (sessions.user_group) always appear; the auto-derived
+// repo / cwd names appear only when includeAutoRepo is true. The
+// ""-at-front sentinel represents "All / no filter".
+func (m *model) uniqueGroups() []string {
 	user := map[string]struct{}{}
 	auto := map[string]struct{}{}
 	for _, s := range m.allSessions {
-		if s.UserTab != "" {
-			user[s.UserTab] = struct{}{}
+		if s.UserGroup != "" {
+			user[s.UserGroup] = struct{}{}
 			continue
 		}
 		if !m.settings.AutoRepoTabs {
@@ -719,22 +719,22 @@ func (m *model) uniqueProjects() []string {
 	return out
 }
 
-func (m *model) cycleProject(delta int) tea.Cmd {
-	projects := m.uniqueProjects()
+func (m *model) cycleGroup(delta int) tea.Cmd {
+	projects := m.uniqueGroups()
 	if len(projects) <= 1 {
 		m.flash = "no other projects to filter to"
 		return nil
 	}
 	idx := 0
 	for i, p := range projects {
-		if p == m.projectFilter {
+		if p == m.groupFilter {
 			idx = i
 			break
 		}
 	}
 	idx = (idx + delta + len(projects)) % len(projects)
-	m.projectFilter = projects[idx]
-	m.applyProjectFilter()
+	m.groupFilter = projects[idx]
+	m.applyGroupFilter()
 	m.selSess = m.defaultSelectionIdx()
 	m.sessScroll = 0
 	m.tailScroll = 0
@@ -840,9 +840,9 @@ func (m *model) handleKeyTitleEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEnter:
 		var cmd tea.Cmd
-		if m.editingTab {
-			cmd = m.commitTabEdit()
-			m.editingTab = false
+		if m.editingGroup {
+			cmd = m.commitGroupEdit()
+			m.editingGroup = false
 		} else {
 			cmd = m.commitTitleEdit()
 			m.editingTitle = false
@@ -851,16 +851,16 @@ func (m *model) handleKeyTitleEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tea.KeyEsc, tea.KeyCtrlC:
 		m.editingTitle = false
-		m.editingTab = false
+		m.editingGroup = false
 		m.titleBuffer = ""
 		return m, nil
 	case tea.KeyUp:
-		if m.editingTab {
+		if m.editingGroup {
 			m.pickTabCandidate(-1)
 			return m, nil
 		}
 	case tea.KeyDown:
-		if m.editingTab {
+		if m.editingGroup {
 			m.pickTabCandidate(1)
 			return m, nil
 		}
@@ -869,13 +869,13 @@ func (m *model) handleKeyTitleEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(runes) > 0 {
 			m.titleBuffer = string(runes[:len(runes)-1])
 		}
-		m.tabCandIdx = -1 // typing breaks the picker selection
+		m.groupCandIdx = -1 // typing breaks the picker selection
 	case tea.KeySpace:
 		m.titleBuffer += " "
-		m.tabCandIdx = -1
+		m.groupCandIdx = -1
 	case tea.KeyRunes:
 		m.titleBuffer += string(msg.Runes)
-		m.tabCandIdx = -1
+		m.groupCandIdx = -1
 	}
 	return m, nil
 }
@@ -885,52 +885,52 @@ func (m *model) handleKeyTitleEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // first candidate on KeyDown / last on KeyUp so the operator can start
 // browsing immediately on Tᴜ edit open.
 func (m *model) pickTabCandidate(delta int) {
-	cands := m.filteredTabCandidates()
+	cands := m.filteredGroupCandidates()
 	if len(cands) == 0 {
 		return
 	}
 	switch {
-	case m.tabCandIdx < 0 && delta > 0:
-		m.tabCandIdx = 0
-	case m.tabCandIdx < 0 && delta < 0:
-		m.tabCandIdx = len(cands) - 1
+	case m.groupCandIdx < 0 && delta > 0:
+		m.groupCandIdx = 0
+	case m.groupCandIdx < 0 && delta < 0:
+		m.groupCandIdx = len(cands) - 1
 	default:
-		m.tabCandIdx = (m.tabCandIdx + delta + len(cands)) % len(cands)
+		m.groupCandIdx = (m.groupCandIdx + delta + len(cands)) % len(cands)
 	}
-	m.titleBuffer = cands[m.tabCandIdx]
+	m.titleBuffer = cands[m.groupCandIdx]
 }
 
-// promptArchiveCurrentTab prepares a bulk archive (or unarchive, when in
+// promptArchiveCurrentGroup prepares a bulk archive (or unarchive, when in
 // the archive view) of every session that matches the current filter. We
 // require an explicit tab — running it on the All bucket would torch the
 // entire dashboard at once. The next keystroke confirms or cancels via
-// the awaitTabArchiveConfirm gate.
-func (m *model) promptArchiveCurrentTab() tea.Cmd {
-	if m.projectFilter == "" {
-		m.flash = "switch to a specific tab first (Tab cycles)"
+// the awaitGroupArchiveConfirm gate.
+func (m *model) promptArchiveCurrentGroup() tea.Cmd {
+	if m.groupFilter == "" {
+		m.flash = "switch to a specific group first (h/l cycles)"
 		return nil
 	}
 	if len(m.sessions) == 0 {
-		m.flash = "tab is empty"
+		m.flash = "group is empty"
 		return nil
 	}
 	verb := "archive"
 	if m.showArchived {
 		verb = "unarchive"
 	}
-	m.awaitTabArchiveConfirm = true
-	m.flash = fmt.Sprintf("%s all %d sessions in '%s'? press 'y' to confirm", verb, len(m.sessions), m.projectFilter)
+	m.awaitGroupArchiveConfirm = true
+	m.flash = fmt.Sprintf("%s all %d sessions in '%s'? press 'y' to confirm", verb, len(m.sessions), m.groupFilter)
 	return nil
 }
 
-// archiveCurrentTab applies SetArchived to every session in m.sessions.
+// archiveCurrentGroup applies SetArchived to every session in m.sessions.
 // In the archive view we reverse the action so this same shortcut also
-// pulls a tab back out of archive in one keystroke. The current tab is
-// about to go empty, so cycle to the next one synchronously — the
+// pulls a group back out of archive in one keystroke. The current group
+// is about to go empty, so cycle to the next one synchronously — the
 // operator shouldn't have to stare at a blank list while the DB writes
 // settle.
-func (m *model) archiveCurrentTab() tea.Cmd {
-	tab := m.projectFilter
+func (m *model) archiveCurrentGroup() tea.Cmd {
+	group := m.groupFilter
 	want := !m.showArchived
 	sids := make([]string, 0, len(m.sessions))
 	for _, s := range m.sessions {
@@ -940,16 +940,16 @@ func (m *model) archiveCurrentTab() tea.Cmd {
 	if !want {
 		verb = "unarchived"
 	}
-	// Move forward in the tab cycle BEFORE the DB ops kick off so the
-	// next render shows the new tab populated. cycleProject computes the
+	// Move forward in the cycle BEFORE the DB ops kick off so the next
+	// render shows the new group populated. cycleGroup computes the
 	// next entry from the still-current m.allSessions (which still
-	// includes the soon-to-be-archived rows), then applyProjectFilter
-	// scopes m.sessions to the new tab so they aren't visible there.
-	// We skip the cycle when --tab pinned the operator: they explicitly
-	// asked to stay on this tab.
+	// includes the soon-to-be-archived rows), then applyGroupFilter
+	// scopes m.sessions to the new group so they aren't visible there.
+	// We skip the cycle when --group pinned the operator: they
+	// explicitly asked to stay on this group.
 	var cycleCmd tea.Cmd
-	if !m.tabLocked {
-		cycleCmd = m.cycleProject(1)
+	if !m.groupLocked {
+		cycleCmd = m.cycleGroup(1)
 	}
 	return tea.Batch(
 		cycleCmd,
@@ -957,7 +957,7 @@ func (m *model) archiveCurrentTab() tea.Cmd {
 			for _, sid := range sids {
 				_ = m.db.SetArchived(m.ctx, sid, want)
 			}
-			return attachDoneMsg{msg: fmt.Sprintf("%s %d sessions in '%s'", verb, len(sids), tab)}
+			return attachDoneMsg{msg: fmt.Sprintf("%s %d sessions in '%s'", verb, len(sids), group)}
 		},
 		m.refresh(),
 	)
@@ -1014,31 +1014,31 @@ func (m *model) startTitleEdit() tea.Cmd {
 	return nil
 }
 
-func (m *model) startTabEdit() tea.Cmd {
+func (m *model) startGroupEdit() tea.Cmd {
 	if len(m.sessions) == 0 {
 		return nil
 	}
-	m.editingTab = true
-	m.titleBuffer = m.sessions[m.selSess].UserTab
-	m.tabCandIdx = -1
+	m.editingGroup = true
+	m.titleBuffer = m.sessions[m.selSess].UserGroup
+	m.groupCandIdx = -1
 	return nil
 }
 
-// filteredTabCandidates returns the unique user_tab values currently in
-// use across the unfiltered session set, narrowed by case-insensitive
+// filteredGroupCandidates returns the unique user_group values currently
+// in use across the unfiltered session set, narrowed by case-insensitive
 // prefix match against the input buffer.
-func (m *model) filteredTabCandidates() []string {
+func (m *model) filteredGroupCandidates() []string {
 	seen := map[string]struct{}{}
 	var all []string
 	for _, s := range m.allSessions {
-		if s.UserTab == "" {
+		if s.UserGroup == "" {
 			continue
 		}
-		if _, ok := seen[s.UserTab]; ok {
+		if _, ok := seen[s.UserGroup]; ok {
 			continue
 		}
-		seen[s.UserTab] = struct{}{}
-		all = append(all, s.UserTab)
+		seen[s.UserGroup] = struct{}{}
+		all = append(all, s.UserGroup)
 	}
 	// Stable sort so the picker doesn't jiggle between renders.
 	for i := 0; i < len(all); i++ {
@@ -1061,21 +1061,21 @@ func (m *model) filteredTabCandidates() []string {
 	return out
 }
 
-func (m *model) commitTabEdit() tea.Cmd {
+func (m *model) commitGroupEdit() tea.Cmd {
 	if len(m.sessions) == 0 {
 		return nil
 	}
 	s := m.sessions[m.selSess]
 	sid := s.SessionID
-	tab := strings.TrimSpace(m.titleBuffer)
+	group := strings.TrimSpace(m.titleBuffer)
 	return func() tea.Msg {
-		if err := m.db.SetUserTab(m.ctx, sid, tab); err != nil {
+		if err := m.db.SetUserGroup(m.ctx, sid, group); err != nil {
 			return attachDoneMsg{err: err}
 		}
-		if tab == "" {
-			return attachDoneMsg{msg: "cleared tab for " + shortID(sid)}
+		if group == "" {
+			return attachDoneMsg{msg: "cleared group for " + shortID(sid)}
 		}
-		return attachDoneMsg{msg: "tab: " + tab}
+		return attachDoneMsg{msg: "group: " + group}
 	}
 }
 
@@ -1400,16 +1400,16 @@ func (m *model) renderHeader() string {
 	if m.showArchived {
 		leftLabel += " " + subtitleStyle.Render("[archive]")
 	}
-	if m.projectFilter != "" {
-		leftLabel += " " + subtitleStyle.Render("· "+m.projectFilter)
+	if m.groupFilter != "" {
+		leftLabel += " " + subtitleStyle.Render("· "+m.groupFilter)
 	}
 	if m.searchQuery != "" {
 		leftLabel += " " + pendingStyle.Render("🔍 "+shorten(m.searchQuery, 30))
 	}
-	if m.tabLocked {
+	if m.groupLocked {
 		leftLabel += " " + subtitleStyle.Render("(locked)")
 	}
-	if m.showArchived || m.projectFilter != "" || m.searchQuery != "" {
+	if m.showArchived || m.groupFilter != "" || m.searchQuery != "" {
 		left = leftLabel
 		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap < 1 {
@@ -1433,7 +1433,7 @@ func (m *model) renderHeader() string {
 }
 
 func (m *model) renderFooter() string {
-	if m.awaitTabArchiveConfirm || m.awaitSummaryConfirm {
+	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm {
 		// y/n confirmation lands in a full-width yellow banner instead
 		// of the dim flash so operators don't miss the cue.
 		banner := confirmBannerStyle.Width(m.width).Render(m.flash)
@@ -1450,16 +1450,16 @@ func (m *model) renderFooter() string {
 		hint := subtitleStyle.Render("enter save · esc cancel")
 		return pendingStyle.Render(prompt) + "  " + hint
 	}
-	if m.editingTab {
+	if m.editingGroup {
 		prompt := "tab: " + m.titleBuffer + "▏"
 		hint := subtitleStyle.Render("↑↓ pick · enter assign · esc cancel · empty=clear")
-		cands := m.filteredTabCandidates()
+		cands := m.filteredGroupCandidates()
 		if len(cands) == 0 {
 			return pendingStyle.Render(prompt) + "  " + hint
 		}
 		labels := make([]string, len(cands))
 		for i, c := range cands {
-			if i == m.tabCandIdx {
+			if i == m.groupCandIdx {
 				labels[i] = pendingStyle.Render("▶ " + c)
 			} else {
 				labels[i] = subtitleStyle.Render(c)
@@ -1468,7 +1468,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  h/l tabs  / search  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/tab  x/X arch  ctrl+x arch-tab  o trans  , settings  q quit"
+	keys := "↑/↓ sel  h/l tabs  / search  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/group  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
 	if m.pane == paneSettings {
 		keys = "↑/↓ select · space toggle · enter edit · esc back"
 	}
@@ -1495,12 +1495,12 @@ func (m *model) renderTabBar() string {
 	if m.pane != paneSessions {
 		return ""
 	}
-	if m.tabLocked {
+	if m.groupLocked {
 		// --tab pinned the operator to a single bucket; the strip would
 		// be a one-button row that does nothing useful.
 		return ""
 	}
-	tabs := m.uniqueProjects()
+	tabs := m.uniqueGroups()
 	if len(tabs) <= 1 {
 		return ""
 	}
@@ -1512,7 +1512,7 @@ func (m *model) renderTabBar() string {
 			label = "All"
 		}
 		styled := " " + label + " "
-		if t == m.projectFilter {
+		if t == m.groupFilter {
 			display[i] = tabActiveStyle.Render(styled)
 			activeIdx = i
 		} else {

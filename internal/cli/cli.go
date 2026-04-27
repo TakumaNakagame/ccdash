@@ -30,7 +30,7 @@ import (
 func Root(version string) *cobra.Command {
 	var keepServer bool
 	var showVersion bool
-	var initialTab string
+	var initialGroup string
 	root := &cobra.Command{
 		Use:     "ccdash",
 		Short:   "Local dashboard for Claude Code sessions",
@@ -54,14 +54,18 @@ the TUI exits, so events are captured even while you're not watching. Use
 				fmt.Println(version)
 				return nil
 			}
-			return runTUI(cmd.Context(), keepServer, initialTab)
+			return runTUI(cmd.Context(), keepServer, initialGroup)
 		},
 	}
 	root.Flags().BoolVarP(&keepServer, "keep-server", "k", false,
 		"keep a detached collector running after the TUI exits")
 	root.Flags().BoolVar(&showVersion, "version", false, "print version and exit")
-	root.Flags().StringVar(&initialTab, "tab", "",
-		"lock the dashboard to a single tab (repo or user-named); hides the tab strip and disables tab cycling")
+	root.Flags().StringVar(&initialGroup, "group", "",
+		"lock the dashboard to a single group (repo or user-named); hides the tab strip and disables group cycling")
+	// --tab is the legacy spelling. Keep it accepted (hidden in --help) so
+	// existing scripts don't break, but encourage the new name.
+	root.Flags().StringVar(&initialGroup, "tab", "", "deprecated alias for --group")
+	_ = root.Flags().MarkHidden("tab")
 	root.AddCommand(serverCmd())
 	root.AddCommand(claudeCmd())
 	root.AddCommand(sessionsCmd())
@@ -298,22 +302,24 @@ func uninstallHooksCmd() *cobra.Command {
 
 func tuiCmd() *cobra.Command {
 	var keepServer bool
-	var initialTab string
+	var initialGroup string
 	c := &cobra.Command{
 		Use:   "tui",
 		Short: "Open the dashboard TUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI(cmd.Context(), keepServer, initialTab)
+			return runTUI(cmd.Context(), keepServer, initialGroup)
 		},
 	}
 	c.Flags().BoolVarP(&keepServer, "keep-server", "k", false,
 		"keep a detached collector running after the TUI exits")
-	c.Flags().StringVar(&initialTab, "tab", "",
-		"lock the dashboard to a single tab")
+	c.Flags().StringVar(&initialGroup, "group", "",
+		"lock the dashboard to a single group")
+	c.Flags().StringVar(&initialGroup, "tab", "", "deprecated alias for --group")
+	_ = c.Flags().MarkHidden("tab")
 	return c
 }
 
-func runTUI(ctx context.Context, keepServer bool, lockTab string) error {
+func runTUI(ctx context.Context, keepServer bool, lockGroup string) error {
 	d, err := openDB()
 	if err != nil {
 		return err
@@ -360,7 +366,7 @@ func runTUI(ctx context.Context, keepServer bool, lockTab string) error {
 		}()
 	}
 
-	tuiErr := tui.Run(ctx, d, lockTab)
+	tuiErr := tui.Run(ctx, d, lockGroup)
 
 	cancelServer()
 	if embedded && serverDone != nil {

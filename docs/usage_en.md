@@ -122,7 +122,7 @@ Sessions are bucketed by `last_seen`:
 
 ---
 
-## 4. Tab navigation
+## 4. Group navigation
 
 The strip across the top shows every distinct grouping. The active tab
 is highlighted; cycle with `h` / `l` (or `Tab` / `Shift+Tab`). When the
@@ -144,8 +144,8 @@ discovery rotates one out), ccdash auto-advances to the next tab.
 Pinning to a single tab at launch:
 
 ```sh
-ccdash --tab home-lab          # locks the dashboard, hides the strip
-ccdash --tab "deploy review"   # spaces are fine for user-named tabs
+ccdash --group home-lab          # locks the dashboard, hides the strip
+ccdash --group "deploy review"   # spaces are fine for user-named groups
 ```
 
 ---
@@ -217,7 +217,7 @@ token (`Bash(git status)` becomes `Bash(git *)`).
 
 ### Bulk archive
 
-`Ctrl+X` archives every session in the current tab in one action.
+`Ctrl+X` archives every session in the current group in one action.
 Required confirmations:
 
 1. The active filter must be a specific tab (not `All`) — bulk
@@ -277,7 +277,7 @@ Press `/` to open a footer search input. Submit with `Enter` to filter
 the list by case-insensitive substring against:
 
 - `s.DisplayTitle()` (custom title or auto-derived)
-- `s.UserTab`
+- `s.UserGroup`
 - `s.Repo`
 - `s.Cwd`
 - `s.Branch`
