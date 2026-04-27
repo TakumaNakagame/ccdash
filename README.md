@@ -1,5 +1,12 @@
 # ccdash
 
+> ⚠️ **Hobby project — known security caveats.** This is a personal tool, not
+> production software. There are known security issues (no auth on the local
+> HTTP collector, broad permission requirements via Claude Code hooks, etc.)
+> that are tracked and being worked through. Don't run it on a shared machine
+> or expose port 9123 outside loopback. See the open issues for the current
+> remediation status before deploying anywhere you care about.
+
 Local-only dashboard for monitoring multiple concurrent Claude Code sessions.
 
 ccdash collects events (prompts, tool calls, permission requests) from one or
