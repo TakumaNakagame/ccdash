@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +20,7 @@ import (
 
 	"github.com/takumanakagame/ccmanage/internal/db"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
@@ -306,8 +310,48 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.attachCurrent()
 	case "o":
 		return m, m.openTranscript()
+	case "a":
+		return m, m.decideApproval("allow")
+	case "d":
+		return m, m.decideApproval("deny")
 	}
 	return m, nil
+}
+
+// decideApproval sends the operator's allow/deny choice to the embedded
+// server, which routes it to the blocking PermissionRequest goroutine. We
+// always target the oldest pending approval for the selected session — that
+// matches what's visually surfaced first in the right-pane panel.
+func (m *model) decideApproval(behavior string) tea.Cmd {
+	pending := m.approvalsForSelected()
+	if len(pending) == 0 {
+		m.flash = "no pending approvals to " + behavior
+		return nil
+	}
+	a := pending[0]
+	id := a.ID
+	tool := a.Tool
+	return func() tea.Msg {
+		body, _ := json.Marshal(map[string]string{"behavior": behavior})
+		url := fmt.Sprintf("http://%s:%d/approvals/%d/decide", paths.DefaultHost, paths.DefaultPort, id)
+		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 2 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return attachDoneMsg{err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			return attachDoneMsg{err: fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))}
+		}
+		verb := "allowed"
+		if behavior == "deny" {
+			verb = "denied"
+		}
+		return attachDoneMsg{msg: fmt.Sprintf("%s %s approval (#%d)", verb, tool, id)}
+	}
 }
 
 func (m *model) handleKeyTranscript(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -555,7 +599,7 @@ func (m *model) renderHeader() string {
 }
 
 func (m *model) renderFooter() string {
-	keys := "↑/↓ select  enter attach  o transcript  r refresh  q quit"
+	keys := "↑/↓ select  enter attach  a allow  d deny  o transcript  r refresh  q quit"
 	if m.pane == paneTranscript {
 		keys = "↑/↓ scroll  pgup/pgdn page  g/G top/end  r reload  esc/q back"
 	}
@@ -840,7 +884,7 @@ func (m *model) renderApprovalSection(approvals []mdl.Approval, width int) strin
 		charW = 1
 	}
 	rule := pendingStyle.Render(strings.Repeat("─", width/charW))
-	title := pendingStyle.Render(fmt.Sprintf("⚠ %d pending — switch to the claude session and respond", len(approvals)))
+	title := pendingStyle.Render(fmt.Sprintf("⚠ %d pending — press 'a' to allow / 'd' to deny (oldest first)", len(approvals)))
 
 	var blocks []string
 	blocks = append(blocks, rule, title)
