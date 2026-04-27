@@ -86,6 +86,11 @@ func (d *DB) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_approvals_session ON approvals(session_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.sql.Exec(s); err != nil {
@@ -340,6 +345,28 @@ func (d *DB) SetFavorite(ctx context.Context, sessionID string, favorite bool) e
 // transcript-derived one in the UI. Pass an empty string to clear.
 func (d *DB) SetCustomTitle(ctx context.Context, sessionID, title string) error {
 	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET custom_title = ? WHERE session_id = ?`, title, sessionID)
+	return err
+}
+
+// GetSetting returns the raw string value for a key; missing keys come back
+// as ("", nil). Other errors propagate.
+func (d *DB) GetSetting(ctx context.Context, key string) (string, error) {
+	var v string
+	err := d.sql.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
+// SetSetting upserts a setting value. Pass an empty string to keep the row
+// but mark it explicitly empty; deletion is intentional and goes through
+// DeleteSetting.
+func (d *DB) SetSetting(ctx context.Context, key, value string) error {
+	_, err := d.sql.ExecContext(ctx, `
+		INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+	`, key, value, time.Now().UTC().Unix())
 	return err
 }
 

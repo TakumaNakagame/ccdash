@@ -22,12 +22,16 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/db"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/takumanakagame/ccmanage/internal/settings"
 	"github.com/takumanakagame/ccmanage/internal/summarize"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
 func Run(ctx context.Context, d *db.DB) error {
 	m := newModel(ctx, d)
+	if s, err := settings.Load(ctx, d); err == nil {
+		m.settings = s
+	}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
@@ -71,13 +75,14 @@ type model struct {
 	tailScroll int
 
 	// list mode + inline editor state
-	showArchived    bool
-	editingTitle    bool
-	editingTab      bool
-	titleBuffer     string
-	tabCandIdx      int  // index into filteredTabCandidates(); -1 == "no pick yet"
-	projectFilter   string // "" = All; otherwise repo / cwd basename
-	includeAutoRepo bool   // false hides the auto repo entries from the Tab cycle list
+	showArchived  bool
+	editingTitle  bool
+	editingTab    bool
+	titleBuffer   string
+	tabCandIdx    int    // index into filteredTabCandidates(); -1 == "no pick yet"
+	projectFilter string // "" = All; otherwise repo / cwd basename
+
+	settings settings.Settings
 
 	// transcript view state
 	transcriptMessages []transcript.Message
@@ -87,13 +92,11 @@ type model struct {
 }
 
 func newModel(ctx context.Context, d *db.DB) *model {
-	// Auto repo grouping is on by default — most operators haven't named
-	// any tabs yet so this is the only thing populating the Tab cycle.
-	return &model{ctx: ctx, db: d, includeAutoRepo: true}
+	return &model{ctx: ctx, db: d, settings: settings.Defaults()}
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.refresh(), tickCmd())
+	return tea.Batch(m.refresh(), tickCmd(m.tickInterval()))
 }
 
 type tickMsg time.Time
@@ -103,8 +106,18 @@ type eventsMsg []mdl.Event
 type approvalsMsg []mdl.Approval
 type errMsg struct{ err error }
 
-func tickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+func tickCmd(every time.Duration) tea.Cmd {
+	if every <= 0 {
+		every = time.Second
+	}
+	return tea.Tick(every, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+func (m *model) tickInterval() time.Duration {
+	if ms := m.settings.RefreshIntervalMs; ms > 0 {
+		return time.Duration(ms) * time.Millisecond
+	}
+	return time.Second
 }
 
 func (m *model) refresh() tea.Cmd {
@@ -156,7 +169,11 @@ func (m *model) loadTailCmd() tea.Cmd {
 		// Tail-read keeps session-switching fast even for transcripts in
 		// the tens of megabytes; we only need the recent end for the
 		// inline pane (the modal viewer pulls the full file).
-		msgs, err := transcript.LoadTail(path, 256*1024)
+		budgetKB := m.settings.TailBudgetKB
+		if budgetKB <= 0 {
+			budgetKB = 256
+		}
+		msgs, err := transcript.LoadTail(path, int64(budgetKB)*1024)
 		if err != nil {
 			return tailMsg{path: path, mtime: fi.ModTime(), err: err}
 		}
@@ -186,7 +203,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 	case tickMsg:
 		m.lastTick = time.Time(msg)
-		return m, tea.Batch(m.refresh(), tickCmd())
+		return m, tea.Batch(m.refresh(), tickCmd(m.tickInterval()))
 	case sessionsMsg:
 		prev := m.currentSessionID()
 		m.allSessions = []mdl.Session(msg)
@@ -234,7 +251,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// through Bubble Tea's writer rather than competing with the alt
 		// screen via stderr.
 		total := len(m.approvals)
-		if m.bellPrimed && m.lastPendingTotal == 0 && total > 0 {
+		if m.settings.BellOnPending && m.bellPrimed && m.lastPendingTotal == 0 && total > 0 {
 			m.pendingBell = true
 		}
 		m.lastPendingTotal = total
@@ -381,11 +398,16 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		return m, m.cycleProject(-1)
 	case "R":
-		m.includeAutoRepo = !m.includeAutoRepo
+		next, err := settings.Set(m.ctx, m.db, m.settings, "auto_repo_tabs", !m.settings.AutoRepoTabs)
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.settings = next
 		// If we just turned auto repos off and the current filter is one
 		// of them, drop it back to All so the operator isn't stuck with
 		// a filter that isn't reachable from the cycle anymore.
-		if !m.includeAutoRepo && m.projectFilter != "" {
+		if !m.settings.AutoRepoTabs && m.projectFilter != "" {
 			projs := m.uniqueProjects()
 			present := false
 			for _, p := range projs {
@@ -399,7 +421,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.applyProjectFilter()
 			}
 		}
-		if m.includeAutoRepo {
+		if m.settings.AutoRepoTabs {
 			m.flash = "auto repo tabs ON"
 		} else {
 			m.flash = "auto repo tabs OFF (user-named only)"
@@ -462,7 +484,7 @@ func (m *model) uniqueProjects() []string {
 			user[s.UserTab] = struct{}{}
 			continue
 		}
-		if !m.includeAutoRepo {
+		if !m.settings.AutoRepoTabs {
 			continue
 		}
 		switch {
@@ -553,11 +575,12 @@ func (m *model) summarizeCurrent() tea.Cmd {
 	path := s.TranscriptPath
 	// Flip status synchronously so the next refresh shows "summarizing".
 	_ = m.db.SetSummaryStatus(m.ctx, sid, "running")
+	secs := m.settings.SummaryTimeoutSec
+	if secs <= 0 {
+		secs = 180
+	}
 	return func() tea.Msg {
-		// Bumped past the prior 90s because long sessions take Claude a
-		// while to digest end-to-end; the previous timeout was killing
-		// otherwise-fine summarizations and they'd land as 'error'.
-		ctx, cancel := context.WithTimeout(m.ctx, 180*time.Second)
+		ctx, cancel := context.WithTimeout(m.ctx, time.Duration(secs)*time.Second)
 		defer cancel()
 		summary, err := summarize.Run(ctx, path)
 		return summaryDoneMsg{sessionID: sid, summary: summary, err: err}
