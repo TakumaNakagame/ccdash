@@ -1,5 +1,8 @@
 # ccdash
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-ff922b.svg)](./LICENSE)
+[![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-d18ee2)](https://claude.com/claude-code)
+
 > Hobby project, designed for single-user / loopback-only operation. See the
 > [Threat model](#threat-model) section before adopting it broadly.
 
