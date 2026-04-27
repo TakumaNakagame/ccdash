@@ -1,9 +1,7 @@
 # ccdash
 
-> ⚠️ **Hobby project — known security caveats.** This is a personal tool, not
-> production software. Do not run it on a shared machine and do not expose
-> port `9123` outside loopback. Read the **Threat model** section below
-> before deploying anywhere you care about.
+> Hobby project, designed for single-user / loopback-only operation. See the
+> [Threat model](#threat-model) section before adopting it broadly.
 
 ccdash is a local TUI dashboard for monitoring **multiple concurrent
 Claude Code sessions** at the same time. It collects prompts, tool calls,
