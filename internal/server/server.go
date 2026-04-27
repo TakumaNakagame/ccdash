@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/takumanakagame/ccmanage/internal/db"
@@ -25,10 +26,27 @@ type Server struct {
 	mux  *http.ServeMux
 	addr string
 	srv  *http.Server
+
+	// pending tracks PermissionRequest hooks that are still blocking
+	// inside the handler waiting for an operator decision. The TUI POSTs
+	// to /approvals/<id>/decide which routes the message to the matching
+	// channel and unblocks the handler.
+	pendingMu sync.Mutex
+	pending   map[int64]chan approvalDecision
+}
+
+type approvalDecision struct {
+	Behavior string // "allow" or "deny"
+	Reason   string
 }
 
 func New(d *db.DB, addr string) *Server {
-	s := &Server{db: d, addr: addr, mux: http.NewServeMux()}
+	s := &Server{
+		db:      d,
+		addr:    addr,
+		mux:     http.NewServeMux(),
+		pending: map[int64]chan approvalDecision{},
+	}
 	s.routes()
 	return s
 }
@@ -47,6 +65,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/hooks/stop", s.handleStop)
 	s.mux.HandleFunc("/hooks/subagent-stop", s.handleSubagentStop)
 	s.mux.HandleFunc("/hooks/notification", s.handleNotification)
+	s.mux.HandleFunc("/approvals/", s.handleApprovalDecide)
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -368,6 +387,12 @@ func (s *Server) handlePostToolFailure(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, nil)
 }
 
+// handlePermissionRequest holds the hook response open for up to 25s waiting
+// for a TUI operator decision. If one arrives we return the appropriate
+// hookSpecificOutput JSON so Claude obeys (allow/deny without prompting). If
+// nothing arrives we let the request fall through with an empty body so
+// Claude shows its own interactive prompt — exactly the pre-Phase-2
+// behavior.
 func (s *Server) handlePermissionRequest(w http.ResponseWriter, r *http.Request) {
 	p, raw, err := readPayload(r)
 	if err != nil {
@@ -382,16 +407,100 @@ func (s *Server) handlePermissionRequest(w http.ResponseWriter, r *http.Request)
 		Summary:   summarizeToolInput(p.ToolName, p.ToolInput),
 		Payload:   raw,
 	})
-	_, _ = s.db.InsertApproval(r.Context(), &model.Approval{
+	id, err := s.db.InsertApproval(r.Context(), &model.Approval{
 		SessionID: p.SessionID,
 		Tool:      p.ToolName,
 		ToolUseID: p.ToolUseID,
 		ToolInput: p.ToolInput,
 		Status:    model.ApprovalPending,
 	})
-	// Phase 1: observation only — return empty so Claude falls back to its
-	// normal interactive permission flow.
-	writeOK(w, nil)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	ch := make(chan approvalDecision, 1)
+	s.pendingMu.Lock()
+	s.pending[id] = ch
+	s.pendingMu.Unlock()
+	defer func() {
+		s.pendingMu.Lock()
+		delete(s.pending, id)
+		s.pendingMu.Unlock()
+	}()
+
+	const decideWindow = 25 * time.Second // Claude's hook timeout is 30s; leave headroom.
+	select {
+	case d := <-ch:
+		status := model.ApprovalApproved
+		if d.Behavior == "deny" {
+			status = model.ApprovalDenied
+		}
+		_ = s.db.UpdateApprovalStatus(r.Context(), id, status, d.Reason)
+		writeOK(w, map[string]any{
+			"hookSpecificOutput": map[string]any{
+				"hookEventName": "PermissionRequest",
+				"decision": map[string]any{
+					"behavior": d.Behavior,
+					"message":  d.Reason,
+				},
+			},
+		})
+	case <-time.After(decideWindow):
+		_ = s.db.UpdateApprovalStatus(r.Context(), id, model.ApprovalTimeout, "ccdash: no decision within 25s")
+		writeOK(w, nil)
+	case <-r.Context().Done():
+		// Claude gave up. Leave status as pending; the discovery loop will
+		// timeout-sweep it.
+	}
+}
+
+// handleApprovalDecide accepts POST /approvals/<id>/decide with body
+// {"behavior":"allow|deny","reason":"..."} and routes it to the matching
+// PermissionRequest goroutine. Returns 410 if no handler is waiting (the
+// approval was already resolved or timed out).
+func (s *Server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/approvals/")
+	parts := strings.Split(rest, "/")
+	if len(parts) < 2 || parts[1] != "decide" {
+		http.NotFound(w, r)
+		return
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Behavior string `json:"behavior"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&body); err != nil {
+		http.Error(w, "bad body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.Behavior != "allow" && body.Behavior != "deny" {
+		http.Error(w, "behavior must be 'allow' or 'deny'", http.StatusBadRequest)
+		return
+	}
+	s.pendingMu.Lock()
+	ch, ok := s.pending[id]
+	s.pendingMu.Unlock()
+	if !ok {
+		http.Error(w, "no pending hold for that id (already resolved or timed out)", http.StatusGone)
+		return
+	}
+	select {
+	case ch <- approvalDecision{Behavior: body.Behavior, Reason: body.Reason}:
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	default:
+		http.Error(w, "decision already accepted", http.StatusConflict)
+	}
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
