@@ -221,30 +221,28 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		prev := m.currentSessionID()
 		m.allSessions = []mdl.Session(msg)
 		m.applyProjectFilter()
-		// preserve selection by id when possible
+		// Try to keep the cursor on the same session as before; only
+		// fall back to defaultSelectionIdx (newest) when the previous
+		// session is no longer present (filter change, archive toggle,
+		// session vanished, etc.).
+		found := false
 		if prev != "" {
 			for i, s := range m.sessions {
 				if s.SessionID == prev {
 					m.selSess = i
+					found = true
 					break
 				}
 			}
+		}
+		if !found {
+			m.selSess = m.defaultSelectionIdx()
 		}
 		if m.selSess >= len(m.sessions) {
 			m.selSess = len(m.sessions) - 1
 		}
 		if m.selSess < 0 {
 			m.selSess = 0
-		}
-		// On the first load, jump to the newest entry. With the default
-		// ordering that's index 0; with NewestAtBottom that's the last
-		// row.
-		if prev == "" && len(m.sessions) > 0 {
-			if m.settings.NewestAtBottom {
-				m.selSess = len(m.sessions) - 1
-			} else {
-				m.selSess = 0
-			}
 		}
 		if cur := m.currentSessionID(); cur != "" && cur != prev {
 			return m, m.loadTailCmd()
@@ -445,6 +443,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showArchived = !m.showArchived
 		m.selSess = 0
 		m.tailScroll = 0
+		// The fresh sessionsMsg from refresh() will reset selSess to
+		// defaultSelectionIdx() when the previous selection is gone.
 		return m, m.refresh()
 	case "tab":
 		return m, m.cycleProject(1)
@@ -665,12 +665,26 @@ func (m *model) cycleProject(delta int) tea.Cmd {
 	idx = (idx + delta + len(projects)) % len(projects)
 	m.projectFilter = projects[idx]
 	m.applyProjectFilter()
-	m.selSess = 0
+	m.selSess = m.defaultSelectionIdx()
 	m.sessScroll = 0
 	m.tailScroll = 0
 	m.tailPath = ""
 	m.tailMtime = time.Time{}
 	return m.loadTailCmd()
+}
+
+// defaultSelectionIdx returns the cursor position to land on when the
+// session set has just changed (tab switch, archive view toggle, fresh
+// startup). Newest is always preferable; with NewestAtBottom enabled
+// that's the LAST entry in m.sessions.
+func (m *model) defaultSelectionIdx() int {
+	if len(m.sessions) == 0 {
+		return 0
+	}
+	if m.settings.NewestAtBottom {
+		return len(m.sessions) - 1
+	}
+	return 0
 }
 
 // mouseInRightPane decides whether a wheel event lands on the transcript
