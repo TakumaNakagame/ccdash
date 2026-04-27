@@ -75,6 +75,7 @@ type model struct {
 	editingTitle  bool
 	editingTab    bool
 	titleBuffer   string
+	tabCandIdx    int // index into filteredTabCandidates(); -1 == "no pick yet"
 	projectFilter string // "" = All; otherwise repo / cwd basename
 
 	// transcript view state
@@ -539,17 +540,50 @@ func (m *model) handleKeyTitleEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editingTab = false
 		m.titleBuffer = ""
 		return m, nil
+	case tea.KeyUp:
+		if m.editingTab {
+			m.pickTabCandidate(-1)
+			return m, nil
+		}
+	case tea.KeyDown:
+		if m.editingTab {
+			m.pickTabCandidate(1)
+			return m, nil
+		}
 	case tea.KeyBackspace:
 		runes := []rune(m.titleBuffer)
 		if len(runes) > 0 {
 			m.titleBuffer = string(runes[:len(runes)-1])
 		}
+		m.tabCandIdx = -1 // typing breaks the picker selection
 	case tea.KeySpace:
 		m.titleBuffer += " "
+		m.tabCandIdx = -1
 	case tea.KeyRunes:
 		m.titleBuffer += string(msg.Runes)
+		m.tabCandIdx = -1
 	}
 	return m, nil
+}
+
+// pickTabCandidate moves the candidate cursor by delta and copies the
+// chosen value into the buffer. Wraps at both ends; idle (-1) goes to the
+// first candidate on KeyDown / last on KeyUp so the operator can start
+// browsing immediately on Tᴜ edit open.
+func (m *model) pickTabCandidate(delta int) {
+	cands := m.filteredTabCandidates()
+	if len(cands) == 0 {
+		return
+	}
+	switch {
+	case m.tabCandIdx < 0 && delta > 0:
+		m.tabCandIdx = 0
+	case m.tabCandIdx < 0 && delta < 0:
+		m.tabCandIdx = len(cands) - 1
+	default:
+		m.tabCandIdx = (m.tabCandIdx + delta + len(cands)) % len(cands)
+	}
+	m.titleBuffer = cands[m.tabCandIdx]
 }
 
 func (m *model) toggleArchiveCurrent() tea.Cmd {
@@ -609,7 +643,45 @@ func (m *model) startTabEdit() tea.Cmd {
 	}
 	m.editingTab = true
 	m.titleBuffer = m.sessions[m.selSess].UserTab
+	m.tabCandIdx = -1
 	return nil
+}
+
+// filteredTabCandidates returns the unique user_tab values currently in
+// use across the unfiltered session set, narrowed by case-insensitive
+// prefix match against the input buffer.
+func (m *model) filteredTabCandidates() []string {
+	seen := map[string]struct{}{}
+	var all []string
+	for _, s := range m.allSessions {
+		if s.UserTab == "" {
+			continue
+		}
+		if _, ok := seen[s.UserTab]; ok {
+			continue
+		}
+		seen[s.UserTab] = struct{}{}
+		all = append(all, s.UserTab)
+	}
+	// Stable sort so the picker doesn't jiggle between renders.
+	for i := 0; i < len(all); i++ {
+		for j := i + 1; j < len(all); j++ {
+			if all[j] < all[i] {
+				all[i], all[j] = all[j], all[i]
+			}
+		}
+	}
+	if m.titleBuffer == "" {
+		return all
+	}
+	prefix := strings.ToLower(m.titleBuffer)
+	out := all[:0]
+	for _, c := range all {
+		if strings.HasPrefix(strings.ToLower(c), prefix) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (m *model) commitTabEdit() tea.Cmd {
@@ -964,8 +1036,21 @@ func (m *model) renderFooter() string {
 	}
 	if m.editingTab {
 		prompt := "tab: " + m.titleBuffer + "▏"
-		hint := subtitleStyle.Render("enter assign · esc cancel · empty=clear")
-		return pendingStyle.Render(prompt) + "  " + hint
+		hint := subtitleStyle.Render("↑↓ pick · enter assign · esc cancel · empty=clear")
+		cands := m.filteredTabCandidates()
+		if len(cands) == 0 {
+			return pendingStyle.Render(prompt) + "  " + hint
+		}
+		labels := make([]string, len(cands))
+		for i, c := range cands {
+			if i == m.tabCandIdx {
+				labels[i] = pendingStyle.Render("▶ " + c)
+			} else {
+				labels[i] = subtitleStyle.Render(c)
+			}
+		}
+		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
+		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
 	keys := "↑/↓ sel  tab tabs  J/K right-line  pgup/pgdn right-page  enter attach  a/A/d allow/keep/deny  s sum  f fav  t rename  T set-tab  x arch  X arch-view  o trans  q quit"
 	if m.showArchived {
