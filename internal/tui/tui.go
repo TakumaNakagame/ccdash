@@ -1505,7 +1505,7 @@ func (m *model) renderSettingsBody(height int) string {
 }
 
 func (m *model) renderSessionsBody(height int) string {
-	if m.settings.LayoutVertical {
+	if m.useVerticalLayout() {
 		return m.renderSessionsBodyVertical(height)
 	}
 	// Reserve 3 cols for " │ " separator.
@@ -1528,6 +1528,21 @@ func (m *model) renderSessionsBody(height int) string {
 	}
 	sep := strings.Join(sepLines, "\n")
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, sep, right)
+}
+
+// useVerticalLayout returns true when the body should stack vertically.
+// Auto mode (default) flips on narrow terminals so a 4K monitor split
+// vertically into a tall column gets the stacked layout without manual
+// flag-flipping. Operators who want explicit control can turn auto off
+// in the settings page and use the manual toggle.
+func (m *model) useVerticalLayout() bool {
+	if m.settings.LayoutAuto {
+		// Each pane wants ~50 cols to be useful (session list with title
+		// + meta line; transcript with role labels). Below ~100 cols the
+		// side-by-side split squeezes both panes uncomfortably.
+		return m.width < 100
+	}
+	return m.settings.LayoutVertical
 }
 
 // renderSessionsBodyVertical stacks the list above the transcript pane.

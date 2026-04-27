@@ -18,6 +18,7 @@ type Settings struct {
 	BellOnPending  bool
 	NewestAtBottom bool // session list with newest sessions at the bottom
 	LayoutVertical bool // stack list above transcript instead of left/right
+	LayoutAuto     bool // when true, ignore LayoutVertical and pick from terminal width
 
 	// Risk-bearing capabilities. Each defaults to ON for parity with prior
 	// behavior; the operator can flip them off individually or via the
@@ -37,6 +38,7 @@ const (
 	keyBellOnPending     = "bell_on_pending"
 	keyNewestAtBottom    = "newest_at_bottom"
 	keyLayoutVertical    = "layout_vertical"
+	keyLayoutAuto        = "layout_auto"
 	keyApproveEnabled    = "approve_enabled"
 	keySummaryEnabled    = "summary_enabled"
 	keyAttachEnabled     = "attach_enabled"
@@ -54,6 +56,7 @@ func Defaults() Settings {
 		BellOnPending:     true,
 		NewestAtBottom:    false,
 		LayoutVertical:    false,
+		LayoutAuto:        true,
 		ApproveEnabled:    true,
 		SummaryEnabled:    true,
 		AttachEnabled:     true,
@@ -77,6 +80,7 @@ func Load(ctx context.Context, d *db.DB) (Settings, error) {
 		{keyBellOnPending, func(v string) { out.BellOnPending = parseBool(v, out.BellOnPending) }},
 		{keyNewestAtBottom, func(v string) { out.NewestAtBottom = parseBool(v, out.NewestAtBottom) }},
 		{keyLayoutVertical, func(v string) { out.LayoutVertical = parseBool(v, out.LayoutVertical) }},
+		{keyLayoutAuto, func(v string) { out.LayoutAuto = parseBool(v, out.LayoutAuto) }},
 		{keyApproveEnabled, func(v string) { out.ApproveEnabled = parseBool(v, out.ApproveEnabled) }},
 		{keySummaryEnabled, func(v string) { out.SummaryEnabled = parseBool(v, out.SummaryEnabled) }},
 		{keyAttachEnabled, func(v string) { out.AttachEnabled = parseBool(v, out.AttachEnabled) }},
@@ -149,7 +153,8 @@ func AllSpecs() []Spec {
 		{Key: keyAutoRepoTabs, Label: "Auto repo tabs", Help: "Include repo names in the Tab cycle alongside user-named tabs", Kind: KindBool},
 		{Key: keyBellOnPending, Label: "Bell on pending", Help: "Ring the terminal bell when the pending count goes from 0 to >0", Kind: KindBool},
 		{Key: keyNewestAtBottom, Label: "Newest at bottom", Help: "Show the newest session at the bottom of the list (matches the transcript tail orientation)", Kind: KindBool},
-		{Key: keyLayoutVertical, Label: "Vertical layout", Help: "Stack the session list above the transcript pane instead of side-by-side; useful for tall / narrow terminals", Kind: KindBool},
+		{Key: keyLayoutAuto, Label: "Auto layout", Help: "Pick horizontal vs vertical from the terminal width — flips to vertical on narrow / portrait windows. Overrides the manual Vertical layout toggle below.", Kind: KindBool},
+		{Key: keyLayoutVertical, Label: "Vertical layout (manual)", Help: "Force vertical layout even on wide terminals; only consulted when Auto layout is off", Kind: KindBool},
 		// Risk-bearing toggles
 		{Key: keyApproveEnabled, Label: "Approval blocking", Help: "When OFF, ccdash never holds PermissionRequest hooks — Claude prompts you in the terminal as it would without ccdash, and the a/A/d shortcuts are disabled", Kind: KindBool},
 		{Key: keySummaryEnabled, Label: "Summarize via claude -p", Help: "When OFF, the 's' key is disabled and ccdash never spawns claude -p (no transcript digests sent over the network)", Kind: KindBool},
@@ -190,6 +195,8 @@ func Get(s Settings, key string) any {
 		return s.NewestAtBottom
 	case keyLayoutVertical:
 		return s.LayoutVertical
+	case keyLayoutAuto:
+		return s.LayoutAuto
 	case keyApproveEnabled:
 		return s.ApproveEnabled
 	case keySummaryEnabled:
@@ -220,6 +227,8 @@ func Set(ctx context.Context, d *db.DB, s Settings, key string, value any) (Sett
 		s.NewestAtBottom = value.(bool)
 	case keyLayoutVertical:
 		s.LayoutVertical = value.(bool)
+	case keyLayoutAuto:
+		s.LayoutAuto = value.(bool)
 	case keyApproveEnabled:
 		s.ApproveEnabled = value.(bool)
 	case keySummaryEnabled:
