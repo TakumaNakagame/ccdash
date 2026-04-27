@@ -1330,6 +1330,7 @@ var (
 	pendingRowStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	groupHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("237"))
 	tabActiveStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("12"))
+	confirmBannerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11")).Padding(0, 1)
 	tabInactiveStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Background(lipgloss.Color("236"))
 	approvalRowStyle   = lipgloss.NewStyle().Background(lipgloss.Color("58")).Foreground(lipgloss.Color("15"))
 	approvalLabelStyle = lipgloss.NewStyle().Background(lipgloss.Color("11")).Foreground(lipgloss.Color("0")).Bold(true)
@@ -1400,6 +1401,13 @@ func (m *model) renderHeader() string {
 }
 
 func (m *model) renderFooter() string {
+	if m.awaitTabArchiveConfirm || m.awaitSummaryConfirm {
+		// y/n confirmation lands in a full-width yellow banner instead
+		// of the dim flash so operators don't miss the cue.
+		banner := confirmBannerStyle.Width(m.width).Render(m.flash)
+		hint := footerStyle.Render("y confirm · any other key cancels")
+		return banner + "\n" + hint
+	}
 	if m.editingSearch {
 		prompt := "/" + m.titleBuffer + "▏"
 		hint := subtitleStyle.Render("enter apply · esc cancel · empty=clear")
