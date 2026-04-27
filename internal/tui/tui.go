@@ -71,12 +71,13 @@ type model struct {
 	tailScroll int
 
 	// list mode + inline editor state
-	showArchived  bool
-	editingTitle  bool
-	editingTab    bool
-	titleBuffer   string
-	tabCandIdx    int // index into filteredTabCandidates(); -1 == "no pick yet"
-	projectFilter string // "" = All; otherwise repo / cwd basename
+	showArchived    bool
+	editingTitle    bool
+	editingTab      bool
+	titleBuffer     string
+	tabCandIdx      int  // index into filteredTabCandidates(); -1 == "no pick yet"
+	projectFilter   string // "" = All; otherwise repo / cwd basename
+	includeAutoRepo bool   // false hides the auto repo entries from the Tab cycle list
 
 	// transcript view state
 	transcriptMessages []transcript.Message
@@ -86,7 +87,9 @@ type model struct {
 }
 
 func newModel(ctx context.Context, d *db.DB) *model {
-	return &model{ctx: ctx, db: d}
+	// Auto repo grouping is on by default — most operators haven't named
+	// any tabs yet so this is the only thing populating the Tab cycle.
+	return &model{ctx: ctx, db: d, includeAutoRepo: true}
 }
 
 func (m *model) Init() tea.Cmd {
@@ -377,6 +380,31 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.cycleProject(1)
 	case "shift+tab":
 		return m, m.cycleProject(-1)
+	case "R":
+		m.includeAutoRepo = !m.includeAutoRepo
+		// If we just turned auto repos off and the current filter is one
+		// of them, drop it back to All so the operator isn't stuck with
+		// a filter that isn't reachable from the cycle anymore.
+		if !m.includeAutoRepo && m.projectFilter != "" {
+			projs := m.uniqueProjects()
+			present := false
+			for _, p := range projs {
+				if p == m.projectFilter {
+					present = true
+					break
+				}
+			}
+			if !present {
+				m.projectFilter = ""
+				m.applyProjectFilter()
+			}
+		}
+		if m.includeAutoRepo {
+			m.flash = "auto repo tabs ON"
+		} else {
+			m.flash = "auto repo tabs OFF (user-named only)"
+		}
+		return m, nil
 	case "f":
 		return m, m.toggleFavoriteCurrent()
 	case "t":
@@ -422,21 +450,38 @@ func projectOf(s mdl.Session) string {
 	return ""
 }
 
-// uniqueProjects returns the project labels present in the unfiltered set,
-// with "" (= All) at the front.
+// uniqueProjects returns the labels available for the Tab cycle. User-named
+// tabs (sessions.user_tab) always appear; the auto-derived repo / cwd
+// names appear only when includeAutoRepo is true. The ""-at-front sentinel
+// represents "All / no filter".
 func (m *model) uniqueProjects() []string {
-	seen := map[string]struct{}{}
+	user := map[string]struct{}{}
+	auto := map[string]struct{}{}
 	for _, s := range m.allSessions {
-		p := projectOf(s)
-		if p != "" {
-			seen[p] = struct{}{}
+		if s.UserTab != "" {
+			user[s.UserTab] = struct{}{}
+			continue
+		}
+		if !m.includeAutoRepo {
+			continue
+		}
+		switch {
+		case s.Repo != "":
+			auto[s.Repo] = struct{}{}
+		case s.Cwd != "":
+			auto[filepath.Base(s.Cwd)] = struct{}{}
 		}
 	}
 	out := []string{""}
-	for k := range seen {
+	for k := range user {
 		out = append(out, k)
 	}
-	// Skip the "" sentinel when sorting.
+	for k := range auto {
+		if _, dup := user[k]; dup {
+			continue
+		}
+		out = append(out, k)
+	}
 	tail := out[1:]
 	for i := 0; i < len(tail); i++ {
 		for j := i + 1; j < len(tail); j++ {
@@ -1052,7 +1097,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  tab tabs  J/K right-line  pgup/pgdn right-page  enter attach  a/A/d allow/keep/deny  s sum  f fav  t rename  T set-tab  x arch  X arch-view  o trans  q quit"
+	keys := "↑/↓ sel  tab tabs  R auto-repo  J/K right-line  pgup/pgdn right-page  enter attach  a/A/d allow/keep/deny  s sum  f fav  t rename  T set-tab  x arch  X arch-view  o trans  q quit"
 	if m.showArchived {
 		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  q quit"
 	}
