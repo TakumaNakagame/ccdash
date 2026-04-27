@@ -15,6 +15,10 @@ import (
 // replace them idempotently without touching user-defined hooks.
 const MarkerKey = "X-Ccdash-Managed"
 
+// TokenHeaderKey is the header carrying the loopback shared secret on every
+// hook entry written by Apply().
+const TokenHeaderKey = "X-Ccdash-Token"
+
 // Endpoints maps Claude Code hook event names to ccdash HTTP paths.
 var Endpoints = map[string]string{
 	"SessionStart":       "/hooks/session-start",
@@ -117,6 +121,44 @@ func (in *Install) Remove() error {
 	}
 	settings["hooks"] = hooks
 	return writeSettings(in.Path, settings)
+}
+
+// InstalledTokenAt returns the X-Ccdash-Token currently baked into the
+// settings.json at path. Empty string means the user never ran install-hooks
+// (or removed our entries). Returns an error only on filesystem trouble; a
+// missing file or absent token is reported as ("", nil).
+func InstalledTokenAt(path string) (string, error) {
+	settings, err := readSettings(path)
+	if err != nil {
+		return "", err
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	if hooks == nil {
+		return "", nil
+	}
+	for _, event := range hooks {
+		arr, ok := event.([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range arr {
+			if !isManagedEntry(item) {
+				continue
+			}
+			m := item.(map[string]any)
+			handlers, _ := m["hooks"].([]any)
+			for _, h := range handlers {
+				hm, _ := h.(map[string]any)
+				headers, _ := hm["headers"].(map[string]any)
+				if v, ok := headers[TokenHeaderKey]; ok {
+					if s, ok := v.(string); ok {
+						return s, nil
+					}
+				}
+			}
+		}
+	}
+	return "", nil
 }
 
 func buildEntry(url, token string) map[string]any {

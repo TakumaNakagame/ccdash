@@ -18,6 +18,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/discovery"
 	"github.com/takumanakagame/ccmanage/internal/gitinfo"
+	"github.com/takumanakagame/ccmanage/internal/hookcfg"
 	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/procmap"
 	"github.com/takumanakagame/ccmanage/internal/redact"
@@ -123,11 +124,51 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		defer cancel()
 		_ = s.srv.Shutdown(shutCtx)
 	}()
+	s.syncInstalledHooks()
 	go s.discoveryLoop(ctx)
 	if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// syncInstalledHooks compares the X-Ccdash-Token currently baked into
+// ~/.claude/settings.json with the live one we loaded at startup. When they
+// disagree (rotation, fresh state dir, install-hooks never ran, etc.) we
+// rewrite the hook entries automatically so the operator doesn't have to
+// remember to re-run install-hooks.
+//
+// Skipped silently when no hook entries are present yet — a brand new
+// install where the user hasn't run install-hooks at all should stay
+// hands-off.
+func (s *Server) syncInstalledHooks() {
+	if s.token == "" {
+		return
+	}
+	in, err := hookcfg.DefaultInstall()
+	if err != nil {
+		log.Printf("hooks sync: %v", err)
+		return
+	}
+	have, err := hookcfg.InstalledTokenAt(in.Path)
+	if err != nil {
+		log.Printf("hooks sync read: %v", err)
+		return
+	}
+	if have == "" {
+		// Operator hasn't run install-hooks. Don't ambush them by writing
+		// to settings.json on first server start — they may be evaluating
+		// ccdash without wanting hooks installed yet.
+		return
+	}
+	if have == s.token {
+		return
+	}
+	if _, err := in.Apply(); err != nil {
+		log.Printf("hooks auto-resync: %v", err)
+		return
+	}
+	log.Printf("hooks: rewrote %s with current token", in.Path)
 }
 
 // discoveryLoop runs an initial transcript scan and then refreshes every 10s.
