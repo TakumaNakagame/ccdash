@@ -145,7 +145,10 @@ func (m *model) loadTailCmd() tea.Cmd {
 		if path == prevPath && !fi.ModTime().After(prevMtime) {
 			return tailMsg{path: path, mtime: fi.ModTime(), unchanged: true}
 		}
-		msgs, err := transcript.Load(path)
+		// Tail-read keeps session-switching fast even for transcripts in
+		// the tens of megabytes; we only need the recent end for the
+		// inline pane (the modal viewer pulls the full file).
+		msgs, err := transcript.LoadTail(path, 256*1024)
 		if err != nil {
 			return tailMsg{path: path, mtime: fi.ModTime(), err: err}
 		}

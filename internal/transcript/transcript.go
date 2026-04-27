@@ -60,6 +60,56 @@ func Load(path string) ([]Message, error) {
 	return out, nil
 }
 
+// LoadTail reads at most the trailing `budget` bytes from a transcript and
+// parses only the messages it can find there. This is the fast path for
+// live-tailing pane updates when the file is huge — we don't need a 30 MB
+// JSONL fully parsed just to show the last few exchanges. The first line
+// may be a fragment of a longer record split across the seek boundary; we
+// drop it so we never feed half-objects into the JSON parser.
+func LoadTail(path string, budget int64) ([]Message, error) {
+	if budget <= 0 {
+		budget = 256 * 1024
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	var startOffset int64
+	if fi.Size() > budget {
+		startOffset = fi.Size() - budget
+	}
+	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	var out []Message
+	skipFirst := startOffset > 0
+	for sc.Scan() {
+		if skipFirst {
+			// The first line may be the tail of a record that started
+			// before our seek point — drop it to avoid garbled JSON.
+			skipFirst = false
+			continue
+		}
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		out = append(out, parseLine(line)...)
+	}
+	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
+		return out, err
+	}
+	return out, nil
+}
+
 func parseLine(line []byte) []Message {
 	var head struct {
 		Type      string          `json:"type"`
