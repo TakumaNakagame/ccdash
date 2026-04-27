@@ -31,6 +31,9 @@ type Session struct {
 	CustomTitle    string        `json:"custom_title,omitempty"` // operator override; takes precedence
 	Archived       bool          `json:"archived,omitempty"`
 	Favorite       bool          `json:"favorite,omitempty"`
+	Summary        string        `json:"summary,omitempty"`
+	SummaryStatus  string        `json:"summary_status,omitempty"` // "", "running", "done", "error"
+	SummaryAt      time.Time     `json:"summary_at,omitempty"`
 	FirstSeen      time.Time     `json:"first_seen"`
 	LastSeen       time.Time     `json:"last_seen"`
 	Status         SessionStatus `json:"status"`

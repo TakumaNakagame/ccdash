@@ -102,6 +102,9 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN custom_title TEXT`,
 		`ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE sessions ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE sessions ADD COLUMN summary TEXT`,
+		`ALTER TABLE sessions ADD COLUMN summary_status TEXT`,
+		`ALTER TABLE sessions ADD COLUMN summary_at INTEGER`,
 		`ALTER TABLE approvals ADD COLUMN tool_use_id TEXT`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
@@ -265,6 +268,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.transcript_path,''), COALESCE(s.model,''),
 		       COALESCE(s.title,''), COALESCE(s.custom_title,''),
 		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
+		       COALESCE(s.summary,''), COALESCE(s.summary_status,''), COALESCE(s.summary_at,0),
 		       s.first_seen, s.last_seen, s.status,
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending
 		FROM sessions s
@@ -278,7 +282,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 	var out []model.Session
 	for rows.Next() {
 		var s model.Session
-		var first, last int64
+		var first, last, sumAt int64
 		var status string
 		var arch, fav int
 		if err := rows.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -287,6 +291,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.TranscriptPath, &s.Model,
 			&s.Title, &s.CustomTitle,
 			&arch, &fav,
+			&s.Summary, &s.SummaryStatus, &sumAt,
 			&first, &last, &status, &s.PendingCount); err != nil {
 			return nil, err
 		}
@@ -295,6 +300,9 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		s.Status = model.SessionStatus(status)
 		s.Archived = arch != 0
 		s.Favorite = fav != 0
+		if sumAt > 0 {
+			s.SummaryAt = time.Unix(sumAt, 0).UTC()
+		}
 		out = append(out, s)
 	}
 	return out, rows.Err()
@@ -324,6 +332,24 @@ func (d *DB) SetFavorite(ctx context.Context, sessionID string, favorite bool) e
 // transcript-derived one in the UI. Pass an empty string to clear.
 func (d *DB) SetCustomTitle(ctx context.Context, sessionID, title string) error {
 	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET custom_title = ? WHERE session_id = ?`, title, sessionID)
+	return err
+}
+
+// SetSummaryStatus marks a summary as in-progress / done / error without
+// touching the cached summary text. Used to surface "summarizing..." in
+// the list row while the background goroutine runs.
+func (d *DB) SetSummaryStatus(ctx context.Context, sessionID, status string) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET summary_status = ? WHERE session_id = ?`, status, sessionID)
+	return err
+}
+
+// SetSummary writes the summary text and updates status / timestamp in one
+// shot. Pass status "done" or "error" depending on the outcome.
+func (d *DB) SetSummary(ctx context.Context, sessionID, summary, status string) error {
+	_, err := d.sql.ExecContext(ctx, `
+		UPDATE sessions SET summary = ?, summary_status = ?, summary_at = ?
+		WHERE session_id = ?
+	`, summary, status, time.Now().UTC().Unix(), sessionID)
 	return err
 }
 

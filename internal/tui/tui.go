@@ -21,6 +21,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/db"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/takumanakagame/ccmanage/internal/summarize"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
@@ -236,6 +237,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.flash = msg.msg
 		}
+	case summaryDoneMsg:
+		if msg.err != nil {
+			_ = m.db.SetSummary(m.ctx, msg.sessionID, msg.err.Error(), "error")
+			m.flash = "summary failed: " + msg.err.Error()
+		} else {
+			_ = m.db.SetSummary(m.ctx, msg.sessionID, msg.summary, "done")
+			m.flash = "summary updated"
+		}
+		return m, m.refresh()
 	case transcriptLoadedMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -334,8 +344,41 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.toggleFavoriteCurrent()
 	case "t":
 		return m, m.startTitleEdit()
+	case "s":
+		return m, m.summarizeCurrent()
 	}
 	return m, nil
+}
+
+type summaryDoneMsg struct {
+	sessionID string
+	summary   string
+	err       error
+}
+
+// summarizeCurrent kicks off `claude -p` against the selected session's
+// transcript. The DB row is flipped to summary_status='running' immediately
+// so the list row shows the in-progress indicator on the next tick. The
+// summary text comes back via a summaryDoneMsg which writes to the DB.
+func (m *model) summarizeCurrent() tea.Cmd {
+	if len(m.sessions) == 0 {
+		return nil
+	}
+	s := m.sessions[m.selSess]
+	if s.TranscriptPath == "" {
+		m.flash = "no transcript path recorded for this session"
+		return nil
+	}
+	sid := s.SessionID
+	path := s.TranscriptPath
+	// Flip status synchronously so the next refresh shows "summarizing".
+	_ = m.db.SetSummaryStatus(m.ctx, sid, "running")
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 90*time.Second)
+		defer cancel()
+		summary, err := summarize.Run(ctx, path)
+		return summaryDoneMsg{sessionID: sid, summary: summary, err: err}
+	}
 }
 
 // handleKeyTitleEdit consumes keystrokes while the rename input is active.
@@ -736,7 +779,7 @@ func (m *model) renderFooter() string {
 		hint := subtitleStyle.Render("enter save · esc cancel")
 		return pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ select  enter attach  a/d allow/deny  f fav  t rename  x archive  X archived view  o transcript  q quit"
+	keys := "↑/↓ select  enter attach  a/d allow/deny  s summarize  f fav  t rename  x archive  X archived  o transcript  q quit"
 	if m.showArchived {
 		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  q quit"
 	}
@@ -891,6 +934,12 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if s.PendingCount > 0 {
 		parts = append(parts, pendingStyle.Render(fmt.Sprintf("⚠%d pending", s.PendingCount)))
 	}
+	switch s.SummaryStatus {
+	case "running":
+		parts = append(parts, pendingStyle.Render("⏳ summarizing"))
+	case "error":
+		parts = append(parts, statusStop.Render("✗ summary error"))
+	}
 	meta := strings.Join(parts, " · ")
 	metaBudget := width - runewidth.StringWidth(indent)
 	if metaBudget < 10 {
@@ -927,6 +976,12 @@ func (m *model) renderEventsList(width, height int) string {
 
 	header := subtitleStyle.Render(fmt.Sprintf("transcript  (%s)", shortID(m.currentSessionID())))
 
+	summarySection := m.renderSummarySection(width)
+	summaryH := 0
+	if summarySection != "" {
+		summaryH = strings.Count(summarySection, "\n") + 1
+	}
+
 	approvals := m.approvalsForSelected()
 	approvalSection := ""
 	approvalH := 0
@@ -941,6 +996,9 @@ func (m *model) renderEventsList(width, height int) string {
 	}
 
 	transcriptH := height - 1 // header
+	if summaryH > 0 {
+		transcriptH -= summaryH
+	}
 	if approvalH > 0 {
 		transcriptH -= approvalH
 	}
@@ -949,11 +1007,62 @@ func (m *model) renderEventsList(width, height int) string {
 	}
 
 	transcriptBody := m.renderTranscriptTail(width, transcriptH)
-	out := header + "\n" + transcriptBody
+	out := header
+	if summarySection != "" {
+		out += "\n" + summarySection
+	}
+	out += "\n" + transcriptBody
 	if approvalSection != "" {
 		out += "\n" + approvalSection
 	}
 	return lipgloss.NewStyle().Width(width).Height(height).Render(out)
+}
+
+// renderSummarySection draws the cached LLM summary at the top of the right
+// pane. We cap to ~6 lines so it doesn't crowd out the transcript; the full
+// text is reachable by re-running 's' which shows it in the flash, or by
+// reading the DB directly.
+func (m *model) renderSummarySection(width int) string {
+	if len(m.sessions) == 0 {
+		return ""
+	}
+	s := m.sessions[m.selSess]
+	switch s.SummaryStatus {
+	case "running":
+		title := pendingStyle.Render("⏳ summary in progress…")
+		return title
+	case "error":
+		title := statusStop.Render("✗ summary error")
+		body := subtitleStyle.Render("  " + shorten(s.Summary, width-3))
+		return title + "\n" + body
+	case "done":
+		// fall through to render
+	default:
+		return ""
+	}
+	if s.Summary == "" {
+		return ""
+	}
+	age := summarize.SummaryAge(s.SummaryAt)
+	header := titleStyle.Render("summary") + "  " + subtitleStyle.Render(age)
+	const maxLines = 6
+	bodyWidth := width - 2
+	if bodyWidth < 20 {
+		bodyWidth = 20
+	}
+	var bodyLines []string
+	for _, raw := range strings.Split(strings.TrimSpace(s.Summary), "\n") {
+		for _, chunk := range wrapToWidth(raw, bodyWidth) {
+			bodyLines = append(bodyLines, "  "+chunk)
+			if len(bodyLines) >= maxLines {
+				break
+			}
+		}
+		if len(bodyLines) >= maxLines {
+			break
+		}
+	}
+	return header + "\n" + strings.Join(bodyLines, "\n")
 }
 
 func (m *model) renderTranscriptTail(width, height int) string {
