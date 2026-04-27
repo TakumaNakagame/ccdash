@@ -1459,6 +1459,24 @@ func (m *model) handleKeySettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.err = err
 				}
 			}
+		case settings.KindEnum:
+			if len(cur.Options) > 0 {
+				curVal, _ := settings.Get(m.settings, cur.Key).(string)
+				idx := 0
+				for i, o := range cur.Options {
+					if o == curVal {
+						idx = i
+						break
+					}
+				}
+				next := cur.Options[(idx+1)%len(cur.Options)]
+				updated, err := settings.Set(m.ctx, m.db, m.settings, cur.Key, next)
+				if err == nil {
+					m.settings = updated
+				} else {
+					m.err = err
+				}
+			}
 		}
 	}
 	return m, nil
@@ -1490,6 +1508,17 @@ func (m *model) renderSettingsBody(height int) string {
 			}
 		case settings.KindAction:
 			valStr = pendingStyle.Render("[run]")
+		case settings.KindEnum:
+			cur, _ := settings.Get(m.settings, s.Key).(string)
+			parts := make([]string, 0, len(s.Options))
+			for _, o := range s.Options {
+				if o == cur {
+					parts = append(parts, statusActive.Render(o))
+				} else {
+					parts = append(parts, subtitleStyle.Render(o))
+				}
+			}
+			valStr = strings.Join(parts, " · ")
 		}
 		labelLine := fmt.Sprintf("%s%-32s  %s", marker, s.Label, valStr)
 		if i == m.settingsSel {
@@ -1531,18 +1560,20 @@ func (m *model) renderSessionsBody(height int) string {
 }
 
 // useVerticalLayout returns true when the body should stack vertically.
-// Auto mode (default) flips on narrow terminals so a 4K monitor split
-// vertically into a tall column gets the stacked layout without manual
-// flag-flipping. Operators who want explicit control can turn auto off
-// in the settings page and use the manual toggle.
+// "auto" flips on narrow terminals so a 4K monitor split vertically into
+// a tall column gets the stacked layout for free; "vertical" forces it
+// regardless; "horizontal" never stacks even on narrow displays.
 func (m *model) useVerticalLayout() bool {
-	if m.settings.LayoutAuto {
-		// Each pane wants ~50 cols to be useful (session list with title
-		// + meta line; transcript with role labels). Below ~100 cols the
+	switch m.settings.LayoutMode {
+	case "vertical":
+		return true
+	case "horizontal":
+		return false
+	default:
+		// Each pane wants ~50 cols to be useful; below ~100 the
 		// side-by-side split squeezes both panes uncomfortably.
 		return m.width < 100
 	}
-	return m.settings.LayoutVertical
 }
 
 // renderSessionsBodyVertical stacks the list above the transcript pane.

@@ -17,8 +17,11 @@ type Settings struct {
 	AutoRepoTabs   bool
 	BellOnPending  bool
 	NewestAtBottom bool // session list with newest sessions at the bottom
-	LayoutVertical bool // stack list above transcript instead of left/right
-	LayoutAuto     bool // when true, ignore LayoutVertical and pick from terminal width
+
+	// LayoutMode is one of "auto" / "vertical" / "horizontal". "auto" picks
+	// vertical on narrow terminals so 4K-half windows do the right thing
+	// without manual flag flipping.
+	LayoutMode string
 
 	// Risk-bearing capabilities. Each defaults to ON for parity with prior
 	// behavior; the operator can flip them off individually or via the
@@ -37,9 +40,12 @@ const (
 	keyAutoRepoTabs      = "auto_repo_tabs"
 	keyBellOnPending     = "bell_on_pending"
 	keyNewestAtBottom    = "newest_at_bottom"
-	keyLayoutVertical    = "layout_vertical"
-	keyLayoutAuto        = "layout_auto"
+	keyLayoutMode        = "layout_mode"
 	keyApproveEnabled    = "approve_enabled"
+
+	// Legacy keys retained only for one-shot migration on Load.
+	legacyKeyLayoutVertical = "layout_vertical"
+	legacyKeyLayoutAuto     = "layout_auto"
 	keySummaryEnabled    = "summary_enabled"
 	keyAttachEnabled     = "attach_enabled"
 	keyAutoInstallSync   = "auto_install_sync"
@@ -55,8 +61,7 @@ func Defaults() Settings {
 		AutoRepoTabs:      true,
 		BellOnPending:     true,
 		NewestAtBottom:    false,
-		LayoutVertical:    false,
-		LayoutAuto:        true,
+		LayoutMode:        "auto",
 		ApproveEnabled:    true,
 		SummaryEnabled:    true,
 		AttachEnabled:     true,
@@ -79,8 +84,12 @@ func Load(ctx context.Context, d *db.DB) (Settings, error) {
 		{keyAutoRepoTabs, func(v string) { out.AutoRepoTabs = parseBool(v, out.AutoRepoTabs) }},
 		{keyBellOnPending, func(v string) { out.BellOnPending = parseBool(v, out.BellOnPending) }},
 		{keyNewestAtBottom, func(v string) { out.NewestAtBottom = parseBool(v, out.NewestAtBottom) }},
-		{keyLayoutVertical, func(v string) { out.LayoutVertical = parseBool(v, out.LayoutVertical) }},
-		{keyLayoutAuto, func(v string) { out.LayoutAuto = parseBool(v, out.LayoutAuto) }},
+		{keyLayoutMode, func(v string) {
+			switch v {
+			case "auto", "vertical", "horizontal":
+				out.LayoutMode = v
+			}
+		}},
 		{keyApproveEnabled, func(v string) { out.ApproveEnabled = parseBool(v, out.ApproveEnabled) }},
 		{keySummaryEnabled, func(v string) { out.SummaryEnabled = parseBool(v, out.SummaryEnabled) }},
 		{keyAttachEnabled, func(v string) { out.AttachEnabled = parseBool(v, out.AttachEnabled) }},
@@ -96,6 +105,26 @@ func Load(ctx context.Context, d *db.DB) (Settings, error) {
 		}
 		if v != "" {
 			p.set(v)
+		}
+	}
+	// One-shot migration from the previous two-bool layout scheme. If the
+	// new key is missing but the legacy ones are present, fold them into a
+	// single mode so the operator doesn't lose their preference. We don't
+	// delete the old rows so a downgrade still finds them.
+	if cur, _ := d.GetSetting(ctx, keyLayoutMode); cur == "" {
+		auto, _ := d.GetSetting(ctx, legacyKeyLayoutAuto)
+		vert, _ := d.GetSetting(ctx, legacyKeyLayoutVertical)
+		if auto != "" || vert != "" {
+			mode := "auto"
+			if !parseBool(auto, true) {
+				if parseBool(vert, false) {
+					mode = "vertical"
+				} else {
+					mode = "horizontal"
+				}
+			}
+			out.LayoutMode = mode
+			_ = d.SetSetting(ctx, keyLayoutMode, mode)
 		}
 	}
 	return out, nil
@@ -131,6 +160,8 @@ type Spec struct {
 	Min, Max int
 	// Apply is called when KindAction rows are activated.
 	Apply ActionFunc
+	// Options enumerate the legal values for KindEnum, in cycle order.
+	Options []string
 }
 
 type Kind int
@@ -141,6 +172,8 @@ const (
 	// KindAction is a "button" row on the settings page. The Apply func
 	// runs when the operator activates it; the spec carries no value.
 	KindAction
+	// KindEnum cycles a string value through a fixed list of Options.
+	KindEnum
 )
 
 // Spec.Apply is non-nil only for KindAction rows.
@@ -153,8 +186,7 @@ func AllSpecs() []Spec {
 		{Key: keyAutoRepoTabs, Label: "Auto repo tabs", Help: "Include repo names in the Tab cycle alongside user-named tabs", Kind: KindBool},
 		{Key: keyBellOnPending, Label: "Bell on pending", Help: "Ring the terminal bell when the pending count goes from 0 to >0", Kind: KindBool},
 		{Key: keyNewestAtBottom, Label: "Newest at bottom", Help: "Show the newest session at the bottom of the list (matches the transcript tail orientation)", Kind: KindBool},
-		{Key: keyLayoutAuto, Label: "Auto layout", Help: "Pick horizontal vs vertical from the terminal width — flips to vertical on narrow / portrait windows. Overrides the manual Vertical layout toggle below.", Kind: KindBool},
-		{Key: keyLayoutVertical, Label: "Vertical layout (manual)", Help: "Force vertical layout even on wide terminals; only consulted when Auto layout is off", Kind: KindBool},
+		{Key: keyLayoutMode, Label: "Vertical layout", Help: "Auto = pick from terminal width (vertical when narrow). On = always vertical. Off = always horizontal (side-by-side).", Kind: KindEnum, Options: []string{"auto", "on", "off"}},
 		// Risk-bearing toggles
 		{Key: keyApproveEnabled, Label: "Approval blocking", Help: "When OFF, ccdash never holds PermissionRequest hooks — Claude prompts you in the terminal as it would without ccdash, and the a/A/d shortcuts are disabled", Kind: KindBool},
 		{Key: keySummaryEnabled, Label: "Summarize via claude -p", Help: "When OFF, the 's' key is disabled and ccdash never spawns claude -p (no transcript digests sent over the network)", Kind: KindBool},
@@ -193,10 +225,18 @@ func Get(s Settings, key string) any {
 		return s.BellOnPending
 	case keyNewestAtBottom:
 		return s.NewestAtBottom
-	case keyLayoutVertical:
-		return s.LayoutVertical
-	case keyLayoutAuto:
-		return s.LayoutAuto
+	case keyLayoutMode:
+		// Surface the field as the user-facing label ("on"/"off") even
+		// though we store "vertical"/"horizontal" internally. The Set
+		// path translates back.
+		switch s.LayoutMode {
+		case "vertical":
+			return "on"
+		case "horizontal":
+			return "off"
+		default:
+			return "auto"
+		}
 	case keyApproveEnabled:
 		return s.ApproveEnabled
 	case keySummaryEnabled:
@@ -225,10 +265,18 @@ func Set(ctx context.Context, d *db.DB, s Settings, key string, value any) (Sett
 		s.BellOnPending = value.(bool)
 	case keyNewestAtBottom:
 		s.NewestAtBottom = value.(bool)
-	case keyLayoutVertical:
-		s.LayoutVertical = value.(bool)
-	case keyLayoutAuto:
-		s.LayoutAuto = value.(bool)
+	case keyLayoutMode:
+		mode := value.(string)
+		// Translate the user-facing labels to the canonical storage form.
+		switch mode {
+		case "on":
+			mode = "vertical"
+		case "off":
+			mode = "horizontal"
+		default:
+			mode = "auto"
+		}
+		s.LayoutMode = mode
 	case keyApproveEnabled:
 		s.ApproveEnabled = value.(bool)
 	case keySummaryEnabled:
@@ -253,6 +301,23 @@ func persist(ctx context.Context, d *db.DB, key string, value any) error {
 		return d.SetSetting(ctx, key, formatBool(v))
 	case int:
 		return d.SetSetting(ctx, key, strconv.Itoa(v))
+	case string:
+		// For KindEnum we may have done a label→canonical translation
+		// inside Set(); re-translate here too so what hits disk matches
+		// what we'd parse back in Load.
+		if key == keyLayoutMode {
+			switch v {
+			case "on":
+				v = "vertical"
+			case "off":
+				v = "horizontal"
+			default:
+				if v != "vertical" && v != "horizontal" {
+					v = "auto"
+				}
+			}
+		}
+		return d.SetSetting(ctx, key, v)
 	}
 	return nil
 }
