@@ -1494,11 +1494,25 @@ func (m *model) renderSettingsBody(height int) string {
 		valStr := ""
 		switch s.Kind {
 		case settings.KindBool:
-			if settings.Get(m.settings, s.Key).(bool) {
-				valStr = statusActive.Render("ON")
-			} else {
-				valStr = statusStop.Render("OFF")
+			// Render as "on · off" with the active option highlighted, so
+			// every toggleable row reads the same way as the layout enum
+			// below — operators don't have to context-switch between
+			// "ON/OFF" labels and inline option lists.
+			cur := settings.Get(m.settings, s.Key).(bool)
+			activeIdx := 1
+			if cur {
+				activeIdx = 0
 			}
+			parts := []string{"on", "off"}
+			rendered := make([]string, len(parts))
+			for j, p := range parts {
+				if j == activeIdx {
+					rendered[j] = statusActive.Render(p)
+				} else {
+					rendered[j] = subtitleStyle.Render(p)
+				}
+			}
+			valStr = strings.Join(rendered, " · ")
 		case settings.KindInt:
 			cur := settings.Get(m.settings, s.Key).(int)
 			if m.settingsEdit && i == m.settingsSel {
