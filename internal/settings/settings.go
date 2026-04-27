@@ -22,6 +22,10 @@ type Settings struct {
 	// vertical on narrow terminals so 4K-half windows do the right thing
 	// without manual flag flipping.
 	LayoutMode string
+	// VerticalAutoCols is the terminal-width threshold (in columns) that
+	// auto-mode uses to pick vertical. Below this width, layout flips
+	// vertical; at or above, horizontal stays.
+	VerticalAutoCols int
 
 	// Risk-bearing capabilities. Each defaults to ON for parity with prior
 	// behavior; the operator can flip them off individually or via the
@@ -41,6 +45,7 @@ const (
 	keyBellOnPending     = "bell_on_pending"
 	keyNewestAtBottom    = "newest_at_bottom"
 	keyLayoutMode        = "layout_mode"
+	keyVerticalAutoCols  = "vertical_auto_cols"
 	keyApproveEnabled    = "approve_enabled"
 
 	// Legacy keys retained only for one-shot migration on Load.
@@ -62,6 +67,7 @@ func Defaults() Settings {
 		BellOnPending:     true,
 		NewestAtBottom:    false,
 		LayoutMode:        "auto",
+		VerticalAutoCols:  100,
 		ApproveEnabled:    true,
 		SummaryEnabled:    true,
 		AttachEnabled:     true,
@@ -90,6 +96,7 @@ func Load(ctx context.Context, d *db.DB) (Settings, error) {
 				out.LayoutMode = v
 			}
 		}},
+		{keyVerticalAutoCols, func(v string) { out.VerticalAutoCols = parseInt(v, out.VerticalAutoCols) }},
 		{keyApproveEnabled, func(v string) { out.ApproveEnabled = parseBool(v, out.ApproveEnabled) }},
 		{keySummaryEnabled, func(v string) { out.SummaryEnabled = parseBool(v, out.SummaryEnabled) }},
 		{keyAttachEnabled, func(v string) { out.AttachEnabled = parseBool(v, out.AttachEnabled) }},
@@ -187,6 +194,7 @@ func AllSpecs() []Spec {
 		{Key: keyBellOnPending, Label: "Bell on pending", Help: "Ring the terminal bell when the pending count goes from 0 to >0", Kind: KindBool},
 		{Key: keyNewestAtBottom, Label: "Newest at bottom", Help: "Show the newest session at the bottom of the list (matches the transcript tail orientation)", Kind: KindBool},
 		{Key: keyLayoutMode, Label: "Vertical layout", Help: "Auto = pick from terminal width (vertical when narrow). On = always vertical. Off = always horizontal (side-by-side).", Kind: KindEnum, Options: []string{"auto", "on", "off"}},
+		{Key: keyVerticalAutoCols, Label: "Vertical auto threshold (cols)", Help: "Width in columns below which auto-layout flips to vertical. Lower = stay horizontal longer; higher = go vertical sooner.", Kind: KindInt, Min: 40, Max: 240},
 		// Risk-bearing toggles
 		{Key: keyApproveEnabled, Label: "Approval blocking", Help: "When OFF, ccdash never holds PermissionRequest hooks — Claude prompts you in the terminal as it would without ccdash, and the a/A/d shortcuts are disabled", Kind: KindBool},
 		{Key: keySummaryEnabled, Label: "Summarize via claude -p", Help: "When OFF, the 's' key is disabled and ccdash never spawns claude -p (no transcript digests sent over the network)", Kind: KindBool},
@@ -237,6 +245,8 @@ func Get(s Settings, key string) any {
 		default:
 			return "auto"
 		}
+	case keyVerticalAutoCols:
+		return s.VerticalAutoCols
 	case keyApproveEnabled:
 		return s.ApproveEnabled
 	case keySummaryEnabled:
@@ -277,6 +287,8 @@ func Set(ctx context.Context, d *db.DB, s Settings, key string, value any) (Sett
 			mode = "auto"
 		}
 		s.LayoutMode = mode
+	case keyVerticalAutoCols:
+		s.VerticalAutoCols = value.(int)
 	case keyApproveEnabled:
 		s.ApproveEnabled = value.(bool)
 	case keySummaryEnabled:

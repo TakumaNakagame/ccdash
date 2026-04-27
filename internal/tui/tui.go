@@ -1584,9 +1584,11 @@ func (m *model) useVerticalLayout() bool {
 	case "horizontal":
 		return false
 	default:
-		// Each pane wants ~50 cols to be useful; below ~100 the
-		// side-by-side split squeezes both panes uncomfortably.
-		return m.width < 100
+		threshold := m.settings.VerticalAutoCols
+		if threshold <= 0 {
+			threshold = 100
+		}
+		return m.width < threshold
 	}
 }
 
