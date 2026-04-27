@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/takumanakagame/ccmanage/internal/auth"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/discovery"
 	"github.com/takumanakagame/ccmanage/internal/gitinfo"
@@ -23,10 +24,11 @@ import (
 )
 
 type Server struct {
-	db   *db.DB
-	mux  *http.ServeMux
-	addr string
-	srv  *http.Server
+	db    *db.DB
+	mux   *http.ServeMux
+	addr  string
+	srv   *http.Server
+	token string // shared secret; required on every hook + decision request
 
 	// pending tracks PermissionRequest hooks that are still blocking
 	// inside the handler waiting for an operator decision. The TUI POSTs
@@ -42,10 +44,18 @@ type approvalDecision struct {
 }
 
 func New(d *db.DB, addr string) *Server {
+	tok, err := auth.LoadOrCreate()
+	if err != nil {
+		// Fall back to an empty token, which causes all auth-checked routes
+		// to refuse traffic with 503. The operator's logs will show the
+		// underlying error from auth.LoadOrCreate.
+		log.Printf("auth token: %v", err)
+	}
 	s := &Server{
 		db:      d,
 		addr:    addr,
 		mux:     http.NewServeMux(),
+		token:   tok,
 		pending: map[int64]chan approvalDecision{},
 	}
 	s.routes()
@@ -53,20 +63,42 @@ func New(d *db.DB, addr string) *Server {
 }
 
 func (s *Server) routes() {
+	// /healthz stays unauthenticated so the TUI can detect a running
+	// server before deciding whether to spawn an embedded one. It returns
+	// only "ok"; no sensitive info leaks.
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	s.mux.HandleFunc("/hooks/session-start", s.handleSessionStart)
-	s.mux.HandleFunc("/hooks/session-end", s.handleSessionEnd)
-	s.mux.HandleFunc("/hooks/user-prompt", s.handleUserPrompt)
-	s.mux.HandleFunc("/hooks/pre-tool", s.handlePreTool)
-	s.mux.HandleFunc("/hooks/post-tool", s.handlePostTool)
-	s.mux.HandleFunc("/hooks/post-tool-failure", s.handlePostToolFailure)
-	s.mux.HandleFunc("/hooks/permission-request", s.handlePermissionRequest)
-	s.mux.HandleFunc("/hooks/stop", s.handleStop)
-	s.mux.HandleFunc("/hooks/subagent-stop", s.handleSubagentStop)
-	s.mux.HandleFunc("/hooks/notification", s.handleNotification)
-	s.mux.HandleFunc("/approvals/", s.handleApprovalDecide)
+	s.mux.HandleFunc("/hooks/session-start", s.requireToken(s.handleSessionStart))
+	s.mux.HandleFunc("/hooks/session-end", s.requireToken(s.handleSessionEnd))
+	s.mux.HandleFunc("/hooks/user-prompt", s.requireToken(s.handleUserPrompt))
+	s.mux.HandleFunc("/hooks/pre-tool", s.requireToken(s.handlePreTool))
+	s.mux.HandleFunc("/hooks/post-tool", s.requireToken(s.handlePostTool))
+	s.mux.HandleFunc("/hooks/post-tool-failure", s.requireToken(s.handlePostToolFailure))
+	s.mux.HandleFunc("/hooks/permission-request", s.requireToken(s.handlePermissionRequest))
+	s.mux.HandleFunc("/hooks/stop", s.requireToken(s.handleStop))
+	s.mux.HandleFunc("/hooks/subagent-stop", s.requireToken(s.handleSubagentStop))
+	s.mux.HandleFunc("/hooks/notification", s.requireToken(s.handleNotification))
+	s.mux.HandleFunc("/approvals/", s.requireToken(s.handleApprovalDecide))
+}
+
+// requireToken wraps a handler so requests without a matching X-Ccdash-Token
+// header are refused before reaching any side-effecting code. If the server
+// failed to load a token at startup we refuse everything with 503 — better
+// to be inert than silently unauthenticated.
+func (s *Server) requireToken(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.token == "" {
+			http.Error(w, "ccdash: no auth token configured", http.StatusServiceUnavailable)
+			return
+		}
+		got := r.Header.Get(auth.HeaderName)
+		if got == "" || got != s.token {
+			http.Error(w, "ccdash: bad or missing token", http.StatusUnauthorized)
+			return
+		}
+		h(w, r)
+	}
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {

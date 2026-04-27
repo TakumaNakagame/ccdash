@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/takumanakagame/ccmanage/internal/auth"
 	"github.com/takumanakagame/ccmanage/internal/paths"
 )
 
@@ -37,9 +38,10 @@ var allowedEnvVars = []string{
 	"CCDASH_TMUX_SESSION",
 }
 
-func defaultHeaders() map[string]string {
+func defaultHeaders(token string) map[string]string {
 	return map[string]string{
 		MarkerKey:              "true",
+		auth.HeaderName:        token,
 		"X-Ccdash-Wrapper-Pid": "${CCDASH_WRAPPER_PID}",
 		"X-Ccdash-Git-Repo":    "${CCDASH_GIT_REPO}",
 		"X-Ccdash-Git-Branch":  "${CCDASH_GIT_BRANCH}",
@@ -67,6 +69,10 @@ func DefaultInstall() (*Install, error) {
 }
 
 func (in *Install) Apply() (changed bool, err error) {
+	tok, err := auth.LoadOrCreate()
+	if err != nil {
+		return false, fmt.Errorf("load auth token: %w", err)
+	}
 	settings, err := readSettings(in.Path)
 	if err != nil {
 		return false, err
@@ -78,7 +84,7 @@ func (in *Install) Apply() (changed bool, err error) {
 	}
 
 	for event, path := range Endpoints {
-		entry := buildEntry(in.BaseURL + path)
+		entry := buildEntry(in.BaseURL+path, tok)
 		hooks[event] = mergeEvent(hooks[event], entry)
 	}
 	settings["hooks"] = hooks
@@ -113,7 +119,7 @@ func (in *Install) Remove() error {
 	return writeSettings(in.Path, settings)
 }
 
-func buildEntry(url string) map[string]any {
+func buildEntry(url, token string) map[string]any {
 	return map[string]any{
 		"hooks": []any{
 			map[string]any{
@@ -121,7 +127,7 @@ func buildEntry(url string) map[string]any {
 				"url":            url,
 				"timeout":        30,
 				"allowedEnvVars": toAnySlice(allowedEnvVars),
-				"headers":        toAnyMap(defaultHeaders()),
+				"headers":        toAnyMap(defaultHeaders(token)),
 			},
 		},
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/takumanakagame/ccmanage/internal/auth"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
@@ -503,6 +504,9 @@ func (m *model) decideApproval(behavior string) tea.Cmd {
 		url := fmt.Sprintf("http://%s:%d/approvals/%d/decide", paths.DefaultHost, paths.DefaultPort, id)
 		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		if tok, err := auth.Load(); err == nil {
+			req.Header.Set(auth.HeaderName, tok)
+		}
 		client := &http.Client{Timeout: 2 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
