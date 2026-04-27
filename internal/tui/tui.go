@@ -79,9 +79,11 @@ type model struct {
 	showArchived  bool
 	editingTitle  bool
 	editingTab    bool
+	editingSearch bool
 	titleBuffer   string
 	tabCandIdx    int    // index into filteredTabCandidates(); -1 == "no pick yet"
 	projectFilter string // "" = All; otherwise repo / cwd basename
+	searchQuery   string // "" = no filter; case-insensitive substring search
 
 	settings settings.Settings
 
@@ -347,6 +349,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.pane == paneSettings {
 		return m.handleKeySettings(msg)
 	}
+	if m.editingSearch {
+		return m.handleKeySearchEdit(msg)
+	}
 	if m.editingTitle || m.editingTab {
 		return m.handleKeyTitleEdit(msg)
 	}
@@ -449,24 +454,89 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.settingsSel = 0
 		m.settingsEdit = false
 		return m, nil
+	case "/":
+		m.editingSearch = true
+		m.titleBuffer = m.searchQuery
+		return m, nil
+	case "esc":
+		if m.searchQuery != "" {
+			m.searchQuery = ""
+			m.applyProjectFilter()
+			m.selSess = 0
+			m.flash = "search cleared"
+		}
+		return m, nil
 	}
 	return m, nil
 }
 
 // applyProjectFilter recomputes m.sessions from m.allSessions using the
-// current projectFilter ("" means show everything).
+// current projectFilter and searchQuery. The two filters compose by
+// intersection.
 func (m *model) applyProjectFilter() {
-	if m.projectFilter == "" {
-		m.sessions = m.allSessions
-		return
+	src := m.allSessions
+	if m.projectFilter != "" {
+		out := make([]mdl.Session, 0, len(src))
+		for _, s := range src {
+			if projectOf(s) == m.projectFilter {
+				out = append(out, s)
+			}
+		}
+		src = out
 	}
-	out := make([]mdl.Session, 0, len(m.allSessions))
-	for _, s := range m.allSessions {
-		if projectOf(s) == m.projectFilter {
-			out = append(out, s)
+	if m.searchQuery != "" {
+		q := strings.ToLower(m.searchQuery)
+		out := make([]mdl.Session, 0, len(src))
+		for _, s := range src {
+			if sessionMatchesQuery(s, q) {
+				out = append(out, s)
+			}
+		}
+		src = out
+	}
+	m.sessions = src
+}
+
+// sessionMatchesQuery returns true when q (lower-cased) appears in any of
+// the human-readable fields of s. We don't search payloads or transcripts
+// to keep the per-keystroke cost predictable.
+func sessionMatchesQuery(s mdl.Session, q string) bool {
+	for _, f := range []string{
+		s.DisplayTitle(), s.UserTab, s.Repo, s.Cwd, s.Branch,
+		s.Summary, s.SessionID,
+	} {
+		if strings.Contains(strings.ToLower(f), q) {
+			return true
 		}
 	}
-	m.sessions = out
+	return false
+}
+
+// handleKeySearchEdit processes keys while the / search input is active.
+func (m *model) handleKeySearchEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		m.searchQuery = strings.TrimSpace(m.titleBuffer)
+		m.editingSearch = false
+		m.titleBuffer = ""
+		m.applyProjectFilter()
+		m.selSess = 0
+		m.sessScroll = 0
+		return m, m.loadTailCmd()
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.editingSearch = false
+		m.titleBuffer = ""
+		return m, nil
+	case tea.KeyBackspace:
+		if r := []rune(m.titleBuffer); len(r) > 0 {
+			m.titleBuffer = string(r[:len(r)-1])
+		}
+	case tea.KeySpace:
+		m.titleBuffer += " "
+	case tea.KeyRunes:
+		m.titleBuffer += string(msg.Runes)
+	}
+	return m, nil
 }
 
 // projectOf names the group a session belongs to. Operator-set user_tab
@@ -1087,7 +1157,10 @@ func (m *model) renderHeader() string {
 	if m.projectFilter != "" {
 		leftLabel += " " + subtitleStyle.Render("· "+m.projectFilter)
 	}
-	if m.showArchived || m.projectFilter != "" {
+	if m.searchQuery != "" {
+		leftLabel += " " + pendingStyle.Render("🔍 "+shorten(m.searchQuery, 30))
+	}
+	if m.showArchived || m.projectFilter != "" || m.searchQuery != "" {
 		left = leftLabel
 		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap < 1 {
@@ -1111,6 +1184,11 @@ func (m *model) renderHeader() string {
 }
 
 func (m *model) renderFooter() string {
+	if m.editingSearch {
+		prompt := "/" + m.titleBuffer + "▏"
+		hint := subtitleStyle.Render("enter apply · esc cancel · empty=clear")
+		return pendingStyle.Render(prompt) + "  " + hint
+	}
 	if m.editingTitle {
 		prompt := "rename: " + m.titleBuffer + "▏"
 		hint := subtitleStyle.Render("enter save · esc cancel")
@@ -1134,7 +1212,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  tab tabs  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/tab  x/X arch  o trans  , settings  q quit"
+	keys := "↑/↓ sel  tab tabs  / search  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/tab  x/X arch  o trans  , settings  q quit"
 	if m.pane == paneSettings {
 		keys = "↑/↓ select · space toggle · enter edit · esc back"
 	}
