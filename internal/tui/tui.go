@@ -45,7 +45,8 @@ type model struct {
 	db         *db.DB
 	width      int
 	height     int
-	sessions   []mdl.Session
+	allSessions []mdl.Session // unfiltered, latest from DB
+	sessions    []mdl.Session // post-project-filter — what the list actually renders
 	events     []mdl.Event
 	approvals  []mdl.Approval
 	selSess    int
@@ -70,9 +71,10 @@ type model struct {
 	tailScroll int
 
 	// list mode + inline editor state
-	showArchived bool
-	editingTitle bool
-	titleBuffer  string
+	showArchived  bool
+	editingTitle  bool
+	titleBuffer   string
+	projectFilter string // "" = All; otherwise repo / cwd basename
 
 	// transcript view state
 	transcriptMessages []transcript.Message
@@ -182,7 +184,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.refresh(), tickCmd())
 	case sessionsMsg:
 		prev := m.currentSessionID()
-		m.sessions = []mdl.Session(msg)
+		m.allSessions = []mdl.Session(msg)
+		m.applyProjectFilter()
 		// preserve selection by id when possible
 		if prev != "" {
 			for i, s := range m.sessions {
@@ -368,6 +371,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selSess = 0
 		m.tailScroll = 0
 		return m, m.refresh()
+	case "tab":
+		return m, m.cycleProject(1)
+	case "shift+tab":
+		return m, m.cycleProject(-1)
 	case "f":
 		return m, m.toggleFavoriteCurrent()
 	case "t":
@@ -376,6 +383,84 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.summarizeCurrent()
 	}
 	return m, nil
+}
+
+// applyProjectFilter recomputes m.sessions from m.allSessions using the
+// current projectFilter ("" means show everything).
+func (m *model) applyProjectFilter() {
+	if m.projectFilter == "" {
+		m.sessions = m.allSessions
+		return
+	}
+	out := make([]mdl.Session, 0, len(m.allSessions))
+	for _, s := range m.allSessions {
+		if projectOf(s) == m.projectFilter {
+			out = append(out, s)
+		}
+	}
+	m.sessions = out
+}
+
+// projectOf names the project a session belongs to, prefering the repo
+// basename ccdash already populated and falling back to the cwd basename.
+func projectOf(s mdl.Session) string {
+	if s.Repo != "" {
+		return s.Repo
+	}
+	if s.Cwd != "" {
+		return filepath.Base(s.Cwd)
+	}
+	return ""
+}
+
+// uniqueProjects returns the project labels present in the unfiltered set,
+// with "" (= All) at the front.
+func (m *model) uniqueProjects() []string {
+	seen := map[string]struct{}{}
+	for _, s := range m.allSessions {
+		p := projectOf(s)
+		if p != "" {
+			seen[p] = struct{}{}
+		}
+	}
+	out := []string{""}
+	for k := range seen {
+		out = append(out, k)
+	}
+	// Skip the "" sentinel when sorting.
+	tail := out[1:]
+	for i := 0; i < len(tail); i++ {
+		for j := i + 1; j < len(tail); j++ {
+			if tail[j] < tail[i] {
+				tail[i], tail[j] = tail[j], tail[i]
+			}
+		}
+	}
+	return out
+}
+
+func (m *model) cycleProject(delta int) tea.Cmd {
+	projects := m.uniqueProjects()
+	if len(projects) <= 1 {
+		m.flash = "no other projects to filter to"
+		return nil
+	}
+	idx := 0
+	for i, p := range projects {
+		if p == m.projectFilter {
+			idx = i
+			break
+		}
+	}
+	idx = (idx + delta + len(projects)) % len(projects)
+	m.projectFilter = projects[idx]
+	m.applyProjectFilter()
+	m.selSess = 0
+	m.sessScroll = 0
+	m.tailScroll = 0
+	m.tailPath = ""
+	m.tailMtime = time.Time{}
+	return m.loadTailCmd()
 }
 
 // tailHalfPage approximates half the right pane's visible height. We don't
@@ -799,9 +884,15 @@ func (m *model) renderHeader() string {
 	if gap < 1 {
 		gap = 1
 	}
+	leftLabel := titleStyle.Render("ccdash")
 	if m.showArchived {
-		// Make the title bar tell the operator they're in the archive view.
-		left = titleStyle.Render("ccdash") + " " + subtitleStyle.Render("[archive]")
+		leftLabel += " " + subtitleStyle.Render("[archive]")
+	}
+	if m.projectFilter != "" {
+		leftLabel += " " + subtitleStyle.Render("· "+m.projectFilter)
+	}
+	if m.showArchived || m.projectFilter != "" {
+		left = leftLabel
 		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap < 1 {
 			gap = 1
@@ -829,7 +920,7 @@ func (m *model) renderFooter() string {
 		hint := subtitleStyle.Render("enter save · esc cancel")
 		return pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  J/K right-line  pgup/pgdn right-page  enter attach  a/A/d allow/keep/deny  s summary  f fav  t rename  x archive  X archived  o transcript  q quit"
+	keys := "↑/↓ sel  tab project  J/K right-line  pgup/pgdn right-page  enter attach  a/A/d allow/keep/deny  s sum  f fav  t rename  x arch  X arch-view  o trans  q quit"
 	if m.showArchived {
 		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  q quit"
 	}
