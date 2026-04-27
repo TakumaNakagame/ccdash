@@ -87,6 +87,11 @@ type model struct {
 
 	settings settings.Settings
 
+	// awaitTabArchiveConfirm is true after the operator pressed ctrl+x
+	// to bulk-archive the current tab; the next keystroke is treated as
+	// the y/n confirmation rather than a normal shortcut.
+	awaitTabArchiveConfirm bool
+
 	// settings page state
 	settingsSel    int
 	settingsEdit   bool   // editing an int value inline
@@ -361,6 +366,16 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.editingTitle || m.editingTab {
 		return m.handleKeyTitleEdit(msg)
 	}
+	if m.awaitTabArchiveConfirm {
+		m.awaitTabArchiveConfirm = false
+		switch msg.String() {
+		case "y", "Y":
+			return m, m.archiveCurrentTab()
+		default:
+			m.flash = "tab archive cancelled"
+			return m, nil
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
@@ -424,6 +439,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.decideApproval("deny", false)
 	case "x":
 		return m, m.toggleArchiveCurrent()
+	case "ctrl+x":
+		return m, m.promptArchiveCurrentTab()
 	case "X":
 		m.showArchived = !m.showArchived
 		m.selSess = 0
@@ -797,6 +814,54 @@ func (m *model) pickTabCandidate(delta int) {
 		m.tabCandIdx = (m.tabCandIdx + delta + len(cands)) % len(cands)
 	}
 	m.titleBuffer = cands[m.tabCandIdx]
+}
+
+// promptArchiveCurrentTab prepares a bulk archive (or unarchive, when in
+// the archive view) of every session that matches the current filter. We
+// require an explicit tab — running it on the All bucket would torch the
+// entire dashboard at once. The next keystroke confirms or cancels via
+// the awaitTabArchiveConfirm gate.
+func (m *model) promptArchiveCurrentTab() tea.Cmd {
+	if m.projectFilter == "" {
+		m.flash = "switch to a specific tab first (Tab cycles)"
+		return nil
+	}
+	if len(m.sessions) == 0 {
+		m.flash = "tab is empty"
+		return nil
+	}
+	verb := "archive"
+	if m.showArchived {
+		verb = "unarchive"
+	}
+	m.awaitTabArchiveConfirm = true
+	m.flash = fmt.Sprintf("%s all %d sessions in '%s'? press 'y' to confirm", verb, len(m.sessions), m.projectFilter)
+	return nil
+}
+
+// archiveCurrentTab applies SetArchived to every session in m.sessions.
+// In the archive view we reverse the action so this same shortcut also
+// pulls a tab back out of archive in one keystroke.
+func (m *model) archiveCurrentTab() tea.Cmd {
+	tab := m.projectFilter
+	want := !m.showArchived
+	sids := make([]string, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sids = append(sids, s.SessionID)
+	}
+	verb := "archived"
+	if !want {
+		verb = "unarchived"
+	}
+	return tea.Batch(
+		func() tea.Msg {
+			for _, sid := range sids {
+				_ = m.db.SetArchived(m.ctx, sid, want)
+			}
+			return attachDoneMsg{msg: fmt.Sprintf("%s %d sessions in '%s'", verb, len(sids), tab)}
+		},
+		m.refresh(),
+	)
 }
 
 func (m *model) toggleArchiveCurrent() tea.Cmd {
@@ -1287,7 +1352,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  tab tabs  / search  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/tab  x/X arch  o trans  , settings  q quit"
+	keys := "↑/↓ sel  tab tabs  / search  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/tab  x/X arch  ctrl+x arch-tab  o trans  , settings  q quit"
 	if m.pane == paneSettings {
 		keys = "↑/↓ select · space toggle · enter edit · esc back"
 	}
