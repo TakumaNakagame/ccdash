@@ -41,6 +41,12 @@ type Server struct {
 type approvalDecision struct {
 	Behavior string // "allow" or "deny"
 	Reason   string
+	// Keep, when true on an "allow" decision, asks Claude to remember the
+	// permission for the rest of the session via hookSpecificOutput
+	// updatedPermissions. We synthesize a rule from the tool name (and the
+	// first token of a Bash command) so the next equivalent call doesn't
+	// prompt again.
+	Keep bool
 }
 
 func New(d *db.DB, addr string) *Server {
@@ -480,13 +486,20 @@ func (s *Server) handlePermissionRequest(w http.ResponseWriter, r *http.Request)
 			status = model.ApprovalDenied
 		}
 		_ = s.db.UpdateApprovalStatus(r.Context(), id, status, d.Reason)
+		decision := map[string]any{
+			"behavior": d.Behavior,
+			"message":  d.Reason,
+		}
+		if d.Keep && d.Behavior == "allow" {
+			decision["updatedPermissions"] = []map[string]any{{
+				"rule":  ruleFor(p.ToolName, p.ToolInput),
+				"scope": "session",
+			}}
+		}
 		writeOK(w, map[string]any{
 			"hookSpecificOutput": map[string]any{
 				"hookEventName": "PermissionRequest",
-				"decision": map[string]any{
-					"behavior": d.Behavior,
-					"message":  d.Reason,
-				},
+				"decision":      decision,
 			},
 		})
 	case <-time.After(decideWindow):
@@ -521,6 +534,7 @@ func (s *Server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Behavior string `json:"behavior"`
 		Reason   string `json:"reason"`
+		Keep     bool   `json:"keep"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&body); err != nil {
 		http.Error(w, "bad body: "+err.Error(), http.StatusBadRequest)
@@ -538,12 +552,37 @@ func (s *Server) handleApprovalDecide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	select {
-	case ch <- approvalDecision{Behavior: body.Behavior, Reason: body.Reason}:
+	case ch <- approvalDecision{Behavior: body.Behavior, Reason: body.Reason, Keep: body.Keep}:
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	default:
 		http.Error(w, "decision already accepted", http.StatusConflict)
 	}
+}
+
+// ruleFor builds a Claude permission rule for the given tool / input. For
+// Bash we glob on the first whitespace-separated token of the command so
+// subsequent variants of the same command (`git status` → `git diff` →
+// `git log`) don't re-prompt; for everything else we allow the whole tool
+// kind, which is what matches Claude's own "always allow this tool"
+// shortcut.
+func ruleFor(tool string, input json.RawMessage) string {
+	if tool == "Bash" && len(input) > 0 {
+		var m struct {
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal(input, &m); err == nil {
+			cmd := strings.TrimSpace(m.Command)
+			if cmd != "" {
+				if i := strings.IndexAny(cmd, " \t"); i > 0 {
+					return fmt.Sprintf("Bash(%s *)", cmd[:i])
+				}
+				return fmt.Sprintf("Bash(%s)", cmd)
+			}
+		}
+		return "Bash"
+	}
+	return tool
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {

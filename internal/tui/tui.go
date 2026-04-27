@@ -334,9 +334,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "o":
 		return m, m.openTranscript()
 	case "a":
-		return m, m.decideApproval("allow")
+		return m, m.decideApproval("allow", false)
+	case "A":
+		return m, m.decideApproval("allow", true)
 	case "d":
-		return m, m.decideApproval("deny")
+		return m, m.decideApproval("deny", false)
 	case "x":
 		return m, m.toggleArchiveCurrent()
 	case "X":
@@ -490,10 +492,10 @@ func (m *model) commitTitleEdit() tea.Cmd {
 }
 
 // decideApproval sends the operator's allow/deny choice to the embedded
-// server, which routes it to the blocking PermissionRequest goroutine. We
-// always target the oldest pending approval for the selected session — that
-// matches what's visually surfaced first in the right-pane panel.
-func (m *model) decideApproval(behavior string) tea.Cmd {
+// server. With keep=true on an allow decision, the server adds an
+// updatedPermissions block so Claude remembers the rule for the rest of
+// the session — the next equivalent call won't pop a permission prompt.
+func (m *model) decideApproval(behavior string, keep bool) tea.Cmd {
 	pending := m.approvalsForSelected()
 	if len(pending) == 0 {
 		m.flash = "no pending approvals to " + behavior
@@ -503,7 +505,7 @@ func (m *model) decideApproval(behavior string) tea.Cmd {
 	id := a.ID
 	tool := a.Tool
 	return func() tea.Msg {
-		body, _ := json.Marshal(map[string]string{"behavior": behavior})
+		body, _ := json.Marshal(map[string]any{"behavior": behavior, "keep": keep})
 		url := fmt.Sprintf("http://%s:%d/approvals/%d/decide", paths.DefaultHost, paths.DefaultPort, id)
 		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -523,6 +525,8 @@ func (m *model) decideApproval(behavior string) tea.Cmd {
 		verb := "allowed"
 		if behavior == "deny" {
 			verb = "denied"
+		} else if keep {
+			verb = "allowed (kept for session)"
 		}
 		return attachDoneMsg{msg: fmt.Sprintf("%s %s approval (#%d)", verb, tool, id)}
 	}
@@ -790,7 +794,7 @@ func (m *model) renderFooter() string {
 		hint := subtitleStyle.Render("enter save · esc cancel")
 		return pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ select  enter attach  a/d allow/deny  s summarize  f fav  t rename  x archive  X archived  o transcript  q quit"
+	keys := "↑/↓ sel  enter attach  a allow  A keep-allow  d deny  s summary  f fav  t rename  x archive  X archived  o transcript  q quit"
 	if m.showArchived {
 		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  q quit"
 	}
@@ -1224,7 +1228,7 @@ func (m *model) renderApprovalSection(approvals []mdl.Approval, width int) strin
 		charW = 1
 	}
 	rule := pendingStyle.Render(strings.Repeat("─", width/charW))
-	title := pendingStyle.Render(fmt.Sprintf("⚠ %d pending — press 'a' to allow / 'd' to deny (oldest first)", len(approvals)))
+	title := pendingStyle.Render(fmt.Sprintf("⚠ %d pending — 'a' allow · 'A' keep-allow · 'd' deny (oldest first)", len(approvals)))
 
 	var blocks []string
 	blocks = append(blocks, rule, title)
