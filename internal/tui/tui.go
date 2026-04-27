@@ -855,7 +855,10 @@ func (m *model) promptArchiveCurrentTab() tea.Cmd {
 
 // archiveCurrentTab applies SetArchived to every session in m.sessions.
 // In the archive view we reverse the action so this same shortcut also
-// pulls a tab back out of archive in one keystroke.
+// pulls a tab back out of archive in one keystroke. The current tab is
+// about to go empty, so cycle to the next one synchronously — the
+// operator shouldn't have to stare at a blank list while the DB writes
+// settle.
 func (m *model) archiveCurrentTab() tea.Cmd {
 	tab := m.projectFilter
 	want := !m.showArchived
@@ -867,7 +870,14 @@ func (m *model) archiveCurrentTab() tea.Cmd {
 	if !want {
 		verb = "unarchived"
 	}
+	// Move forward in the tab cycle BEFORE the DB ops kick off so the
+	// next render shows the new tab populated. cycleProject computes the
+	// next entry from the still-current m.allSessions (which still
+	// includes the soon-to-be-archived rows), then applyProjectFilter
+	// scopes m.sessions to the new tab so they aren't visible there.
+	cycleCmd := m.cycleProject(1)
 	return tea.Batch(
+		cycleCmd,
 		func() tea.Msg {
 			for _, sid := range sids {
 				_ = m.db.SetArchived(m.ctx, sid, want)
