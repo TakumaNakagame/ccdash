@@ -16,6 +16,8 @@ import (
 type Settings struct {
 	AutoRepoTabs      bool
 	BellOnPending     bool
+	NewestAtBottom    bool // session list with newest sessions at the bottom
+	LayoutVertical    bool // stack list above transcript instead of left/right
 	TailBudgetKB      int
 	SummaryTimeoutSec int
 	RefreshIntervalMs int
@@ -24,6 +26,8 @@ type Settings struct {
 const (
 	keyAutoRepoTabs      = "auto_repo_tabs"
 	keyBellOnPending     = "bell_on_pending"
+	keyNewestAtBottom    = "newest_at_bottom"
+	keyLayoutVertical    = "layout_vertical"
 	keyTailBudgetKB      = "tail_budget_kb"
 	keySummaryTimeoutSec = "summary_timeout_sec"
 	keyRefreshIntervalMs = "refresh_interval_ms"
@@ -34,6 +38,8 @@ func Defaults() Settings {
 	return Settings{
 		AutoRepoTabs:      true,
 		BellOnPending:     true,
+		NewestAtBottom:    false,
+		LayoutVertical:    false,
 		TailBudgetKB:      256,
 		SummaryTimeoutSec: 180,
 		RefreshIntervalMs: 1000,
@@ -51,6 +57,8 @@ func Load(ctx context.Context, d *db.DB) (Settings, error) {
 	}{
 		{keyAutoRepoTabs, func(v string) { out.AutoRepoTabs = parseBool(v, out.AutoRepoTabs) }},
 		{keyBellOnPending, func(v string) { out.BellOnPending = parseBool(v, out.BellOnPending) }},
+		{keyNewestAtBottom, func(v string) { out.NewestAtBottom = parseBool(v, out.NewestAtBottom) }},
+		{keyLayoutVertical, func(v string) { out.LayoutVertical = parseBool(v, out.LayoutVertical) }},
 		{keyTailBudgetKB, func(v string) { out.TailBudgetKB = parseInt(v, out.TailBudgetKB) }},
 		{keySummaryTimeoutSec, func(v string) { out.SummaryTimeoutSec = parseInt(v, out.SummaryTimeoutSec) }},
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
@@ -110,6 +118,8 @@ func AllSpecs() []Spec {
 	return []Spec{
 		{Key: keyAutoRepoTabs, Label: "Auto repo tabs", Help: "Include repo names in the Tab cycle alongside user-named tabs", Kind: KindBool},
 		{Key: keyBellOnPending, Label: "Bell on pending", Help: "Ring the terminal bell when the pending count goes from 0 to >0", Kind: KindBool},
+		{Key: keyNewestAtBottom, Label: "Newest at bottom", Help: "Show the newest session at the bottom of the list (matches the transcript tail orientation)", Kind: KindBool},
+		{Key: keyLayoutVertical, Label: "Vertical layout", Help: "Stack the session list above the transcript pane instead of side-by-side; useful for tall / narrow terminals", Kind: KindBool},
 		{Key: keyTailBudgetKB, Label: "Right-pane tail budget (KB)", Help: "Bytes of transcript loaded for the inline live tail; bigger == more context, slower", Kind: KindInt, Min: 32, Max: 8192},
 		{Key: keySummaryTimeoutSec, Label: "Summary timeout (s)", Help: "How long to wait for `claude -p` to produce a summary before giving up", Kind: KindInt, Min: 30, Max: 600},
 		{Key: keyRefreshIntervalMs, Label: "Refresh interval (ms)", Help: "How often the TUI re-queries the DB for new state", Kind: KindInt, Min: 250, Max: 10000},
@@ -125,6 +135,10 @@ func Get(s Settings, key string) any {
 		return s.AutoRepoTabs
 	case keyBellOnPending:
 		return s.BellOnPending
+	case keyNewestAtBottom:
+		return s.NewestAtBottom
+	case keyLayoutVertical:
+		return s.LayoutVertical
 	case keyTailBudgetKB:
 		return s.TailBudgetKB
 	case keySummaryTimeoutSec:
@@ -143,6 +157,10 @@ func Set(ctx context.Context, d *db.DB, s Settings, key string, value any) (Sett
 		s.AutoRepoTabs = value.(bool)
 	case keyBellOnPending:
 		s.BellOnPending = value.(bool)
+	case keyNewestAtBottom:
+		s.NewestAtBottom = value.(bool)
+	case keyLayoutVertical:
+		s.LayoutVertical = value.(bool)
 	case keyTailBudgetKB:
 		s.TailBudgetKB = value.(int)
 	case keySummaryTimeoutSec:

@@ -231,6 +231,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selSess < 0 {
 			m.selSess = 0
 		}
+		// On the first load, jump to the newest entry. With the default
+		// ordering that's index 0; with NewestAtBottom that's the last
+		// row.
+		if prev == "" && len(m.sessions) > 0 {
+			if m.settings.NewestAtBottom {
+				m.selSess = len(m.sessions) - 1
+			} else {
+				m.selSess = 0
+			}
+		}
 		if cur := m.currentSessionID(); cur != "" && cur != prev {
 			return m, m.loadTailCmd()
 		}
@@ -493,6 +503,13 @@ func (m *model) applyProjectFilter() {
 			}
 		}
 		src = out
+	}
+	if m.settings.NewestAtBottom {
+		// Reverse in place — caller no longer relies on the original
+		// ordering of m.sessions, just on the displayed indices.
+		for i, j := 0, len(src)-1; i < j; i, j = i+1, j-1 {
+			src[i], src[j] = src[j], src[i]
+		}
 	}
 	m.sessions = src
 }
@@ -1362,6 +1379,9 @@ func (m *model) renderSettingsBody(height int) string {
 }
 
 func (m *model) renderSessionsBody(height int) string {
+	if m.settings.LayoutVertical {
+		return m.renderSessionsBodyVertical(height)
+	}
 	// Reserve 3 cols for " │ " separator.
 	const sepW = 3
 	leftWidth := m.width / 2
@@ -1382,6 +1402,36 @@ func (m *model) renderSessionsBody(height int) string {
 	}
 	sep := strings.Join(sepLines, "\n")
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, sep, right)
+}
+
+// renderSessionsBodyVertical stacks the list above the transcript pane.
+// The split is 1/2 each minus a single separator line. Useful for narrow
+// or tall terminals where horizontal width is the scarce resource.
+func (m *model) renderSessionsBodyVertical(height int) string {
+	listH := height / 2
+	if listH < 5 {
+		listH = 5
+	}
+	rightH := height - listH - 1
+	if rightH < 5 {
+		rightH = 5
+		listH = height - rightH - 1
+		if listH < 5 {
+			listH = 5
+		}
+	}
+	list := m.renderSessionsList(m.width, listH)
+	right := m.renderEventsList(m.width, rightH)
+	charW := runewidth.RuneWidth('─')
+	if charW < 1 {
+		charW = 1
+	}
+	count := m.width / charW
+	if count < 1 {
+		count = 1
+	}
+	sep := subtitleStyle.Render(strings.Repeat("─", count))
+	return lipgloss.JoinVertical(lipgloss.Left, list, sep, right)
 }
 
 func (m *model) renderSessionsList(width, height int) string {
