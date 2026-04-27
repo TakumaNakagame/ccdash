@@ -4,7 +4,7 @@ ccdash への貢献を歓迎します。
 
 ## バグ報告 / 機能提案
 
-[Issues](https://github.com/TakumaNakagame/ccdash/issues) でお願いします。以下があると追いやすいです:
+[Issues](https://github.com/TakumaNakagame/ccdash/issues) でお願いします。以下があると追いやすいです。
 
 - **バグ**: 期待した挙動 / 実際の挙動 / 再現手順 / OS・ターミナル・`ccdash --version`
 - **機能提案**: 解きたい課題 / 想定する操作フロー
@@ -31,27 +31,27 @@ ccdash                       # TUI 起動
 
 開発中は `ccdash` でなく `~/go/bin/ccdash` のフルパスで動かすと、リリース版 (`~/.local/bin/ccdash` 等) と切り分けられます。
 
-詳しいアーキテクチャと運用ガイドは以下:
+詳しいアーキテクチャと運用ガイドは以下を参照してください。
 
 - [`docs/usage_jp.md`](./docs/usage_jp.md) — エンドユーザー向け使い方ガイド (日本語)
 - [`docs/usage_en.md`](./docs/usage_en.md) — same in English
 - [`CLAUDE.md`](./CLAUDE.md) — AI 開発支援向けのアーキテクチャブリーフ
-- [`task.md`](./task.md) — 元々の要件・進捗メモ
+- [`task.md`](./task.md) — もともとの要件・進捗メモ
 
 ## コーディング規約
 
 - **Go 1.23+**: `gofmt` / `go vet` が通ること
 - **テスト**: 既存パッケージの test を壊さないこと、新機能で純粋ロジックがあれば追加 (`internal/transcript` / `internal/redact` 参考)
 - **コミットメッセージ**: 1 行目は 60 文字前後で要約、本文に「何を」「なぜ」。日本語・英語どちらでも OK
-- **依存追加**: 新しい外部ライブラリを入れる時は PR 本文で理由を書いてもらえると助かります
+- **依存追加**: 新しい外部ライブラリを入れるときは PR 本文で理由を書いてもらえると助かります
 
 ## DB スキーマ変更時の注意
 
-`internal/db/db.go` の `migrate()` は **既存ユーザーのDBを壊さない** 形で書いてください:
+`internal/db/db.go` の `migrate()` は **既存ユーザーのDBを壊さない** 形で書いてください。
 
 - `CREATE TABLE IF NOT EXISTS` で初期化
 - 列追加は `ALTER TABLE ... ADD COLUMN` を別ループに足す
-- 移行が必要な値は同じ場所で `INSERT ... SELECT` 等で吸収
+- 移行が必要な値は同じ場所に `INSERT ... SELECT` 等を書いて吸収
 - `internal/settings/settings.go` の Load も legacy キーを読めるなら吸収する
 
 ccdash は state を `~/.local/state/ccdash/ccdash.sqlite` に保存しているので、リリース後の破壊的変更はユーザーの手間に直結します。
