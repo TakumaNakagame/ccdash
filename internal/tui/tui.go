@@ -95,6 +95,10 @@ type model struct {
 	// to bulk-archive the current tab; the next keystroke is treated as
 	// the y/n confirmation rather than a normal shortcut.
 	awaitTabArchiveConfirm bool
+	// awaitSummaryConfirm is the same gate for the 's' summarize
+	// shortcut; spawning claude -p costs an API round trip so we don't
+	// want it to fire on a typo.
+	awaitSummaryConfirm bool
 
 	// tabLocked is set when the operator launched ccdash with --tab
 	// <name>. The tab strip is hidden, h/l/Tab/Shift+Tab become no-ops,
@@ -383,6 +387,16 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if m.awaitSummaryConfirm {
+		m.awaitSummaryConfirm = false
+		switch msg.String() {
+		case "y", "Y":
+			return m, m.summarizeCurrent()
+		default:
+			m.flash = "summary cancelled"
+			return m, nil
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
@@ -508,7 +522,17 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flash = "summarize is OFF (settings ',')"
 			return m, nil
 		}
-		return m, m.summarizeCurrent()
+		if len(m.sessions) == 0 {
+			return m, nil
+		}
+		s := m.sessions[m.selSess]
+		title := s.DisplayTitle()
+		if title == "" {
+			title = shortID(s.SessionID)
+		}
+		m.awaitSummaryConfirm = true
+		m.flash = fmt.Sprintf("run claude -p summary on '%s'? press 'y' to confirm", shorten(title, 60))
+		return m, nil
 	case ",":
 		m.pane = paneSettings
 		m.settingsSel = 0
@@ -714,7 +738,7 @@ func (m *model) mouseInRightPane(msg tea.MouseMsg) bool {
 	if m.renderTabBar() != "" {
 		tabH = 2
 	}
-	footerH := countLines(m.renderFooter())
+	footerH := countLines(m.renderFooter()) + 1 // +1 for the spacer above the footer
 	bodyHeight := m.height - headerH - tabH - footerH
 	if bodyHeight < 5 {
 		bodyHeight = 5
@@ -1249,7 +1273,10 @@ func (m *model) View() string {
 		// doesn't visually butt right up against the tabs.
 		tabH = 2
 	}
-	footerH := countLines(footer)
+	// Match the tab strip's breathing-room line above the footer so the
+	// help row doesn't feel pasted onto the body.
+	const footerSpacer = 1
+	footerH := countLines(footer) + footerSpacer
 	bodyHeight := m.height - headerH - tabH - footerH
 	if bodyHeight < 5 {
 		bodyHeight = 5
@@ -1259,7 +1286,7 @@ func (m *model) View() string {
 	if tabBar != "" {
 		parts = append(parts, tabBar, "")
 	}
-	parts = append(parts, body, footer)
+	parts = append(parts, body, "", footer)
 	out := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	// Final safety net: never emit more lines than the terminal can show, or
 	// the alt-screen scrolls and the title bar disappears off the top.
