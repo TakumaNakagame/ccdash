@@ -1105,15 +1105,25 @@ func (m *model) View() string {
 		return "loading..."
 	}
 	header := m.renderHeader()
+	tabBar := m.renderTabBar()
 	footer := m.renderFooter()
 	headerH := countLines(header)
+	tabH := 0
+	if tabBar != "" {
+		tabH = 1
+	}
 	footerH := countLines(footer)
-	bodyHeight := m.height - headerH - footerH
+	bodyHeight := m.height - headerH - tabH - footerH
 	if bodyHeight < 5 {
 		bodyHeight = 5
 	}
 	body := clampLines(m.renderBody(bodyHeight), bodyHeight)
-	out := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	parts := []string{header}
+	if tabBar != "" {
+		parts = append(parts, tabBar)
+	}
+	parts = append(parts, body, footer)
+	out := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	// Final safety net: never emit more lines than the terminal can show, or
 	// the alt-screen scrolls and the title bar disappears off the top.
 	out = clampLines(out, m.height)
@@ -1155,6 +1165,8 @@ var (
 	pendingStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
 	pendingRowStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	groupHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("237"))
+	tabActiveStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("12"))
+	tabInactiveStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Background(lipgloss.Color("236"))
 	approvalRowStyle   = lipgloss.NewStyle().Background(lipgloss.Color("58")).Foreground(lipgloss.Color("15"))
 	approvalLabelStyle = lipgloss.NewStyle().Background(lipgloss.Color("11")).Foreground(lipgloss.Color("0")).Bold(true)
 	statusActive      = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // bright green: busy
@@ -1266,6 +1278,88 @@ func (m *model) renderFooter() string {
 		return subtitleStyle.Render(m.flash) + "\n" + footerStyle.Render(keys)
 	}
 	return footerStyle.Render(keys)
+}
+
+// renderTabBar lays out a browser-style strip of project / user-tab labels
+// below the header, with the active filter highlighted. When the total
+// width exceeds the terminal we center on the active label and surface
+// ‹ / › arrows so the operator knows there's more off-screen.
+func (m *model) renderTabBar() string {
+	if m.pane != paneSessions {
+		return ""
+	}
+	tabs := m.uniqueProjects()
+	if len(tabs) <= 1 {
+		return ""
+	}
+	display := make([]string, len(tabs))
+	activeIdx := 0
+	for i, t := range tabs {
+		label := t
+		if label == "" {
+			label = "All"
+		}
+		styled := " " + label + " "
+		if t == m.projectFilter {
+			display[i] = tabActiveStyle.Render(styled)
+			activeIdx = i
+		} else {
+			display[i] = tabInactiveStyle.Render(styled)
+		}
+	}
+	return slideTabs(display, activeIdx, m.width)
+}
+
+// slideTabs picks a window of the items list that fits in maxW, centered
+// on the active index. Overflow on either side is announced with arrow
+// markers; both sides reserve space even when not overflowing so the row
+// width stays stable across selections.
+func slideTabs(items []string, active, maxW int) string {
+	widths := make([]int, len(items))
+	for i, s := range items {
+		widths[i] = lipgloss.Width(s)
+	}
+	leftMark := subtitleStyle.Render("‹ ")
+	rightMark := subtitleStyle.Render(" ›")
+	leftPad := strings.Repeat(" ", lipgloss.Width(leftMark))
+	rightPad := strings.Repeat(" ", lipgloss.Width(rightMark))
+	budget := maxW - lipgloss.Width(leftMark) - lipgloss.Width(rightMark)
+	if budget < 1 {
+		budget = 1
+	}
+	used := widths[active]
+	lo, hi := active, active
+	for {
+		expanded := false
+		if hi+1 < len(items) && used+widths[hi+1] <= budget {
+			hi++
+			used += widths[hi]
+			expanded = true
+		}
+		if lo > 0 && used+widths[lo-1] <= budget {
+			lo--
+			used += widths[lo]
+			expanded = true
+		}
+		if !expanded {
+			break
+		}
+	}
+	var b strings.Builder
+	if lo > 0 {
+		b.WriteString(leftMark)
+	} else {
+		b.WriteString(leftPad)
+	}
+	for i := lo; i <= hi; i++ {
+		b.WriteString(items[i])
+	}
+	if hi < len(items)-1 {
+		b.WriteString(rightMark)
+	} else {
+		b.WriteString(rightPad)
+	}
+	return b.String()
 }
 
 func (m *model) renderBody(height int) string {
