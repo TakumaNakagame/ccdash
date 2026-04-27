@@ -114,6 +114,13 @@ func (d *DB) migrate() error {
 	if _, err := d.sql.Exec(`CREATE INDEX IF NOT EXISTS idx_approvals_tool_use ON approvals(tool_use_id) WHERE tool_use_id IS NOT NULL`); err != nil {
 		// Partial index syntax may be unsupported; ignore.
 	}
+	// One-shot cleanup: earlier builds let summary-spawned `claude -p`
+	// invocations register as full sessions (because they inherited our
+	// own hooks). Wipe any rows that match that pattern so the dashboard
+	// list is clean after upgrade.
+	if _, err := d.sql.Exec(`DELETE FROM sessions WHERE title LIKE '[ccdash:summary]%' OR custom_title LIKE '[ccdash:summary]%'`); err != nil {
+		return fmt.Errorf("cleanup ccdash:summary sessions: %w", err)
+	}
 	return nil
 }
 

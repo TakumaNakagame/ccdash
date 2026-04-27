@@ -378,7 +378,10 @@ func (m *model) summarizeCurrent() tea.Cmd {
 	// Flip status synchronously so the next refresh shows "summarizing".
 	_ = m.db.SetSummaryStatus(m.ctx, sid, "running")
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, 90*time.Second)
+		// Bumped past the prior 90s because long sessions take Claude a
+		// while to digest end-to-end; the previous timeout was killing
+		// otherwise-fine summarizations and they'd land as 'error'.
+		ctx, cancel := context.WithTimeout(m.ctx, 180*time.Second)
 		defer cancel()
 		summary, err := summarize.Run(ctx, path)
 		return summaryDoneMsg{sessionID: sid, summary: summary, err: err}

@@ -68,6 +68,12 @@ func Scan(ctx context.Context, base string) ([]Discovered, error) {
 			if err != nil {
 				continue
 			}
+			// Skip our own summarize-spawned sessions; their first user
+			// prompt always begins with the marker we inject in
+			// internal/summarize.
+			if strings.HasPrefix(d.Title, "[ccdash:summary]") {
+				continue
+			}
 			out = append(out, d)
 		}
 	}

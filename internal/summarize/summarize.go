@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -16,10 +17,17 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
+// Marker prefix that identifies summary-spawned `claude -p` invocations.
+// We embed it in the instruction so the spawned session's first user
+// message starts with it; discovery uses this to keep these throwaway
+// sessions out of the dashboard's main list.
+const Marker = "[ccdash:summary]"
+
 // Run loads the transcript at path, builds a digest, and shells out to
-// `claude -p` to produce a 3-5 bullet summary. The returned string is
-// already trimmed; an empty result is returned with a non-nil error if
-// claude failed.
+// `claude -p` to produce a 3-5 bullet summary. The spawned process is
+// isolated from the user's normal settings so it doesn't inherit ccdash's
+// own hooks (and thus doesn't trigger the same approval / event flow that
+// the dashboard is observing).
 func Run(ctx context.Context, transcriptPath string) (string, error) {
 	if transcriptPath == "" {
 		return "", fmt.Errorf("no transcript path")
@@ -28,24 +36,33 @@ func Run(ctx context.Context, transcriptPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load transcript: %w", err)
 	}
-	digest := redact.String(buildDigest(msgs, 32*1024)) // ~32KB cap keeps prompt comfortable
+	digest := redact.String(buildDigest(msgs, 32*1024))
 	if strings.TrimSpace(digest) == "" {
 		return "", fmt.Errorf("transcript is empty")
 	}
 
-	const instruction = `Summarize this Claude Code session in 3-5 short bullets.
+	instruction := Marker + ` Summarize this Claude Code session in 3-5 short bullets.
 Cover (1) what the user is trying to accomplish, (2) the high-level approach
 Claude is taking, (3) the current state. Be concise and concrete; reference
 file names or commands where it helps clarity. Reply in the same language
 as the user's prompts. No preamble, just the bullets.`
 
-	cmd := exec.CommandContext(ctx, "claude", "-p", instruction)
+	// --setting-sources project + cwd /tmp gives the spawn a clean
+	// settings hierarchy: it skips ~/.claude/settings.json (where our
+	// hooks live) and looks instead at /tmp/.claude/settings.json which
+	// doesn't exist — so the summarizer doesn't fire SessionStart hooks
+	// back at our own server.
+	cmd := exec.CommandContext(ctx,
+		"claude",
+		"--setting-sources", "project",
+		"-p", instruction,
+	)
+	cmd.Dir = os.TempDir()
 	cmd.Stdin = strings.NewReader(digest)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		// Surface the first stderr line — claude usually explains there.
 		hint := strings.TrimSpace(stderr.String())
 		if i := strings.IndexByte(hint, '\n'); i > 0 {
 			hint = hint[:i]
