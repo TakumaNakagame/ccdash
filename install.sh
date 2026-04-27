@@ -10,7 +10,6 @@
 set -eu
 
 REPO="TakumaNakagame/ccdash"
-INSTALL_DIR="${CCDASH_INSTALL_DIR:-$HOME/.local/bin}"
 
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$OS" in
@@ -24,6 +23,35 @@ case "$ARCH_RAW" in
   aarch64|arm64) ARCH=arm64 ;;
   *) echo "ccdash: unsupported arch '$ARCH_RAW'" >&2; exit 1 ;;
 esac
+
+# Pick the install dir. CCDASH_INSTALL_DIR always wins. Otherwise prefer
+# locations that are typically already on PATH for the host:
+# - macOS: Homebrew prefix when present (its installer puts <prefix>/bin
+#   on PATH for both Intel /usr/local and Apple Silicon /opt/homebrew),
+#   then /usr/local/bin if it happens to be writable, then ~/.local/bin.
+# - linux: ~/.local/bin, which most distros wire onto PATH via systemd
+#   user environments or shell defaults.
+detect_install_dir() {
+  if [ -n "${CCDASH_INSTALL_DIR:-}" ]; then
+    printf '%s\n' "$CCDASH_INSTALL_DIR"
+    return
+  fi
+  if [ "$OS" = "darwin" ]; then
+    if command -v brew >/dev/null 2>&1; then
+      _bp="$(brew --prefix 2>/dev/null || true)"
+      if [ -n "$_bp" ] && [ -d "$_bp/bin" ] && [ -w "$_bp/bin" ]; then
+        printf '%s\n' "$_bp/bin"
+        return
+      fi
+    fi
+    if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+      printf '%s\n' "/usr/local/bin"
+      return
+    fi
+  fi
+  printf '%s\n' "$HOME/.local/bin"
+}
+INSTALL_DIR="$(detect_install_dir)"
 
 # Resolve the release tag. Operators can short-circuit the GitHub API
 # round-trip by setting CCDASH_VERSION=v1.2.3 — useful when:
