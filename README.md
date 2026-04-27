@@ -249,4 +249,16 @@ install.sh                      curl-installable shell installer
 - ccdash hook entries are tagged with the `X-Ccdash-Managed: true`
   header so install / uninstall are idempotent and don't collide with
   user hooks
+
+## コントリビュート
+
+バグ報告・機能提案・PR 歓迎です。詳しくは [CONTRIBUTING.md](./CONTRIBUTING.md) を参照してください。CI が通る PR は早めに見ます。
+
+## ライセンス
+
+[MIT](./LICENSE) © 2026 kameneko
+
+## AI-assisted development
+
+このプロジェクトは [Claude Code](https://claude.com/claude-code) (Anthropic) による支援を受けて開発されています。コミット履歴に `Co-Authored-By: Claude` が並んでいるのはそのためです。AI が書いたコードもメンテナーがレビュー・採用した時点で責任を持ちます。
 </content>
