@@ -2028,25 +2028,16 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-visible)
 }
 
-// renderEventsList renders a live tail of the selected session's transcript
-// — the actual user prompts, Claude responses, and tool exchanges that make
-// up the conversation. We auto-scroll so the most recent exchange is at the
-// bottom.
-// renderEventsList renders the right pane: a live transcript tail at the
-// top, plus a pending-approval section pinned to the bottom whenever the
-// selected session has any approvals waiting.
+// renderEventsList renders the right pane: a live transcript tail (with
+// the cached summary inserted inline at its generation time) and a
+// pending-approval section pinned to the bottom whenever the selected
+// session has any approvals waiting.
 func (m *model) renderEventsList(width, height int) string {
 	if m.currentSessionID() == "" {
 		return ""
 	}
 
 	header := subtitleStyle.Render(fmt.Sprintf("transcript  (%s)", shortID(m.currentSessionID())))
-
-	summarySection := m.renderSummarySection(width)
-	summaryH := 0
-	if summarySection != "" {
-		summaryH = strings.Count(summarySection, "\n") + 1
-	}
 
 	approvals := m.approvalsForSelected()
 	approvalSection := ""
@@ -2062,9 +2053,6 @@ func (m *model) renderEventsList(width, height int) string {
 	}
 
 	transcriptH := height - 1 // header
-	if summaryH > 0 {
-		transcriptH -= summaryH
-	}
 	if approvalH > 0 {
 		transcriptH -= approvalH
 	}
@@ -2073,82 +2061,109 @@ func (m *model) renderEventsList(width, height int) string {
 	}
 
 	transcriptBody := m.renderTranscriptTail(width, transcriptH)
-	out := header
-	if summarySection != "" {
-		out += "\n" + summarySection
-	}
-	out += "\n" + transcriptBody
+	out := header + "\n" + transcriptBody
 	if approvalSection != "" {
 		out += "\n" + approvalSection
 	}
 	return lipgloss.NewStyle().Width(width).Height(height).Render(out)
 }
 
-// renderSummarySection draws the cached LLM summary at the top of the right
-// pane. We cap to ~6 lines so it doesn't crowd out the transcript; the full
-// text is reachable by re-running 's' which shows it in the flash, or by
-// reading the DB directly.
-func (m *model) renderSummarySection(width int) string {
+// renderSummaryBlock renders the summary as a transcript-flavored block:
+// labelled row + body lines indented and styled as a system note. Returns
+// nil when there's nothing to show. Used both for the chronological inline
+// insertion and the running/error placeholders.
+func (m *model) renderSummaryBlock(width int) []string {
 	if len(m.sessions) == 0 {
-		return ""
+		return nil
 	}
 	s := m.sessions[m.selSess]
 	switch s.SummaryStatus {
 	case "running":
-		title := pendingStyle.Render("⏳ summary in progress…")
-		return title
+		return []string{pendingStyle.Render("⏳ summary in progress…")}
 	case "error":
-		title := statusStop.Render("✗ summary error")
-		body := subtitleStyle.Render("  " + shorten(s.Summary, width-3))
-		return title + "\n" + body
+		body := s.Summary
+		if body == "" {
+			body = "(no detail)"
+		}
+		return []string{
+			statusStop.Render("✗ summary error"),
+			subtitleStyle.Render("  " + shorten(body, width-3)),
+		}
 	case "done":
 		// fall through to render
 	default:
-		return ""
+		return nil
 	}
 	if s.Summary == "" {
-		return ""
+		return nil
 	}
 	age := summarize.SummaryAge(s.SummaryAt)
 	header := titleStyle.Render("summary") + "  " + subtitleStyle.Render(age)
-	const maxLines = 6
 	bodyWidth := width - 2
 	if bodyWidth < 20 {
 		bodyWidth = 20
 	}
-	var bodyLines []string
+	out := []string{header}
 	for _, raw := range strings.Split(strings.TrimSpace(s.Summary), "\n") {
 		for _, chunk := range wrapToWidth(raw, bodyWidth) {
-			bodyLines = append(bodyLines, "  "+chunk)
-			if len(bodyLines) >= maxLines {
-				break
-			}
-		}
-		if len(bodyLines) >= maxLines {
-			break
+			out = append(out, "  "+chunk)
 		}
 	}
-	return header + "\n" + strings.Join(bodyLines, "\n")
+	return out
 }
 
+// renderTranscriptTail builds the transcript line stream (including the
+// inline summary) and returns the visible window for the given height,
+// honoring the operator's tailScroll offset. The summary is inserted
+// chronologically: the first transcript message whose timestamp is after
+// SummaryAt pushes the summary block in just before it. New activity
+// landing later naturally accumulates below the summary, so the summary
+// scrolls up off-screen as the conversation continues — same way an old
+// USER prompt would.
 func (m *model) renderTranscriptTail(width, height int) string {
-	if len(m.tailMessages) == 0 {
+	if len(m.tailMessages) == 0 && m.summaryAvailable() == false {
 		return subtitleStyle.Render("(no messages yet)")
 	}
 	bodyWidth := width - 1
 	if bodyWidth < 20 {
 		bodyWidth = 20
 	}
-	var lines []string
-	for i, msg := range m.tailMessages {
-		if i > 0 {
-			// Keep a tool call and its result visually attached.
-			if msg.Kind != transcript.KindToolResult {
-				lines = append(lines, "")
-			}
-		}
-		lines = append(lines, renderTranscriptMessage(msg, bodyWidth)...)
+
+	summaryBlock := m.renderSummaryBlock(bodyWidth)
+	summaryAt := time.Time{}
+	if len(m.sessions) > 0 {
+		summaryAt = m.sessions[m.selSess].SummaryAt
 	}
+
+	var lines []string
+	addBlock := func(block []string, leadBlank bool) {
+		if len(block) == 0 {
+			return
+		}
+		if leadBlank && len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, block...)
+	}
+
+	summaryInserted := summaryBlock == nil
+	for i, msg := range m.tailMessages {
+		// Insert the summary just before the first message that came
+		// after generation. Running/error placeholders land at the
+		// end of the buffer instead — they don't have a useful
+		// SummaryAt yet.
+		if !summaryInserted && !summaryAt.IsZero() && !msg.Timestamp.IsZero() && msg.Timestamp.After(summaryAt) {
+			addBlock(summaryBlock, true)
+			summaryInserted = true
+		}
+		// Keep a tool call and its result visually attached.
+		leadBlank := i > 0 && msg.Kind != transcript.KindToolResult
+		addBlock(renderTranscriptMessage(msg, bodyWidth), leadBlank)
+	}
+	if !summaryInserted {
+		addBlock(summaryBlock, true)
+	}
+
 	if height < 1 {
 		height = 1
 	}
@@ -2172,6 +2187,17 @@ func (m *model) renderTranscriptTail(width, height int) string {
 		start = 0
 	}
 	return strings.Join(lines[start:end], "\n")
+}
+
+// summaryAvailable reports whether the selected session has anything to
+// surface in the summary slot — used to decide between the "no messages
+// yet" placeholder and rendering an empty list with just a summary.
+func (m *model) summaryAvailable() bool {
+	if len(m.sessions) == 0 {
+		return false
+	}
+	s := m.sessions[m.selSess]
+	return s.SummaryStatus != "" && (s.SummaryStatus != "done" || s.Summary != "")
 }
 
 // approvalsForSelected returns pending approvals for the currently selected
