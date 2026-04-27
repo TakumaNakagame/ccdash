@@ -311,9 +311,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // handleMouse routes wheel events. In the modal transcript view, scrolling
-// always moves through that buffer. In the sessions view, the X coordinate
-// of the wheel event decides whether we scroll the session list (left) or
-// the transcript tail (right).
+// always moves through that buffer. In the sessions view, the wheel zone
+// is decided by Y in vertical layout (top = sessions, bottom = transcript)
+// or by X in horizontal layout (left = sessions, right = transcript).
 func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	const wheelStep = 3
 	if m.pane == paneTranscript {
@@ -327,11 +327,7 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	leftW := m.width / 2
-	if leftW < 30 {
-		leftW = 30
-	}
-	inRight := msg.X >= leftW+3 // 3-col separator
+	inRight := m.mouseInRightPane(msg)
 	switch msg.Type {
 	case tea.MouseWheelUp:
 		if inRight {
@@ -658,6 +654,34 @@ func (m *model) cycleProject(delta int) tea.Cmd {
 	m.tailPath = ""
 	m.tailMtime = time.Time{}
 	return m.loadTailCmd()
+}
+
+// mouseInRightPane decides whether a wheel event lands on the transcript
+// pane (vs the session list) based on the active layout. We recompute the
+// pane geometry on demand instead of caching it because View runs every
+// frame and the terminal can resize between events.
+func (m *model) mouseInRightPane(msg tea.MouseMsg) bool {
+	headerH := countLines(m.renderHeader())
+	tabH := 0
+	if m.renderTabBar() != "" {
+		tabH = 1
+	}
+	footerH := countLines(m.renderFooter())
+	bodyHeight := m.height - headerH - tabH - footerH
+	if bodyHeight < 5 {
+		bodyHeight = 5
+	}
+	bodyTop := headerH + tabH
+	if m.useVerticalLayout() {
+		listH, _ := m.verticalSplit(bodyHeight)
+		// +1 for the separator row between the list and the transcript.
+		return msg.Y >= bodyTop+listH+1
+	}
+	leftW := m.width / 2
+	if leftW < 30 {
+		leftW = 30
+	}
+	return msg.X >= leftW+3 // 3-col vertical separator
 }
 
 // tailHalfPage approximates half the right pane's visible height. We don't
@@ -1606,11 +1630,26 @@ func (m *model) useVerticalLayout() bool {
 // The split is 1/2 each minus a single separator line. Useful for narrow
 // or tall terminals where horizontal width is the scarce resource.
 func (m *model) renderSessionsBodyVertical(height int) string {
-	listH := height / 2
+	listH, rightH := m.verticalSplit(height)
+	list := m.renderSessionsList(m.width, listH)
+	right := m.renderEventsList(m.width, rightH)
+	// Use ASCII '-' rather than the box-drawing '─' so we don't get bitten
+	// by terminals that disagree with runewidth on the East-Asian
+	// "ambiguous" rendering. With '-' every cell is unambiguously one
+	// column, so the rule reliably spans the full body width.
+	sep := subtitleStyle.Render(strings.Repeat("-", m.width))
+	return lipgloss.JoinVertical(lipgloss.Left, list, sep, right)
+}
+
+// verticalSplit returns the line allotments for the list and transcript
+// panes in vertical layout. Extracted so the mouse handler can compute
+// the same top/bottom boundary without re-rendering anything.
+func (m *model) verticalSplit(height int) (listH, rightH int) {
+	listH = height / 2
 	if listH < 5 {
 		listH = 5
 	}
-	rightH := height - listH - 1
+	rightH = height - listH - 1
 	if rightH < 5 {
 		rightH = 5
 		listH = height - rightH - 1
@@ -1618,18 +1657,7 @@ func (m *model) renderSessionsBodyVertical(height int) string {
 			listH = 5
 		}
 	}
-	list := m.renderSessionsList(m.width, listH)
-	right := m.renderEventsList(m.width, rightH)
-	charW := runewidth.RuneWidth('─')
-	if charW < 1 {
-		charW = 1
-	}
-	count := m.width / charW
-	if count < 1 {
-		count = 1
-	}
-	sep := subtitleStyle.Render(strings.Repeat("─", count))
-	return lipgloss.JoinVertical(lipgloss.Left, list, sep, right)
+	return listH, rightH
 }
 
 func (m *model) renderSessionsList(width, height int) string {
