@@ -122,6 +122,46 @@ a session does:
 Tmux integration is automatic — if your claude sessions live in tmux panes,
 ccdash will detect them via `tmux list-panes` and offer one-keystroke switching.
 
+## Threat model
+
+ccdash is built for a single user managing their own Claude Code sessions on
+a single workstation. The trust boundaries below describe what it does and
+does not defend against.
+
+**Inside the trust boundary** (assumed honest):
+- The local user account running ccdash and `claude`
+- The `claude` binary and its on-disk state under `~/.claude/`
+- Files the operator opens or edits via Claude
+
+**Outside the trust boundary** (treated as adversarial):
+- Other UNIX users on the same host
+- Repositories the operator opens whose `.claude/settings.json` could try to
+  inject hooks (Claude Code's own concern; ccdash refuses to honor them by
+  only writing into `~/.claude/settings.json`)
+- Network access of any kind — ccdash's collector binds to `127.0.0.1` and
+  will not accept connections from other interfaces
+
+**Explicitly out of scope**:
+- Multi-user / shared-host deployments
+- Public or LAN exposure of the collector
+- Web UI / browser access (there is none — the dashboard is TUI only)
+- Defense against the operator pasting their own secrets into prompts; the
+  best ccdash can do is mask common token patterns before persisting them
+
+**Mitigations in this codebase**:
+- Loopback-only bind, hardcoded — no flag changes the host
+- DB file at `$XDG_STATE_HOME/ccdash/ccdash.sqlite` with `0600` permissions
+- Hook entries in `~/.claude/settings.json` carry an `X-Ccdash-Managed`
+  marker so `install-hooks` and `uninstall-hooks` can round-trip them
+  idempotently without disturbing other user hooks
+- Pattern-based masking on hook payloads / titles / summaries before they
+  reach the DB (Bearer tokens, `KEY=value` env, AWS / GitHub / OpenAI /
+  Anthropic key formats, URL credentials, etc.)
+- A randomly generated shared token at `$XDG_STATE_HOME/ccdash/token` is
+  required on every hook + decision request, so other UNIX users on the
+  same host can't forge events or approve tools just by reaching the
+  loopback port
+
 ## Layout
 
 ```
