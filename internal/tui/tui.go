@@ -42,6 +42,7 @@ type pane int
 const (
 	paneSessions pane = iota
 	paneTranscript
+	paneSettings
 )
 
 type model struct {
@@ -83,6 +84,11 @@ type model struct {
 	projectFilter string // "" = All; otherwise repo / cwd basename
 
 	settings settings.Settings
+
+	// settings page state
+	settingsSel    int
+	settingsEdit   bool   // editing an int value inline
+	settingsBuffer string // numeric buffer while editing
 
 	// transcript view state
 	transcriptMessages []transcript.Message
@@ -338,6 +344,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.pane == paneTranscript {
 		return m.handleKeyTranscript(msg)
 	}
+	if m.pane == paneSettings {
+		return m.handleKeySettings(msg)
+	}
 	if m.editingTitle || m.editingTab {
 		return m.handleKeyTitleEdit(msg)
 	}
@@ -435,6 +444,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.startTabEdit()
 	case "s":
 		return m, m.summarizeCurrent()
+	case ",":
+		m.pane = paneSettings
+		m.settingsSel = 0
+		m.settingsEdit = false
+		return m, nil
 	}
 	return m, nil
 }
@@ -1120,7 +1134,10 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  tab tabs  R auto-repo  J/K right-line  pgup/pgdn right-page  enter attach  a/A/d allow/keep/deny  s sum  f fav  t rename  T set-tab  x arch  X arch-view  o trans  q quit"
+	keys := "↑/↓ sel  tab tabs  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/tab  x/X arch  o trans  , settings  q quit"
+	if m.pane == paneSettings {
+		keys = "↑/↓ select · space toggle · enter edit · esc back"
+	}
 	if m.showArchived {
 		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  q quit"
 	}
@@ -1140,9 +1157,130 @@ func (m *model) renderBody(height int) string {
 	switch m.pane {
 	case paneTranscript:
 		return m.renderTranscriptBody(height)
+	case paneSettings:
+		return m.renderSettingsBody(height)
 	default:
 		return m.renderSessionsBody(height)
 	}
+}
+
+func (m *model) handleKeySettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	specs := settings.AllSpecs()
+	if m.settingsEdit {
+		switch msg.Type {
+		case tea.KeyEnter:
+			cur := specs[m.settingsSel]
+			n, err := strconv.Atoi(m.settingsBuffer)
+			if err == nil {
+				if cur.Min > 0 && n < cur.Min {
+					n = cur.Min
+				}
+				if cur.Max > 0 && n > cur.Max {
+					n = cur.Max
+				}
+				next, err := settings.Set(m.ctx, m.db, m.settings, cur.Key, n)
+				if err == nil {
+					m.settings = next
+				} else {
+					m.err = err
+				}
+			}
+			m.settingsEdit = false
+			m.settingsBuffer = ""
+			return m, nil
+		case tea.KeyEsc, tea.KeyCtrlC:
+			m.settingsEdit = false
+			m.settingsBuffer = ""
+			return m, nil
+		case tea.KeyBackspace:
+			if r := []rune(m.settingsBuffer); len(r) > 0 {
+				m.settingsBuffer = string(r[:len(r)-1])
+			}
+		case tea.KeyRunes:
+			for _, r := range msg.Runes {
+				if r >= '0' && r <= '9' {
+					m.settingsBuffer += string(r)
+				}
+			}
+		}
+		return m, nil
+	}
+	switch msg.String() {
+	case "esc", "q", ",":
+		m.pane = paneSessions
+		return m, nil
+	case "j", "down":
+		if m.settingsSel+1 < len(specs) {
+			m.settingsSel++
+		}
+		return m, nil
+	case "k", "up":
+		if m.settingsSel > 0 {
+			m.settingsSel--
+		}
+		return m, nil
+	case "g", "home":
+		m.settingsSel = 0
+		return m, nil
+	case "G", "end":
+		m.settingsSel = len(specs) - 1
+		return m, nil
+	case " ", "enter":
+		cur := specs[m.settingsSel]
+		switch cur.Kind {
+		case settings.KindBool:
+			old := settings.Get(m.settings, cur.Key).(bool)
+			next, err := settings.Set(m.ctx, m.db, m.settings, cur.Key, !old)
+			if err == nil {
+				m.settings = next
+			} else {
+				m.err = err
+			}
+		case settings.KindInt:
+			m.settingsEdit = true
+			cur := settings.Get(m.settings, cur.Key).(int)
+			m.settingsBuffer = strconv.Itoa(cur)
+		}
+	}
+	return m, nil
+}
+
+func (m *model) renderSettingsBody(height int) string {
+	specs := settings.AllSpecs()
+	header := titleStyle.Render("settings") + "  " + subtitleStyle.Render("(persists across runs)")
+	var rows []string
+	for i, s := range specs {
+		marker := "  "
+		if i == m.settingsSel {
+			marker = "▶ "
+		}
+		valStr := ""
+		switch s.Kind {
+		case settings.KindBool:
+			if settings.Get(m.settings, s.Key).(bool) {
+				valStr = statusActive.Render("ON")
+			} else {
+				valStr = statusStop.Render("OFF")
+			}
+		case settings.KindInt:
+			cur := settings.Get(m.settings, s.Key).(int)
+			if m.settingsEdit && i == m.settingsSel {
+				valStr = pendingStyle.Render(m.settingsBuffer + "▏")
+			} else {
+				valStr = fmt.Sprintf("%d", cur)
+			}
+		}
+		labelLine := fmt.Sprintf("%s%-32s  %s", marker, s.Label, valStr)
+		if i == m.settingsSel {
+			labelLine = selectedRow.Render(padRight(labelLine, m.width))
+		}
+		rows = append(rows, labelLine)
+		rows = append(rows, subtitleStyle.Render("    "+s.Help))
+		rows = append(rows, "")
+	}
+	hint := "↑/↓ select · space toggle / enter edit · esc back"
+	body := strings.Join(rows, "\n")
+	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, subtitleStyle.Render(hint))
 }
 
 func (m *model) renderSessionsBody(height int) string {
