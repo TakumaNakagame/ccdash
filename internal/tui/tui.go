@@ -401,14 +401,30 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m, m.refresh()
 	case "enter":
+		if !m.settings.AttachEnabled {
+			m.flash = "attach is OFF (settings ',')"
+			return m, nil
+		}
 		return m, m.attachCurrent()
 	case "o":
 		return m, m.openTranscript()
 	case "a":
+		if !m.settings.ApproveEnabled {
+			m.flash = "approval blocking is OFF (settings ',')"
+			return m, nil
+		}
 		return m, m.decideApproval("allow", false)
 	case "A":
+		if !m.settings.ApproveEnabled {
+			m.flash = "approval blocking is OFF (settings ',')"
+			return m, nil
+		}
 		return m, m.decideApproval("allow", true)
 	case "d":
+		if !m.settings.ApproveEnabled {
+			m.flash = "approval blocking is OFF (settings ',')"
+			return m, nil
+		}
 		return m, m.decideApproval("deny", false)
 	case "x":
 		return m, m.toggleArchiveCurrent()
@@ -458,6 +474,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "T":
 		return m, m.startTabEdit()
 	case "s":
+		if !m.settings.SummaryEnabled {
+			m.flash = "summarize is OFF (settings ',')"
+			return m, nil
+		}
 		return m, m.summarizeCurrent()
 	case ",":
 		m.pane = paneSettings
@@ -1333,8 +1353,18 @@ func (m *model) handleKeySettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case settings.KindInt:
 			m.settingsEdit = true
-			cur := settings.Get(m.settings, cur.Key).(int)
-			m.settingsBuffer = strconv.Itoa(cur)
+			v := settings.Get(m.settings, cur.Key).(int)
+			m.settingsBuffer = strconv.Itoa(v)
+		case settings.KindAction:
+			if cur.Apply != nil {
+				next, err := cur.Apply(m.ctx, m.db, m.settings)
+				if err == nil {
+					m.settings = next
+					m.flash = "applied: " + cur.Label
+				} else {
+					m.err = err
+				}
+			}
 		}
 	}
 	return m, nil
@@ -1364,6 +1394,8 @@ func (m *model) renderSettingsBody(height int) string {
 			} else {
 				valStr = fmt.Sprintf("%d", cur)
 			}
+		case settings.KindAction:
+			valStr = pendingStyle.Render("[run]")
 		}
 		labelLine := fmt.Sprintf("%s%-32s  %s", marker, s.Label, valStr)
 		if i == m.settingsSel {

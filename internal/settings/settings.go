@@ -14,10 +14,19 @@ import (
 // Settings is the typed snapshot the TUI takes on startup. Field defaults
 // are applied when the underlying row is missing or unparsable.
 type Settings struct {
-	AutoRepoTabs      bool
-	BellOnPending     bool
-	NewestAtBottom    bool // session list with newest sessions at the bottom
-	LayoutVertical    bool // stack list above transcript instead of left/right
+	AutoRepoTabs   bool
+	BellOnPending  bool
+	NewestAtBottom bool // session list with newest sessions at the bottom
+	LayoutVertical bool // stack list above transcript instead of left/right
+
+	// Risk-bearing capabilities. Each defaults to ON for parity with prior
+	// behavior; the operator can flip them off individually or via the
+	// "Apply secure preset" action on the settings page.
+	ApproveEnabled  bool // PermissionRequest blocking + a/A/d shortcuts
+	SummaryEnabled  bool // s key + claude -p spawn
+	AttachEnabled   bool // Enter spawns claude --resume / tmux switch
+	AutoInstallSync bool // server boot rewrites settings.json on token mismatch
+
 	TailBudgetKB      int
 	SummaryTimeoutSec int
 	RefreshIntervalMs int
@@ -28,6 +37,11 @@ const (
 	keyBellOnPending     = "bell_on_pending"
 	keyNewestAtBottom    = "newest_at_bottom"
 	keyLayoutVertical    = "layout_vertical"
+	keyApproveEnabled    = "approve_enabled"
+	keySummaryEnabled    = "summary_enabled"
+	keyAttachEnabled     = "attach_enabled"
+	keyAutoInstallSync   = "auto_install_sync"
+	keyPresetSecure      = "preset_secure"
 	keyTailBudgetKB      = "tail_budget_kb"
 	keySummaryTimeoutSec = "summary_timeout_sec"
 	keyRefreshIntervalMs = "refresh_interval_ms"
@@ -40,6 +54,10 @@ func Defaults() Settings {
 		BellOnPending:     true,
 		NewestAtBottom:    false,
 		LayoutVertical:    false,
+		ApproveEnabled:    true,
+		SummaryEnabled:    true,
+		AttachEnabled:     true,
+		AutoInstallSync:   true,
 		TailBudgetKB:      256,
 		SummaryTimeoutSec: 180,
 		RefreshIntervalMs: 1000,
@@ -59,6 +77,10 @@ func Load(ctx context.Context, d *db.DB) (Settings, error) {
 		{keyBellOnPending, func(v string) { out.BellOnPending = parseBool(v, out.BellOnPending) }},
 		{keyNewestAtBottom, func(v string) { out.NewestAtBottom = parseBool(v, out.NewestAtBottom) }},
 		{keyLayoutVertical, func(v string) { out.LayoutVertical = parseBool(v, out.LayoutVertical) }},
+		{keyApproveEnabled, func(v string) { out.ApproveEnabled = parseBool(v, out.ApproveEnabled) }},
+		{keySummaryEnabled, func(v string) { out.SummaryEnabled = parseBool(v, out.SummaryEnabled) }},
+		{keyAttachEnabled, func(v string) { out.AttachEnabled = parseBool(v, out.AttachEnabled) }},
+		{keyAutoInstallSync, func(v string) { out.AutoInstallSync = parseBool(v, out.AutoInstallSync) }},
 		{keyTailBudgetKB, func(v string) { out.TailBudgetKB = parseInt(v, out.TailBudgetKB) }},
 		{keySummaryTimeoutSec, func(v string) { out.SummaryTimeoutSec = parseInt(v, out.SummaryTimeoutSec) }},
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
@@ -103,6 +125,8 @@ type Spec struct {
 	Kind  Kind
 	// Min / Max are only consulted when Kind == KindInt.
 	Min, Max int
+	// Apply is called when KindAction rows are activated.
+	Apply ActionFunc
 }
 
 type Kind int
@@ -110,7 +134,13 @@ type Kind int
 const (
 	KindBool Kind = iota
 	KindInt
+	// KindAction is a "button" row on the settings page. The Apply func
+	// runs when the operator activates it; the spec carries no value.
+	KindAction
 )
+
+// Spec.Apply is non-nil only for KindAction rows.
+type ActionFunc func(ctx context.Context, d *db.DB, s Settings) (Settings, error)
 
 // AllSpecs returns every setting in display order. The TUI uses this both
 // to render the modal page and to dispatch updates without a giant switch.
@@ -120,10 +150,31 @@ func AllSpecs() []Spec {
 		{Key: keyBellOnPending, Label: "Bell on pending", Help: "Ring the terminal bell when the pending count goes from 0 to >0", Kind: KindBool},
 		{Key: keyNewestAtBottom, Label: "Newest at bottom", Help: "Show the newest session at the bottom of the list (matches the transcript tail orientation)", Kind: KindBool},
 		{Key: keyLayoutVertical, Label: "Vertical layout", Help: "Stack the session list above the transcript pane instead of side-by-side; useful for tall / narrow terminals", Kind: KindBool},
+		// Risk-bearing toggles
+		{Key: keyApproveEnabled, Label: "Approval blocking", Help: "When OFF, ccdash never holds PermissionRequest hooks — Claude prompts you in the terminal as it would without ccdash, and the a/A/d shortcuts are disabled", Kind: KindBool},
+		{Key: keySummaryEnabled, Label: "Summarize via claude -p", Help: "When OFF, the 's' key is disabled and ccdash never spawns claude -p (no transcript digests sent over the network)", Kind: KindBool},
+		{Key: keyAttachEnabled, Label: "Attach (enter)", Help: "When OFF, Enter only shows session info — ccdash never spawns claude --resume or runs tmux switch-client", Kind: KindBool},
+		{Key: keyAutoInstallSync, Label: "Auto-rewrite settings.json", Help: "When OFF, server start does NOT silently rewrite ~/.claude/settings.json when the token rotates; you'll need to run install-hooks manually", Kind: KindBool},
+		{Key: keyPresetSecure, Label: "Apply secure preset", Help: "Observation-only mode: turns off approval blocking, summarize, attach, and auto-install sync in one go", Kind: KindAction, Apply: applySecurePreset},
+		// Numeric tunables
 		{Key: keyTailBudgetKB, Label: "Right-pane tail budget (KB)", Help: "Bytes of transcript loaded for the inline live tail; bigger == more context, slower", Kind: KindInt, Min: 32, Max: 8192},
 		{Key: keySummaryTimeoutSec, Label: "Summary timeout (s)", Help: "How long to wait for `claude -p` to produce a summary before giving up", Kind: KindInt, Min: 30, Max: 600},
 		{Key: keyRefreshIntervalMs, Label: "Refresh interval (ms)", Help: "How often the TUI re-queries the DB for new state", Kind: KindInt, Min: 250, Max: 10000},
 	}
+}
+
+// applySecurePreset turns off every risk-bearing capability in one shot.
+// Convenience for operators who want pure observation without auditing each
+// flag individually.
+func applySecurePreset(ctx context.Context, d *db.DB, s Settings) (Settings, error) {
+	for _, k := range []string{keyApproveEnabled, keySummaryEnabled, keyAttachEnabled, keyAutoInstallSync} {
+		next, err := Set(ctx, d, s, k, false)
+		if err != nil {
+			return s, err
+		}
+		s = next
+	}
+	return s, nil
 }
 
 // Get returns the current value of one setting. The result is *any* — bool
@@ -139,6 +190,14 @@ func Get(s Settings, key string) any {
 		return s.NewestAtBottom
 	case keyLayoutVertical:
 		return s.LayoutVertical
+	case keyApproveEnabled:
+		return s.ApproveEnabled
+	case keySummaryEnabled:
+		return s.SummaryEnabled
+	case keyAttachEnabled:
+		return s.AttachEnabled
+	case keyAutoInstallSync:
+		return s.AutoInstallSync
 	case keyTailBudgetKB:
 		return s.TailBudgetKB
 	case keySummaryTimeoutSec:
@@ -161,6 +220,14 @@ func Set(ctx context.Context, d *db.DB, s Settings, key string, value any) (Sett
 		s.NewestAtBottom = value.(bool)
 	case keyLayoutVertical:
 		s.LayoutVertical = value.(bool)
+	case keyApproveEnabled:
+		s.ApproveEnabled = value.(bool)
+	case keySummaryEnabled:
+		s.SummaryEnabled = value.(bool)
+	case keyAttachEnabled:
+		s.AttachEnabled = value.(bool)
+	case keyAutoInstallSync:
+		s.AutoInstallSync = value.(bool)
 	case keyTailBudgetKB:
 		s.TailBudgetKB = value.(int)
 	case keySummaryTimeoutSec:

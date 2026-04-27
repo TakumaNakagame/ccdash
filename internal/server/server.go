@@ -22,6 +22,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/procmap"
 	"github.com/takumanakagame/ccmanage/internal/redact"
+	"github.com/takumanakagame/ccmanage/internal/settings"
 )
 
 type Server struct {
@@ -148,9 +149,15 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 //
 // Skipped silently when no hook entries are present yet — a brand new
 // install where the user hasn't run install-hooks at all should stay
-// hands-off.
+// hands-off. Also skipped when the operator has disabled
+// auto_install_sync via settings; in that case a token mismatch surfaces
+// as 401s and the operator runs install-hooks deliberately.
 func (s *Server) syncInstalledHooks() {
 	if s.token == "" {
+		return
+	}
+	cfg, err := settings.Load(context.Background(), s.db)
+	if err == nil && !cfg.AutoInstallSync {
 		return
 	}
 	in, err := hookcfg.DefaultInstall()
@@ -514,6 +521,17 @@ func (s *Server) handlePermissionRequest(w http.ResponseWriter, r *http.Request)
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Secure-preset / explicit opt-out: if the operator turned approval
+	// blocking off, return immediately so Claude shows its own prompt as
+	// it would without ccdash. The pending row stays in the DB so the
+	// dashboard still surfaces it for visibility, but the discovery loop
+	// will sweep it to 'timeout' shortly.
+	cfg, _ := settings.Load(r.Context(), s.db)
+	if !cfg.ApproveEnabled {
+		writeOK(w, nil)
 		return
 	}
 
