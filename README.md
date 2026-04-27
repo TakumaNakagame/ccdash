@@ -36,8 +36,8 @@ curl -fsSL https://raw.githubusercontent.com/TakumaNakagame/ccdash/main/install.
 ```
 
 Drops a binary in `$HOME/.local/bin` (override with `CCDASH_INSTALL_DIR=...`).
-Already installed? Just `ccdash update` — it talks to the GitHub API and
-swaps the binary atomically.
+If you have it already, just run `ccdash update` — it talks to the GitHub
+API and swaps the binary atomically.
 
 ### Build from source
 
@@ -100,7 +100,7 @@ ccdash --version               # report the current version
 
 ### TUI keys
 
-**Sessions view (default)**
+#### Sessions view (default)
 
 | Key | Action |
 | --- | --- |
@@ -124,7 +124,7 @@ ccdash --version               # report the current version
 | `r` | force refresh |
 | `q` / `ctrl+c` | quit |
 
-**Transcript modal (`o`)**
+#### Transcript modal (`o`)
 
 | Key | Action |
 | --- | --- |
@@ -134,7 +134,7 @@ ccdash --version               # report the current version
 | `r` | reload from disk |
 | `esc` / `q` / `tab` | back to sessions |
 
-**Settings page (`,`)**
+#### Settings page (`,`)
 
 | Key | Action |
 | --- | --- |
@@ -162,14 +162,14 @@ when the total pending count crosses 0 → 1.
 Settings page (`,`) exposes per-feature kill switches so the operator
 can dial back ccdash's reach when they want pure observation:
 
-- **Approval blocking**: when off, ccdash never holds PermissionRequest
+- **Approval blocking** — when off, ccdash never holds PermissionRequest
   hooks — Claude shows its own prompt as before, and the `a` / `A` / `d`
   shortcuts are disabled.
-- **Summarize via `claude -p`**: when off, `s` is disabled and no
+- **Summarize via `claude -p`** — when off, `s` is disabled and no
   digest leaves the host.
-- **Attach (enter)**: when off, `enter` only shows session info, never
+- **Attach (enter)** — when off, `enter` only shows session info, never
   spawns `claude --resume` or runs `tmux switch-client`.
-- **Auto-rewrite settings.json**: when off, server boot does *not*
+- **Auto-rewrite settings.json** — when off, server boot does *not*
   silently update `~/.claude/settings.json` even after a token rotation.
 
 The **"Apply secure preset"** action flips all four to off in one shot
@@ -193,23 +193,25 @@ on a single workstation.
 - Network access of any kind — ccdash's collector binds to `127.0.0.1`
   and will not accept connections from other interfaces
 
-**Explicitly out of scope**:
+#### Explicitly out of scope
+
 - Multi-user / shared-host deployments
 - Public or LAN exposure of the collector
 - Web UI / browser access (there is none — TUI only)
-- Defense against the operator pasting their own secrets into prompts;
-  the best ccdash can do is mask common token patterns before persisting
-  them, and Claude already keeps a copy of every prompt in
-  `~/.claude/projects/*.jsonl` regardless of ccdash
+- Defense against the operator pasting their own secrets into prompts.
+  The best ccdash can do is mask common token patterns before persisting.
+  Claude itself already keeps a copy of every prompt in
+  `~/.claude/projects/*.jsonl` regardless of ccdash.
 
-**Mitigations in this codebase**:
+#### Mitigations in this codebase
+
 - Loopback-only bind, hardcoded — no flag changes the host
 - DB file at `$XDG_STATE_HOME/ccdash/ccdash.sqlite` with `0600` permissions
 - Hook entries in `~/.claude/settings.json` carry an `X-Ccdash-Managed`
   marker so `install-hooks` and `uninstall-hooks` round-trip them
   idempotently without disturbing other user hooks
-- Random shared token at `$XDG_STATE_HOME/ccdash/token` (mode `0600`) is
-  required on every hook + decision request, so other UNIX users on the
+- Random shared token at `$XDG_STATE_HOME/ccdash/token` (mode `0600`).
+  Required on every hook + decision request, so other UNIX users on the
   same host can't forge events or approve tools by reaching the loopback
   port. The server auto-rewrites the hook headers when it rotates.
 - Token-bucket rate limit on every authenticated route (50 QPS / 100
@@ -249,8 +251,7 @@ install.sh                      curl-installable shell installer
 
 ## State
 
-- DB: `$XDG_STATE_HOME/ccdash/ccdash.sqlite` (default
-  `~/.local/state/ccdash/`), `0600`
+- DB: `$XDG_STATE_HOME/ccdash/ccdash.sqlite` (default `~/.local/state/ccdash/`), `0600`
 - Token: `$XDG_STATE_HOME/ccdash/token`, `0600`
 - Server bind: `127.0.0.1:9123` (loopback only — never exposed externally)
 - ccdash hook entries are tagged with the `X-Ccdash-Managed: true`

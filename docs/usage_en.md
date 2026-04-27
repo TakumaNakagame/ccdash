@@ -6,8 +6,6 @@ focuses on workflows, keybindings, and what each surface is for.
 
 > 日本語版: [usage_jp.md](./usage_jp.md)
 
----
-
 ## 1. First-time setup
 
 Install the binary (latest GitHub release):
@@ -44,8 +42,6 @@ Confirm:
 ccdash --version
 ```
 
----
-
 ## 2. Daily workflow
 
 Run `claude` as you normally would. ccdash watches what you do and
@@ -73,8 +69,6 @@ ccdash               # picks up the existing server
 
 The detached collector logs to `/tmp/ccdash-server.log`. Stop it with
 `pkill -f 'ccdash server'`.
-
----
 
 ## 3. Reading the dashboard
 
@@ -112,15 +106,13 @@ tab; `All` shows every session.
 Sessions are bucketed by `last_seen`:
 
 - ★ **Favorites** (anything pinned, regardless of date)
-- **Today**
-- **Yesterday**
+- **Today** (sessions seen today)
+- **Yesterday** (sessions seen the previous day)
 - **This week** (2-7 days ago)
 - **Earlier this month** (8-30 days)
 - `Month YYYY` (older)
 
 `f` toggles favorite. Favorites pin to the top of the list.
-
----
 
 ## 4. Group navigation
 
@@ -147,8 +139,6 @@ Pinning to a single tab at launch:
 ccdash --group home-lab          # locks the dashboard, hides the strip
 ccdash --group "deploy review"   # spaces are fine for user-named groups
 ```
-
----
 
 ## 5. Right-pane transcript
 
@@ -185,8 +175,6 @@ bottom" — whenever you switch sessions.
 For longer reading sessions, press `o` on a session to open the full
 transcript modal. This loads the entire JSONL (not just the tail) and
 lets you scroll through everything.
-
----
 
 ## 6. Approvals
 
@@ -229,14 +217,12 @@ Required confirmations:
 In archive view (`X` toggles), `Ctrl+X` becomes a bulk-unarchive of
 the same tab.
 
----
-
 ## 7. Summarize (`s`)
 
 Press `s` on a session to ask Claude to summarize its conversation.
 ccdash builds a compact digest (USER prompts + CLAUDE replies + TOOL
-calls, dropping noisy tool_results and thinking blocks), runs it
-through `internal/redact` to mask common secret patterns, and pipes it
+calls, dropping noisy tool_results and thinking blocks). It then masks
+common secret patterns through `internal/redact` and pipes the digest
 to `claude -p` in an isolated subprocess.
 
 The first press shows a `y/n` confirmation banner. After confirming:
@@ -253,8 +239,6 @@ The `claude -p` spawn is isolated with `--setting-sources project` and
 cwd `/tmp` so it doesn't inherit ccdash's hooks (otherwise the spawn
 would create another session in the dashboard).
 
----
-
 ## 8. Attach (`enter`)
 
 Pressing `enter` on a session attempts to switch focus to it:
@@ -268,8 +252,6 @@ Pressing `enter` on a session attempts to switch focus to it:
 Tmux integration is automatic when the session's pane is detected via
 `tmux list-panes`. No extra setup needed — install tmux, run `claude`
 inside a tmux pane, and `enter` becomes a single-keystroke pane switch.
-
----
 
 ## 9. Search (`/`)
 
@@ -288,8 +270,6 @@ Search composes with the project filter and archive view by
 intersection. The header shows `🔍 <query>` while a search is active;
 press `Esc` (with the search input closed) to clear.
 
----
-
 ## 10. Settings page (`,`)
 
 Open with `,` from the sessions view. Keys:
@@ -306,14 +286,14 @@ Settings persist across launches in `settings` table of the DB.
 
 These let you scale ccdash's reach down to "observation only":
 
-- **Approval blocking**: when off, ccdash never holds PermissionRequest
+- **Approval blocking** — when off, ccdash never holds PermissionRequest
   hooks. Claude prompts in its own terminal as before; `a`/`A`/`d` are
   disabled.
-- **Summarize via claude -p**: when off, `s` is disabled and no digest
+- **Summarize via claude -p** — when off, `s` is disabled and no digest
   leaves the host.
-- **Attach (enter)**: when off, `enter` only shows session info, never
+- **Attach (enter)** — when off, `enter` only shows session info, never
   spawns subprocesses.
-- **Auto-rewrite settings.json**: when off, server start does not
+- **Auto-rewrite settings.json** — when off, server start does not
   silently update `~/.claude/settings.json` even after a token rotation.
 
 The **Apply secure preset** action flips all four to off in one shot.
@@ -325,7 +305,7 @@ The **Apply secure preset** action flips all four to off in one shot.
 - **Vertical auto threshold (cols)**: the width at which auto-mode
   flips vertical. Default 100. The row shows your live terminal width
   next to the value, e.g. `(now: 142 cols, ≥ threshold)`.
-- **Newest at bottom**: reverses the list so the most recent session
+- **Newest at bottom** — reverses the list so the most recent session
   is at the bottom (matching the transcript tail orientation).
 
 ### Tunables
@@ -335,8 +315,6 @@ The **Apply secure preset** action flips all four to off in one shot.
 - **Summary timeout (s)**: ceiling for `claude -p`. Default 180.
 - **Refresh interval (ms)**: how often the TUI re-queries the DB.
   Default 1000.
-
----
 
 ## 11. Self-update
 
@@ -357,8 +335,6 @@ curl -fsSL https://raw.githubusercontent.com/TakumaNakagame/ccdash/main/install.
   | CCDASH_VERSION=v0.1.3 sh
 ```
 
----
-
 ## 12. Uninstall
 
 ```sh
@@ -369,8 +345,6 @@ rm $(which ccdash)           # remove the binary itself
 
 `uninstall-hooks` only removes entries tagged with `X-Ccdash-Managed:
 true`; any other hooks you added stay in place.
-
----
 
 ## 13. Files and locations
 
@@ -383,8 +357,6 @@ true`; any other hooks you added stay in place.
 | `/tmp/ccdash-server.log` | detached collector log (`-k` mode) |
 
 `$XDG_STATE_HOME` defaults to `~/.local/state` on Linux/macOS.
-
----
 
 ## 14. Troubleshooting
 
