@@ -256,6 +256,7 @@ func (m *model) spawnNewSession(expanded string, created bool) tea.Cmd {
 	}
 	c := exec.Command("claude")
 	c.Dir = expanded
+	c.Env = ptySafeEnv()
 	sess := attach.New(c)
 	if err := sess.Start(); err != nil {
 		return func() tea.Msg { return attachDoneMsg{err: err} }
@@ -280,6 +281,45 @@ func (m *model) spawnNewSession(expanded string, created bool) tea.Cmd {
 			return attachDoneMsg{msg: "claude session ended"}
 		}
 	})
+}
+
+// ptySafeEnv returns a copy of the current environment with terminal-emulator-
+// specific variables stripped or overridden. Terminal emulators such as Warp,
+// iTerm2, and Ghostty set proprietary env vars that claude detects and uses to
+// activate integration features (including auth flows) specific to those
+// terminals. Inside our PTY those integrations don't work — the outer-terminal
+// protocol is not forwarded — which can break claude's login session. Stripping
+// them causes claude to fall back to its portable code paths.
+func ptySafeEnv() []string {
+	stripPfx := []string{"WARP_", "GHOSTTY_", "ITERM_", "KITTY_", "TABBY_"}
+	stripKey := map[string]bool{
+		"TERM_PROGRAM":         true,
+		"TERM_PROGRAM_VERSION": true,
+	}
+	src := os.Environ()
+	out := make([]string, 0, len(src))
+	for _, kv := range src {
+		key, _, _ := strings.Cut(kv, "=")
+		if stripKey[key] {
+			continue
+		}
+		skip := false
+		for _, p := range stripPfx {
+			if strings.HasPrefix(key, p) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		if key == "TERM" {
+			out = append(out, "TERM=xterm-256color")
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // expandPath replaces a leading ~ with the operator's home dir and
@@ -1606,6 +1646,7 @@ func (m *model) attachCurrent() tea.Cmd {
 		if s.Cwd != "" {
 			c.Dir = s.Cwd
 		}
+		c.Env = ptySafeEnv()
 		sess = attach.New(c)
 		m.attached[s.SessionID] = sess
 	}
