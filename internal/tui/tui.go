@@ -2478,6 +2478,10 @@ func renderTranscriptMessage(msg transcript.Message, width int) []string {
 		return out
 	}
 	for _, raw := range strings.Split(body, "\n") {
+		// Claude often emits trailing spaces on lines (markdown soft-break
+		// convention). They serve no purpose in our TUI and visibly extend
+		// the row's background past the actual content.
+		raw = strings.TrimRight(raw, " \t")
 		if raw == "" {
 			out = append(out, rowStyle.Render(strings.Repeat(" ", width)))
 			continue
