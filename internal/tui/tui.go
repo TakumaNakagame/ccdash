@@ -627,6 +627,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.flash = msg.msg
 		}
+		return m, tea.Batch(tea.ClearScreen, m.refresh())
 	case summaryDoneMsg:
 		if msg.err != nil {
 			_ = m.db.SetSummary(m.ctx, msg.sessionID, msg.err.Error(), "error")
