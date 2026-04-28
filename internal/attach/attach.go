@@ -1,12 +1,16 @@
 // Package attach runs an interactive subprocess (typically `claude --resume`)
-// inside a PTY while ccdash holds onto the operator's real terminal. Unlike
-// tea.ExecProcess — which suspends Bubble Tea and waits for the child to exit
-// before returning — Run watches stdin for an escape key (Ctrl+], by default)
-// and lets the operator drop back to the ccdash dashboard mid-session.
+// inside a PTY while ccdash holds onto the operator's real terminal.
 //
-// The package is a tea.ExecCommand so Bubble Tea owns alt-screen
-// release/restore; we own everything between those events: raw-mode setup,
-// PTY I/O relay, SIGWINCH propagation, and child shutdown.
+// A Session represents one long-lived child. The first Attach call spawns
+// claude in a PTY; subsequent Attach calls (after a Ctrl+D detach) re-enter
+// the same child. While detached, ccdash is back in its dashboard but the
+// PTY pump is still draining claude's output (into io.Discard, by default)
+// so claude doesn't block on a full kernel write buffer. Detach does NOT
+// terminate claude — the child only dies when it exits on its own or
+// Session.Close is called explicitly (e.g. on operator-initiated kill).
+//
+// AttachCmd wraps a Session as a bubbletea.ExecCommand so the same Session
+// can be passed through tea.Exec on every attach.
 //
 // Linux/macOS only — Windows is not on the roadmap.
 package attach
@@ -18,6 +22,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,119 +31,177 @@ import (
 	"golang.org/x/term"
 )
 
-// EscapeByte is Ctrl+]. We picked it because it's telnet's classic escape and
-// Claude has no use for it. Ctrl+\ would dump a stack trace, Ctrl+C is
-// claude's interrupt, Ctrl+Z is suspend; this one's free.
-const EscapeByte = 0x1d
+// EscapeByte is Ctrl+D (ASCII EOT). When pressed during attach, ccdash
+// pulls control back to the dashboard but leaves claude running. The byte
+// is intercepted before reaching claude, so claude never sees an EOF on
+// stdin — its session remains live, ready for the next attach.
+const EscapeByte = 0x04
 
 // Banner is what we print just before handing control to claude so the
-// operator knows how to come back. Single line, ASCII-safe so it doesn't
-// disturb terminals with weird locales.
-const Banner = "[ccdash] attached — press Ctrl+] to detach\r\n"
+// operator knows how to come back. Single line, ASCII-safe.
+const Banner = "[ccdash] attached — press Ctrl+D to detach (claude keeps running)\r\n"
 
-// Command builds an attach session for the given exec.Cmd. It implements
-// bubbletea.ExecCommand so it can be passed to tea.Exec; Bubble Tea calls
-// SetStdin/SetStdout/SetStderr with the operator's real terminal streams,
-// then calls Run.
-type Command struct {
-	Cmd *exec.Cmd
-
-	// Result is set by Run and is safe to read once Run returns.
-	Result Result
-
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
-}
-
-// Result carries why Run returned. Detached is true when the operator hit the
-// escape key; in that case the child has been signalled and waited on, but
-// any subsequent transcript work has to happen on top of the JSONL the child
-// already flushed. ExitErr is set to the child's exit error if it terminated
-// on its own (or to the kill error path).
+// Result carries why a single Attach call returned. Detached means the
+// operator hit Ctrl+D and the child is still alive in the background.
+// ExitErr is set when the child terminated on its own (or Close was
+// called from another goroutine).
 type Result struct {
 	Detached bool
 	ExitErr  error
 }
 
-// SetStdin / SetStdout / SetStderr satisfy tea.ExecCommand. We hold the
-// streams and only consult them inside Run, where the terminal is ours.
-func (c *Command) SetStdin(r io.Reader)  { c.stdin = r }
-func (c *Command) SetStdout(w io.Writer) { c.stdout = w }
-func (c *Command) SetStderr(w io.Writer) { c.stderr = w }
+// Session is one claude child plus its PTY, reusable across attach/detach
+// cycles. Construct with New and pass to AttachCmd; do not copy.
+type Session struct {
+	cmd *exec.Cmd
 
-// Run is the meat. Allocates a PTY, starts the child attached to it, puts
-// the operator's terminal in raw mode, and pumps bytes back and forth until
-// either the child exits or Ctrl+] is pressed.
-func (c *Command) Run() error {
-	if c.Cmd == nil {
-		return errors.New("attach: nil Cmd")
-	}
-	if c.stdin == nil || c.stdout == nil {
-		return errors.New("attach: stdin/stdout not set (Bubble Tea must call SetStdin/SetStdout first)")
-	}
+	// spawnOnce + spawnErr ensure pty.Start is called exactly once even if
+	// Attach is invoked before the previous Attach has returned (which
+	// shouldn't happen, but defending against it is cheap).
+	spawnOnce sync.Once
+	spawnErr  error
 
-	// We only know how to relay against an actual terminal — Bubble Tea's
-	// non-TTY paths (tests, piped runs) don't apply here.
-	stdinFile, ok := c.stdin.(*os.File)
-	if !ok {
-		return errors.New("attach: stdin is not *os.File; cannot enter raw mode")
+	pty *os.File
+
+	// sinkMu guards sink. The PTY reader goroutine consults it on every
+	// chunk; foreground vs background is a single pointer swap.
+	sinkMu sync.Mutex
+	sink   io.Writer
+
+	// childExit is closed once the child has been Wait()ed on. childErr
+	// holds the result. Set exactly once, before close.
+	childExit chan struct{}
+	childErr  error
+
+	// pumpDone closes when the PTY reader goroutine exits (i.e. EOF / hard
+	// error on the PTY). Used to wait for output drain on close.
+	pumpDone chan struct{}
+
+	// closed flips to 1 when Close has been called, so subsequent Attach
+	// calls bail out cleanly instead of trying to re-spawn.
+	closed atomic.Int32
+}
+
+// New builds a Session for the given exec.Cmd. The child is not started
+// until the first Attach call.
+func New(cmd *exec.Cmd) *Session {
+	return &Session{cmd: cmd, sink: io.Discard}
+}
+
+// Alive reports whether the child is still running. A Session whose child
+// has exited is not Alive; the caller should usually drop it from any
+// per-session map and create a fresh one if it wants to attach again.
+func (s *Session) Alive() bool {
+	if s == nil {
+		return false
 	}
+	if s.closed.Load() != 0 {
+		return false
+	}
+	if s.childExit == nil {
+		// Hasn't been spawned yet, but as far as ccdash is concerned the
+		// session is "ready to attach". Treat that as alive.
+		return true
+	}
+	select {
+	case <-s.childExit:
+		return false
+	default:
+		return true
+	}
+}
+
+// Close terminates the child (SIGTERM, then waits) and releases the PTY.
+// Idempotent; safe to call from any goroutine.
+func (s *Session) Close() error {
+	if s == nil {
+		return nil
+	}
+	if !s.closed.CompareAndSwap(0, 1) {
+		return nil
+	}
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = s.cmd.Process.Signal(syscall.SIGTERM)
+	}
+	if s.childExit != nil {
+		<-s.childExit
+	}
+	if s.pty != nil {
+		_ = s.pty.Close()
+	}
+	if s.pumpDone != nil {
+		<-s.pumpDone
+	}
+	return nil
+}
+
+// Attach blocks while the operator is in attach mode. It puts the
+// terminal in raw mode, forwards stdin to the PTY (intercepting Ctrl+D),
+// and routes PTY output to stdout for the duration of the call. On
+// detach or child exit it tears down its raw-mode + signal-handler
+// state and returns; the Session itself stays usable until Close.
+func (s *Session) Attach() (Result, error) {
+	if s.closed.Load() != 0 {
+		return Result{}, errors.New("attach: session is closed")
+	}
+	stdinFile := os.Stdin
+	stdoutFile := os.Stdout
 	if !term.IsTerminal(int(stdinFile.Fd())) {
-		return errors.New("attach: stdin is not a terminal")
+		return Result{}, errors.New("attach: stdin is not a terminal")
 	}
 
-	// Print the help banner before handing the screen to claude. The banner
-	// is short on purpose; claude redraws aggressively.
-	if _, err := io.WriteString(c.stdout, Banner); err != nil {
-		return fmt.Errorf("attach: write banner: %w", err)
+	// Lazy spawn on first Attach. spawnOnce makes the Wait goroutine + PTY
+	// pump exactly singleton across the Session's lifetime.
+	s.spawnOnce.Do(func() {
+		s.spawnErr = s.spawn()
+	})
+	if s.spawnErr != nil {
+		return Result{}, s.spawnErr
+	}
+	if !s.Alive() {
+		return Result{ExitErr: s.childErr}, errors.New("attach: child already exited")
 	}
 
-	ptyFile, err := pty.Start(c.Cmd)
-	if err != nil {
-		return fmt.Errorf("attach: pty.Start: %w", err)
+	if _, err := io.WriteString(stdoutFile, Banner); err != nil {
+		return Result{}, fmt.Errorf("attach: write banner: %w", err)
 	}
-	defer ptyFile.Close()
 
 	// Match the PTY size to the operator's terminal up front, then keep
-	// them in sync via SIGWINCH for the duration of the session.
-	if err := syncWinsize(stdinFile, ptyFile); err != nil {
-		// Non-fatal: claude can run with a default 80x24 if we can't ask.
-		fmt.Fprintf(c.stderr, "[ccdash] warning: initial winsize sync failed: %v\r\n", err)
-	}
+	// them in sync via SIGWINCH for the duration of the attach.
+	_ = syncWinsize(stdinFile, s.pty)
 	winchCh := make(chan os.Signal, 1)
 	signal.Notify(winchCh, syscall.SIGWINCH)
 	defer signal.Stop(winchCh)
 	go func() {
 		for range winchCh {
-			_ = syncWinsize(stdinFile, ptyFile)
+			_ = syncWinsize(stdinFile, s.pty)
 		}
 	}()
 
 	oldState, err := term.MakeRaw(int(stdinFile.Fd()))
 	if err != nil {
-		_ = c.Cmd.Process.Kill()
-		_, _ = c.Cmd.Process.Wait()
-		return fmt.Errorf("attach: MakeRaw: %w", err)
+		return Result{}, fmt.Errorf("attach: MakeRaw: %w", err)
 	}
 	defer func() { _ = term.Restore(int(stdinFile.Fd()), oldState) }()
 
-	// childExit fires when claude finishes on its own. Wait must run exactly
-	// once; we serialise it via this goroutine and a single-receive channel.
-	childExit := make(chan error, 1)
-	go func() {
-		childExit <- c.Cmd.Wait()
-	}()
+	// Ask the PTY reader goroutine to start writing chunks to the
+	// operator's terminal. When we return, we'll flip it back to discard.
+	s.setSink(stdoutFile)
+	defer s.setSink(io.Discard)
 
-	// detachReq fires when the input pump sees Ctrl+]. We stop forwarding
-	// stdin, signal the child, then drain the PTY until the child is gone
-	// so claude has a chance to flush its final output before we return.
+	// Nudge claude to redraw against the (possibly changed) winsize so
+	// the operator sees a clean screen instead of stale bytes from before
+	// they detached. SIGWINCH is the gentlest "redraw please" signal.
+	if s.cmd.Process != nil {
+		_ = s.cmd.Process.Signal(syscall.SIGWINCH)
+	}
+
+	// Detach signal — set when the input pump sees Ctrl+D.
 	detachReq := make(chan struct{}, 1)
 
-	// stdin → PTY, with Ctrl+] interception. We track exit via inputDone
-	// so we can guarantee the goroutine is gone before Run returns —
-	// otherwise it would race Bubble Tea for the next keystroke when the
-	// alt-screen comes back.
+	// Stdin → PTY with Ctrl+D interception. Tracked via inputDone so we
+	// can guarantee the goroutine is gone before Run returns; otherwise
+	// it would race Bubble Tea for the next keystroke.
 	inputDone := make(chan struct{})
 	go func() {
 		defer close(inputDone)
@@ -154,7 +218,7 @@ func (c *Command) Run() error {
 				}
 				if idx >= 0 {
 					if idx > 0 {
-						_, _ = ptyFile.Write(buf[:idx])
+						_, _ = s.pty.Write(buf[:idx])
 					}
 					select {
 					case detachReq <- struct{}{}:
@@ -162,7 +226,7 @@ func (c *Command) Run() error {
 					}
 					return
 				}
-				if _, werr := ptyFile.Write(buf[:n]); werr != nil {
+				if _, werr := s.pty.Write(buf[:n]); werr != nil {
 					return
 				}
 			}
@@ -171,54 +235,96 @@ func (c *Command) Run() error {
 			}
 		}
 	}()
-
-	// stopInput unblocks the stdin Read so the goroutine returns. We use
-	// the runtime poller's deadline support (works for TTY fds on
-	// Linux/macOS); the deadline is cleared right after so Bubble Tea's
-	// next reader on the same fd is unaffected.
 	stopInput := func() {
 		_ = stdinFile.SetReadDeadline(time.Unix(1, 0))
 		<-inputDone
 		_ = stdinFile.SetReadDeadline(time.Time{})
 	}
 
-	// PTY → stdout. No filtering — claude's bytes hit the terminal as-is.
-	outputDone := make(chan struct{})
-	go func() {
-		defer close(outputDone)
-		_, _ = io.Copy(c.stdout, ptyFile)
-	}()
-
 	select {
-	case err := <-childExit:
-		// Child terminated on its own. Stop the input pump so it doesn't
-		// race Bubble Tea, then wait for the output pump to drain.
+	case <-s.childExit:
 		stopInput()
-		_ = ptyFile.Close()
-		<-outputDone
-		c.Result.ExitErr = err
-		return nil
-
+		return Result{ExitErr: s.childErr}, nil
 	case <-detachReq:
-		// Operator asked to leave. Send SIGTERM first (claude can flush its
-		// transcript), wait for it to die, then drain remaining output.
-		// stopInput is a no-op here (the goroutine already returned when
-		// it saw EscapeByte) but cheap.
-		c.Result.Detached = true
-		if c.Cmd.Process != nil {
-			_ = c.Cmd.Process.Signal(syscall.SIGTERM)
-		}
-		<-childExit
 		stopInput()
-		_ = ptyFile.Close()
-		<-outputDone
-		return nil
+		return Result{Detached: true}, nil
 	}
 }
 
+// spawn opens the PTY and starts the child. Sets up the long-lived Wait
+// goroutine and the PTY reader pump. Called exactly once per Session via
+// spawnOnce.
+func (s *Session) spawn() error {
+	f, err := pty.Start(s.cmd)
+	if err != nil {
+		return fmt.Errorf("attach: pty.Start: %w", err)
+	}
+	s.pty = f
+	s.childExit = make(chan struct{})
+	go func() {
+		s.childErr = s.cmd.Wait()
+		close(s.childExit)
+		// Closing the PTY here ensures the reader pump exits. Without it,
+		// the pump would block forever on a closed child's PTY which the
+		// kernel tends to leave half-open.
+		_ = s.pty.Close()
+	}()
+	s.pumpDone = make(chan struct{})
+	go func() {
+		defer close(s.pumpDone)
+		buf := make([]byte, 4096)
+		for {
+			n, err := s.pty.Read(buf)
+			if n > 0 {
+				s.sinkMu.Lock()
+				w := s.sink
+				s.sinkMu.Unlock()
+				_, _ = w.Write(buf[:n])
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return nil
+}
+
+func (s *Session) setSink(w io.Writer) {
+	s.sinkMu.Lock()
+	s.sink = w
+	s.sinkMu.Unlock()
+}
+
+// AttachCmd implements bubbletea.ExecCommand. It's a thin shim that calls
+// Session.Attach and stashes the Result so the TUI's callback can decide
+// what flash message to show.
+type AttachCmd struct {
+	Session *Session
+	Result  Result
+}
+
+// SetStdin / SetStdout / SetStderr satisfy the interface but are unused —
+// Attach reads/writes os.Stdin / os.Stdout directly because Bubble Tea
+// wraps the input in cancelreader, which hides the underlying *os.File
+// we need for raw-mode operations.
+func (a *AttachCmd) SetStdin(io.Reader)  {}
+func (a *AttachCmd) SetStdout(io.Writer) {}
+func (a *AttachCmd) SetStderr(io.Writer) {}
+
+// Run delegates to Session.Attach. Run-level errors (e.g. raw-mode setup
+// failures) are returned directly; success/detach state lives in Result.
+func (a *AttachCmd) Run() error {
+	if a == nil || a.Session == nil {
+		return errors.New("attach: nil Session")
+	}
+	res, err := a.Session.Attach()
+	a.Result = res
+	return err
+}
+
 // syncWinsize reads the operator's terminal size and applies it to the PTY
-// so claude renders against the right geometry. Wraps the syscalls in a
-// helper because we call it from both startup and the SIGWINCH handler.
+// so claude renders against the right geometry. Called from startup and
+// the SIGWINCH handler.
 func syncWinsize(tty *os.File, ptyFile *os.File) error {
 	ws, err := pty.GetsizeFull(tty)
 	if err != nil {

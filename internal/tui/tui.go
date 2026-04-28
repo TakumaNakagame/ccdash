@@ -20,6 +20,7 @@ import (
 
 	"github.com/takumanakagame/ccmanage/internal/attach"
 	"github.com/takumanakagame/ccmanage/internal/auth"
+	"github.com/takumanakagame/ccmanage/internal/buildinfo"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
@@ -116,17 +117,43 @@ type model struct {
 	transcriptScroll   int
 	transcriptTitle    string
 	transcriptPath     string
+
+	// attached holds long-lived attach.Session instances keyed by session
+	// id. Detaching with Ctrl+D leaves the entry in place so the next
+	// Enter resumes the same child instead of spawning a new one. Sessions
+	// whose child has died are pruned at attach time.
+	attached map[string]*attach.Session
+
+	// animTick advances on every animTickMsg (~150 ms). Drives the spinner
+	// frame for active rows so the operator can tell at a glance which
+	// sessions are doing work right now. Wraps naturally — we mod into the
+	// frame slice on read.
+	animTick int
 }
 
 func newModel(ctx context.Context, d *db.DB) *model {
-	return &model{ctx: ctx, db: d, settings: settings.Defaults()}
+	return &model{ctx: ctx, db: d, settings: settings.Defaults(), attached: map[string]*attach.Session{}}
+}
+
+// quit tears down any backgrounded attach.Sessions before returning
+// tea.Quit, so we don't leave orphan claude processes attached to a PTY
+// whose only owner just exited. Each Close sends SIGTERM and waits — fast
+// in practice (claude flushes its JSONL and exits quickly) but bounded by
+// the kernel's process-exit semantics either way.
+func (m *model) quit() tea.Cmd {
+	for sid, s := range m.attached {
+		_ = s.Close()
+		delete(m.attached, sid)
+	}
+	return tea.Quit
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.refresh(), tickCmd(m.tickInterval()))
+	return tea.Batch(m.refresh(), tickCmd(m.tickInterval()), animTickCmd())
 }
 
 type tickMsg time.Time
+type animTickMsg time.Time
 
 type sessionsMsg []mdl.Session
 type eventsMsg []mdl.Event
@@ -138,6 +165,14 @@ func tickCmd(every time.Duration) tea.Cmd {
 		every = time.Second
 	}
 	return tea.Tick(every, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+// animTickCmd schedules the next spinner frame. 150 ms feels lively without
+// drowning the terminal in repaints — Bubble Tea coalesces renders, but
+// every tick also rebuilds the view tree, so we don't want to push it
+// faster than the eye actually resolves.
+func animTickCmd() tea.Cmd {
+	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg { return animTickMsg(t) })
 }
 
 func (m *model) tickInterval() time.Duration {
@@ -231,6 +266,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.lastTick = time.Time(msg)
 		return m, tea.Batch(m.refresh(), tickCmd(m.tickInterval()))
+	case animTickMsg:
+		m.animTick++
+		return m, animTickCmd()
 	case sessionsMsg:
 		prev := m.currentSessionID()
 		m.allSessions = []mdl.Session(msg)
@@ -429,7 +467,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "ctrl+c", "q":
-		return m, tea.Quit
+		return m, m.quit()
 	case "j", "down":
 		return m, m.move(1)
 	case "k", "up":
@@ -1148,7 +1186,7 @@ func (m *model) handleKeyTranscript(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	bodyHeight := m.transcriptVisibleHeight()
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		return m, m.quit()
 	case "q", "esc", "tab":
 		m.pane = paneSessions
 		return m, nil
@@ -1233,38 +1271,40 @@ func (m *model) attachCurrent() tea.Cmd {
 			return attachDoneMsg{err: err, msg: "switched to " + s.Pane}
 		})
 	}
-	if s.ProcPID != 0 {
-		tty := ttyForPID(s.ProcPID)
-		return func() tea.Msg {
-			info := fmt.Sprintf("running: pid=%d", s.ProcPID)
-			if tty != "" {
-				info += " tty=" + tty
-			}
-			info += " — switch to that terminal manually (or use tmux to enable Enter-to-attach)"
-			return attachDoneMsg{msg: info}
+	// No tmux pane — go through the inline attach path. We keep a Session
+	// per session id so detaching with Ctrl+D leaves claude running in
+	// the background; the next Enter on the same row resumes that same
+	// child instead of spawning a fresh `claude --resume` (which would
+	// fork the JSONL into a divergent copy). Sessions whose child has
+	// died are pruned here so the next Enter starts cleanly.
+	sess, ok := m.attached[s.SessionID]
+	if ok && !sess.Alive() {
+		_ = sess.Close()
+		delete(m.attached, s.SessionID)
+		sess = nil
+		ok = false
+	}
+	if !ok {
+		c := exec.Command("claude", "--resume", s.SessionID)
+		if s.Cwd != "" {
+			c.Dir = s.Cwd
 		}
+		sess = attach.New(c)
+		m.attached[s.SessionID] = sess
 	}
-	// Session is stopped — start a fresh `claude --resume`. We use the
-	// internal attach package, which keeps ccdash on top of the session:
-	// claude exiting on its own returns to the dashboard (same as the old
-	// tea.ExecProcess path), but Ctrl+] now also detaches without waiting
-	// for the operator to /exit out of claude.
-	c := exec.Command("claude", "--resume", s.SessionID)
-	if s.Cwd != "" {
-		c.Dir = s.Cwd
-	}
-	ac := &attach.Command{Cmd: c}
+	ac := &attach.AttachCmd{Session: sess}
+	sid := s.SessionID
 	return tea.Exec(ac, func(err error) tea.Msg {
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}
 		switch {
 		case ac.Result.Detached:
-			return attachDoneMsg{msg: "detached (claude session terminated)"}
+			return attachDoneMsg{msg: "detached — claude still running in background (Enter to reattach)"}
 		case ac.Result.ExitErr != nil:
-			return attachDoneMsg{err: ac.Result.ExitErr}
+			return attachDoneMsg{err: ac.Result.ExitErr, msg: "claude session ended (id " + shortID(sid) + ")"}
 		default:
-			return attachDoneMsg{msg: "claude session ended"}
+			return attachDoneMsg{msg: "claude session ended (id " + shortID(sid) + ")"}
 		}
 	})
 }
@@ -1367,6 +1407,9 @@ func clampLines(s string, n int) string {
 var (
 	titleStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
 	subtitleStyle     = lipgloss.NewStyle().Faint(true)
+	// Black on bright orange — meant to be unmissable so a stale dev build
+	// stands out against a release binary's clean header.
+	devBadgeStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("208")).Padding(0, 1)
 	selectedRow       = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("15"))
 	pendingStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
 	pendingRowStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
@@ -1405,6 +1448,19 @@ func (m *model) renderHeader() string {
 	right := subtitleStyle.Render(fmt.Sprintf("sessions: %d  ", len(m.sessions))) +
 		pendingPart +
 		subtitleStyle.Render("  "+m.lastTick.Format("15:04:05"))
+	if buildinfo.IsDev() {
+		// On dev builds: bright orange "DEV", a content-derived hash so we
+		// can spot stale binaries at a glance, and the binary's mtime as
+		// the closest stand-in for "build time".
+		parts := []string{"DEV"}
+		if h := buildinfo.Hash(); h != "" {
+			parts = append(parts, h)
+		}
+		if t := buildinfo.BuiltAt(); !t.IsZero() {
+			parts = append(parts, t.Local().Format("2006-01-02 15:04"))
+		}
+		right += "  " + devBadgeStyle.Render(strings.Join(parts, " "))
+	}
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
@@ -2001,7 +2057,7 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if selected {
 		marker = "▶"
 	}
-	statusDot := renderStatusDot(s.Status)
+	statusDot := renderStatusDot(s.Status, m.animTick)
 	age := runewidth.FillRight(humanDuration(time.Since(s.LastSeen)), 4)
 
 	title := s.DisplayTitle()
@@ -2540,10 +2596,20 @@ func wrapToWidth(s string, width int) []string {
 	return out
 }
 
-func renderStatusDot(s mdl.SessionStatus) string {
+// activeSpinnerFrames is the per-tick glyph cycle for "claude is working
+// right now" rows. Braille cells render at single-cell width on every
+// terminal worth supporting and the rotation is recognisable as motion
+// even at small sizes.
+var activeSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func renderStatusDot(s mdl.SessionStatus, tick int) string {
 	switch s {
 	case mdl.StatusActive:
-		return statusActive.Render("●")
+		// Spin only on the active state — idle / recent / stopped get a
+		// static dot so motion in the list reads as "this one is doing
+		// something" and not visual noise.
+		frame := activeSpinnerFrames[((tick%len(activeSpinnerFrames))+len(activeSpinnerFrames))%len(activeSpinnerFrames)]
+		return statusActive.Bold(true).Render(frame)
 	case mdl.StatusIdle:
 		return statusIdle.Render("●")
 	case mdl.StatusRecent:
