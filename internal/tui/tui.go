@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -2903,9 +2904,12 @@ func renderTranscriptMessage(msg transcript.Message, width int) []string {
 	}
 	for _, raw := range strings.Split(body, "\n") {
 		// Claude often emits trailing spaces on lines (markdown soft-break
-		// convention). They serve no purpose in our TUI and visibly extend
-		// the row's background past the actual content.
-		raw = strings.TrimRight(raw, " \t")
+		// convention) and sometimes \r before the \n on transcripts that
+		// originated outside Unix. Trim every trailing Unicode whitespace
+		// rune so the row's background color doesn't extend past the
+		// actual content. \n is impossible here (we just split on it), so
+		// IsSpace is the right cut.
+		raw = strings.TrimRightFunc(raw, unicode.IsSpace)
 		if raw == "" {
 			out = append(out, rowStyle.Render(strings.Repeat(" ", width)))
 			continue

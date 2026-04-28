@@ -328,6 +328,16 @@ func runTUI(ctx context.Context, keepServer bool, lockGroup string) error {
 
 	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
 
+	// Redirect log output to a file before the TUI takes the screen,
+	// regardless of whether we end up running an embedded server. Stray
+	// stderr writes during Bubble Tea's alt-screen would otherwise corrupt
+	// the visible buffer — and in embedded mode we know server goroutines
+	// will log; in the other modes we still want any debug log.Printf
+	// calls (and panics) to land somewhere visible to the operator
+	// instead of nowhere.
+	restoreLog, _ := redirectLog()
+	defer restoreLog()
+
 	serverCtx, cancelServer := context.WithCancel(ctx)
 	defer cancelServer()
 	var serverDone chan struct{}
@@ -351,12 +361,6 @@ func runTUI(ctx context.Context, keepServer bool, lockGroup string) error {
 		}
 	default:
 		// Embedded mode: run the server in this process; tear it down on quit.
-		// Redirect log output to a file first — server goroutines call
-		// log.Printf, and stderr writes during Bubble Tea's alt-screen render
-		// corrupt the visible buffer (the symptom the user saw was the tabs
-		// row vanishing seconds after startup).
-		restoreLog, _ := redirectLog()
-		defer restoreLog()
 		s := server.New(d, addr)
 		serverDone = make(chan struct{})
 		embedded = true
