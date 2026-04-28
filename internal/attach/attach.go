@@ -88,6 +88,29 @@ func New(cmd *exec.Cmd) *Session {
 	return &Session{cmd: cmd, sink: io.Discard}
 }
 
+// Start spawns the child without entering attach mode. Useful when the
+// caller needs the child's PID before the first Attach (e.g. for
+// registering against a "by-PID" map until the session id is known).
+// Cheap to call multiple times; subsequent calls are no-ops.
+func (s *Session) Start() error {
+	if s.closed.Load() != 0 {
+		return errors.New("attach: session is closed")
+	}
+	s.spawnOnce.Do(func() {
+		s.spawnErr = s.spawn()
+	})
+	return s.spawnErr
+}
+
+// PID returns the child's process id once Start (or the first Attach) has
+// run. Zero before that and after Close.
+func (s *Session) PID() int {
+	if s == nil || s.cmd == nil || s.cmd.Process == nil {
+		return 0
+	}
+	return s.cmd.Process.Pid
+}
+
 // Alive reports whether the child is still running. A Session whose child
 // has exited is not Alive; the caller should usually drop it from any
 // per-session map and create a fresh one if it wants to attach again.
@@ -150,13 +173,9 @@ func (s *Session) Attach() (Result, error) {
 		return Result{}, errors.New("attach: stdin is not a terminal")
 	}
 
-	// Lazy spawn on first Attach. spawnOnce makes the Wait goroutine + PTY
-	// pump exactly singleton across the Session's lifetime.
-	s.spawnOnce.Do(func() {
-		s.spawnErr = s.spawn()
-	})
-	if s.spawnErr != nil {
-		return Result{}, s.spawnErr
+	// Lazy spawn on first Attach (idempotent with explicit Start callers).
+	if err := s.Start(); err != nil {
+		return Result{}, err
 	}
 	if !s.Alive() {
 		return Result{ExitErr: s.childErr}, errors.New("attach: child already exited")

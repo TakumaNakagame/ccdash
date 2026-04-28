@@ -102,6 +102,13 @@ type model struct {
 	// want it to fire on a typo.
 	awaitSummaryConfirm bool
 
+	// awaitMkdirConfirm guards the mkdir step when the operator hits
+	// Enter on a path that doesn't exist. y → create + start; anything
+	// else cancels. pendingMkdirPath holds the absolute path we'd
+	// create if the operator confirms.
+	awaitMkdirConfirm bool
+	pendingMkdirPath  string
+
 	// groupLocked is set when the operator launched ccdash with --tab
 	// <name>. The tab strip is hidden, h/l/Tab/Shift+Tab become no-ops,
 	// and the groupFilter never changes.
@@ -124,15 +131,37 @@ type model struct {
 	// whose child has died are pruned at attach time.
 	attached map[string]*attach.Session
 
+	// attachedByPID is the staging area for sessions we spawn ourselves
+	// (via 'n' new-session). The session id only becomes known after
+	// claude writes its first JSONL line and discovery picks it up — until
+	// then we key by PID. The promotion to `attached` happens in
+	// promoteAttached, called from refresh.
+	attachedByPID map[int]*attach.Session
+
 	// animTick advances on every animTickMsg (~150 ms). Drives the spinner
 	// frame for active rows so the operator can tell at a glance which
 	// sessions are doing work right now. Wraps naturally — we mod into the
 	// frame slice on read.
 	animTick int
+
+	// editingNewSession is true while the operator is typing a directory
+	// path in the new-session footer prompt (entered via 'n').
+	editingNewSession bool
+	newSessionBuffer  string
+	// newSessionCompletions caches the directory expansion for the current
+	// buffer prefix; cycled by repeated Tab presses.
+	newSessionCompletions []string
+	newSessionCompIdx     int
 }
 
 func newModel(ctx context.Context, d *db.DB) *model {
-	return &model{ctx: ctx, db: d, settings: settings.Defaults(), attached: map[string]*attach.Session{}}
+	return &model{
+		ctx:           ctx,
+		db:            d,
+		settings:      settings.Defaults(),
+		attached:      map[string]*attach.Session{},
+		attachedByPID: map[int]*attach.Session{},
+	}
 }
 
 // quit tears down any backgrounded attach.Sessions before returning
@@ -145,7 +174,170 @@ func (m *model) quit() tea.Cmd {
 		_ = s.Close()
 		delete(m.attached, sid)
 	}
+	for pid, s := range m.attachedByPID {
+		_ = s.Close()
+		delete(m.attachedByPID, pid)
+	}
 	return tea.Quit
+}
+
+// promoteAttached walks freshly-loaded session rows and links any pending
+// PID-keyed attach.Session into the SessionID-keyed map. Called from the
+// sessionsMsg handler so that the moment discovery picks up a new session
+// the row's Enter key wires through to the same child the operator just
+// detached from.
+func (m *model) promoteAttached() {
+	if len(m.attachedByPID) == 0 {
+		return
+	}
+	for _, s := range m.allSessions {
+		if s.ProcPID == 0 || s.SessionID == "" {
+			continue
+		}
+		sess, ok := m.attachedByPID[s.ProcPID]
+		if !ok {
+			continue
+		}
+		if existing, already := m.attached[s.SessionID]; !already || existing != sess {
+			// Existing entries by id win — there's no safe automatic
+			// merge of two different live PTYs onto the same id.
+			if !already {
+				m.attached[s.SessionID] = sess
+			}
+		}
+		delete(m.attachedByPID, s.ProcPID)
+	}
+}
+
+// startNewSession is the front door for the `n` flow's final Enter.
+// It expands the path, checks whether the directory exists, and either:
+//   - immediately spawns claude (if the dir is fine), or
+//   - parks the path on awaitMkdirConfirm so the next keystroke can
+//     decide whether to create it.
+// Real mkdir + spawn live in spawnNewSession, which is also reused
+// directly when the confirmation gate fires.
+func (m *model) startNewSession(dir string) tea.Cmd {
+	if dir == "" {
+		return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("path required")} }
+	}
+	expanded, err := expandPath(dir)
+	if err != nil {
+		return func() tea.Msg { return attachDoneMsg{err: err} }
+	}
+	fi, err := os.Stat(expanded)
+	switch {
+	case err == nil && !fi.IsDir():
+		return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("not a directory: %s", expanded)} }
+	case err == nil:
+		return m.spawnNewSession(expanded, false)
+	case os.IsNotExist(err):
+		// Don't mkdir silently — a typo on the last segment would create
+		// a junk dir without the operator noticing. Park the path and
+		// surface a confirmation banner; the next keystroke handler
+		// decides whether to commit.
+		m.awaitMkdirConfirm = true
+		m.pendingMkdirPath = expanded
+		m.flash = fmt.Sprintf("'%s' does not exist — press 'y' to create + start, any other key to cancel", expanded)
+		return nil
+	default:
+		return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("stat %s: %w", expanded, err)} }
+	}
+}
+
+// spawnNewSession does the actual mkdir-if-needed-and-claude-launch dance.
+// `created` controls the post-detach flash so the operator knows whether
+// ccdash made a new directory on their behalf.
+func (m *model) spawnNewSession(expanded string, created bool) tea.Cmd {
+	if created {
+		if mkErr := os.MkdirAll(expanded, 0o755); mkErr != nil {
+			return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("mkdir %s: %w", expanded, mkErr)} }
+		}
+	}
+	c := exec.Command("claude")
+	c.Dir = expanded
+	sess := attach.New(c)
+	if err := sess.Start(); err != nil {
+		return func() tea.Msg { return attachDoneMsg{err: err} }
+	}
+	m.attachedByPID[sess.PID()] = sess
+	ac := &attach.AttachCmd{Session: sess}
+	cwd := expanded
+	createdNote := ""
+	if created {
+		createdNote = " (created)"
+	}
+	return tea.Exec(ac, func(err error) tea.Msg {
+		if err != nil {
+			return attachDoneMsg{err: err}
+		}
+		switch {
+		case ac.Result.Detached:
+			return attachDoneMsg{msg: "detached — new claude session running in " + cwd + createdNote + " (Enter on the row to reattach)"}
+		case ac.Result.ExitErr != nil:
+			return attachDoneMsg{err: ac.Result.ExitErr, msg: "claude session ended"}
+		default:
+			return attachDoneMsg{msg: "claude session ended"}
+		}
+	})
+}
+
+// expandPath replaces a leading ~ with the operator's home dir and
+// resolves to an absolute path. Empty input is rejected upstream.
+func expandPath(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if strings.HasPrefix(p, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		if p == "~" {
+			p = home
+		} else if strings.HasPrefix(p, "~/") {
+			p = filepath.Join(home, p[2:])
+		}
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	return abs, nil
+}
+
+// completeDirPrefix lists subdirectories whose name starts with the
+// final segment of `buf`. Returns the candidates (full-path form, with
+// a trailing slash) so the caller can substitute them into the input.
+// Quiet on errors — completion is best-effort.
+func completeDirPrefix(buf string) []string {
+	expanded, err := expandPath(buf)
+	if err != nil {
+		return nil
+	}
+	dir := expanded
+	prefix := ""
+	if !strings.HasSuffix(buf, "/") && !strings.HasSuffix(buf, string(filepath.Separator)) {
+		dir = filepath.Dir(expanded)
+		prefix = filepath.Base(expanded)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".") {
+			// Skip dotdirs unless the operator is explicitly asking for one.
+			continue
+		}
+		if prefix != "" && !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		out = append(out, filepath.Join(dir, name)+string(filepath.Separator))
+	}
+	return out
 }
 
 func (m *model) Init() tea.Cmd {
@@ -272,6 +464,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsMsg:
 		prev := m.currentSessionID()
 		m.allSessions = []mdl.Session(msg)
+		// Promote any newly-discovered sessions whose PID matches a
+		// freshly-spawned attach.Session into the by-id map so that
+		// pressing Enter on the row reattaches the same child instead of
+		// starting a competing `claude --resume`.
+		m.promoteAttached()
 		// If the tab the operator was looking at vanished (its last
 		// session got archived, removed, or moved to a different tab),
 		// step onto the next available tab so the body isn't blank.
@@ -442,6 +639,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.editingSearch {
 		return m.handleKeySearchEdit(msg)
 	}
+	if m.editingNewSession {
+		return m.handleKeyNewSessionEdit(msg)
+	}
 	if m.editingTitle || m.editingGroup {
 		return m.handleKeyTitleEdit(msg)
 	}
@@ -462,6 +662,19 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.summarizeCurrent()
 		default:
 			m.flash = "summary cancelled"
+			return m, nil
+		}
+	}
+	if m.awaitMkdirConfirm {
+		m.awaitMkdirConfirm = false
+		path := m.pendingMkdirPath
+		m.pendingMkdirPath = ""
+		switch msg.String() {
+		case "y", "Y":
+			m.flash = ""
+			return m, m.spawnNewSession(path, true)
+		default:
+			m.flash = "new session cancelled"
 			return m, nil
 		}
 	}
@@ -610,6 +823,22 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editingSearch = true
 		m.titleBuffer = m.searchQuery
 		return m, nil
+	case "n":
+		// Start a new claude session by typing a directory path. Default
+		// to ~/ so the operator only has to extend, not start over.
+		if !m.settings.AttachEnabled {
+			m.flash = "attach is OFF (settings ',')"
+			return m, nil
+		}
+		if home, err := os.UserHomeDir(); err == nil {
+			m.newSessionBuffer = home + string(filepath.Separator)
+		} else {
+			m.newSessionBuffer = ""
+		}
+		m.newSessionCompletions = nil
+		m.newSessionCompIdx = -1
+		m.editingNewSession = true
+		return m, nil
 	case "esc":
 		if m.searchQuery != "" {
 			m.searchQuery = ""
@@ -694,6 +923,93 @@ func (m *model) handleKeySearchEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.titleBuffer += " "
 	case tea.KeyRunes:
 		m.titleBuffer += string(msg.Runes)
+	}
+	return m, nil
+}
+
+// handleKeyNewSessionEdit drives the footer prompt for `n`. The buffer is
+// a directory path. UX:
+//   - Tab          : cycle highlight through live candidates (preview only,
+//                    buffer stays put so the operator can keep typing).
+//   - / or Enter   : when a candidate is highlighted, commit it into the
+//                    buffer and reset the highlight — Enter then "descends"
+//                    one more level on the next press.
+//   - Enter        : with no highlight, starts a `claude` session in the
+//                    buffer path (creates the dir if missing).
+//   - Esc          : cancel.
+func (m *model) handleKeyNewSessionEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	hasHighlight := m.newSessionCompIdx >= 0 && m.newSessionCompIdx < len(m.newSessionCompletions)
+
+	commitHighlight := func() {
+		m.newSessionBuffer = m.newSessionCompletions[m.newSessionCompIdx]
+		m.newSessionCompletions = nil
+		m.newSessionCompIdx = -1
+	}
+
+	switch msg.Type {
+	case tea.KeyEnter:
+		if hasHighlight {
+			commitHighlight()
+			return m, nil
+		}
+		dir := m.newSessionBuffer
+		m.editingNewSession = false
+		m.newSessionBuffer = ""
+		m.newSessionCompletions = nil
+		m.newSessionCompIdx = -1
+		return m, m.startNewSession(dir)
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.editingNewSession = false
+		m.newSessionBuffer = ""
+		m.newSessionCompletions = nil
+		m.newSessionCompIdx = -1
+		return m, nil
+	case tea.KeyTab:
+		// Tab is preview only — recompute against the current buffer and
+		// advance the highlight index. The buffer is untouched until the
+		// operator commits with `/` or Enter.
+		m.newSessionCompletions = completeDirPrefix(m.newSessionBuffer)
+		if len(m.newSessionCompletions) == 0 {
+			m.flash = "no directory matches"
+			m.newSessionCompIdx = -1
+			return m, nil
+		}
+		m.newSessionCompIdx = (m.newSessionCompIdx + 1) % len(m.newSessionCompletions)
+		return m, nil
+	case tea.KeyShiftTab:
+		m.newSessionCompletions = completeDirPrefix(m.newSessionBuffer)
+		if len(m.newSessionCompletions) == 0 {
+			m.flash = "no directory matches"
+			m.newSessionCompIdx = -1
+			return m, nil
+		}
+		if m.newSessionCompIdx <= 0 {
+			m.newSessionCompIdx = len(m.newSessionCompletions) - 1
+		} else {
+			m.newSessionCompIdx--
+		}
+		return m, nil
+	case tea.KeyBackspace:
+		if r := []rune(m.newSessionBuffer); len(r) > 0 {
+			m.newSessionBuffer = string(r[:len(r)-1])
+		}
+		m.newSessionCompletions = nil
+		m.newSessionCompIdx = -1
+	case tea.KeySpace:
+		m.newSessionBuffer += " "
+		m.newSessionCompletions = nil
+		m.newSessionCompIdx = -1
+	case tea.KeyRunes:
+		// "/" is overloaded: when a candidate is highlighted it commits
+		// (just like Enter on a highlight). Otherwise it's just another
+		// path-separator character.
+		if string(msg.Runes) == "/" && hasHighlight {
+			commitHighlight()
+			return m, nil
+		}
+		m.newSessionBuffer += string(msg.Runes)
+		m.newSessionCompletions = nil
+		m.newSessionCompIdx = -1
 	}
 	return m, nil
 }
@@ -1502,7 +1818,7 @@ func (m *model) renderHeader() string {
 }
 
 func (m *model) renderFooter() string {
-	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm {
+	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm {
 		// y/n confirmation lands in a full-width yellow banner instead
 		// of the dim flash so operators don't miss the cue.
 		banner := confirmBannerStyle.Width(m.width).Render(m.flash)
@@ -1513,6 +1829,45 @@ func (m *model) renderFooter() string {
 		prompt := "/" + m.titleBuffer + "▏"
 		hint := subtitleStyle.Render("enter apply · esc cancel · empty=clear")
 		return pendingStyle.Render(prompt) + "  " + hint
+	}
+	if m.editingNewSession {
+		prompt := "new session in: " + m.newSessionBuffer + "▏"
+		// Hint shifts by context: with a highlighted candidate Enter and
+		// "/" both descend; without one Enter starts the session.
+		var hint string
+		if m.newSessionCompIdx >= 0 && m.newSessionCompIdx < len(m.newSessionCompletions) {
+			hint = subtitleStyle.Render("tab/shift+tab cycle · enter or '/' descend · esc cancel")
+		} else {
+			hint = subtitleStyle.Render("tab cycle · enter start (creates dir if missing) · esc cancel")
+		}
+		// Always show live candidates so the operator doesn't have to hit
+		// Tab to peek. Cap the visible count so a `~/` listing doesn't
+		// drown the screen; the cap intentionally exceeds typical project
+		// directory counts.
+		const maxCands = 8
+		cands := completeDirPrefix(m.newSessionBuffer)
+		var candLine string
+		if len(cands) == 0 {
+			candLine = subtitleStyle.Render("(no matches)")
+		} else {
+			shown := cands
+			suffix := ""
+			if len(shown) > maxCands {
+				suffix = subtitleStyle.Render(fmt.Sprintf("  …+%d more", len(shown)-maxCands))
+				shown = shown[:maxCands]
+			}
+			labels := make([]string, len(shown))
+			for i, c := range shown {
+				display := shortenLeft(c, 40)
+				if i == m.newSessionCompIdx {
+					labels[i] = pendingStyle.Render("▶ " + display)
+				} else {
+					labels[i] = subtitleStyle.Render(display)
+				}
+			}
+			candLine = strings.Join(labels, "  ") + suffix
+		}
+		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
 	if m.editingTitle {
 		prompt := "rename: " + m.titleBuffer + "▏"
@@ -1537,7 +1892,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  h/l tabs  / search  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/group  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
+	keys := "↑/↓ sel  h/l tabs  / search  n new  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/group  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
 	if m.pane == paneSettings {
 		keys = "↑/↓ select · space toggle · enter edit · esc back"
 	}
@@ -2672,6 +3027,25 @@ func shorten(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	if n <= 0 {
 		return ""
+	}
+	return runewidth.Truncate(s, n, "…")
+}
+
+// shortenLeft truncates from the LEFT (so the trailing path segment, the
+// part the operator usually cares about, stays visible). Inserts a leading
+// ellipsis when truncation happened.
+func shortenLeft(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	for i := 0; i < len(r); i++ {
+		if runewidth.StringWidth("…"+string(r[i:])) <= n {
+			return "…" + string(r[i:])
+		}
 	}
 	return runewidth.Truncate(s, n, "…")
 }
