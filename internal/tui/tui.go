@@ -254,7 +254,7 @@ func (m *model) spawnNewSession(expanded string, created bool) tea.Cmd {
 			return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("mkdir %s: %w", expanded, mkErr)} }
 		}
 	}
-	c := exec.Command("claude")
+	c := claudeViaShell()
 	c.Dir = expanded
 	c.Env = ptySafeEnv()
 	sess := attach.New(c)
@@ -283,15 +283,36 @@ func (m *model) spawnNewSession(expanded string, created bool) tea.Cmd {
 	})
 }
 
+// claudeViaShell returns an exec.Cmd that invokes claude through the user's
+// interactive shell ($SHELL -i -c). This ensures shell functions defined in
+// .zshrc/.bashrc — such as wrappers that set up authentication credentials or
+// custom environment variables — are available when claude starts. Falls back
+// to a direct exec.Command("claude", ...) when $SHELL is unset.
+func claudeViaShell(args ...string) *exec.Cmd {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		return exec.Command("claude", args...)
+	}
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, "claude")
+	for _, a := range args {
+		parts = append(parts, shellQuote(a))
+	}
+	return exec.Command(shell, "-i", "-c", strings.Join(parts, " "))
+}
+
+// shellQuote wraps s in single quotes, escaping any embedded single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // ptySafeEnv returns a copy of the current environment with terminal-emulator-
-// specific variables stripped or overridden. Terminal emulators such as Warp,
-// iTerm2, and Ghostty set proprietary env vars that claude detects and uses to
-// activate integration features (including auth flows) specific to those
-// terminals. Inside our PTY those integrations don't work — the outer-terminal
-// protocol is not forwarded — which can break claude's login session. Stripping
-// them causes claude to fall back to its portable code paths.
+// specific variables stripped or overridden so they are not inherited by the
+// child PTY process. Variables like VSCODE_INJECTION or WARP_* signal to claude
+// that it is running inside a specific IDE or terminal, which activates
+// integration code paths that do not work inside a ccdash PTY.
 func ptySafeEnv() []string {
-	stripPfx := []string{"WARP_", "GHOSTTY_", "ITERM_", "KITTY_", "TABBY_"}
+	stripPfx := []string{"WARP_", "GHOSTTY_", "ITERM_", "KITTY_", "TABBY_", "CLAUDE_CODE_", "VSCODE_"}
 	stripKey := map[string]bool{
 		"TERM_PROGRAM":         true,
 		"TERM_PROGRAM_VERSION": true,
@@ -1642,7 +1663,7 @@ func (m *model) attachCurrent() tea.Cmd {
 		ok = false
 	}
 	if !ok {
-		c := exec.Command("claude", "--resume", s.SessionID)
+		c := claudeViaShell("--resume", s.SessionID)
 		if s.Cwd != "" {
 			c.Dir = s.Cwd
 		}
