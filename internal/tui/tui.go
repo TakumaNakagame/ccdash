@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/takumanakagame/ccmanage/internal/attach"
 	"github.com/takumanakagame/ccmanage/internal/auth"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
@@ -1243,16 +1244,28 @@ func (m *model) attachCurrent() tea.Cmd {
 			return attachDoneMsg{msg: info}
 		}
 	}
-	// Session is stopped — start a fresh `claude --resume`.
+	// Session is stopped — start a fresh `claude --resume`. We use the
+	// internal attach package, which keeps ccdash on top of the session:
+	// claude exiting on its own returns to the dashboard (same as the old
+	// tea.ExecProcess path), but Ctrl+] now also detaches without waiting
+	// for the operator to /exit out of claude.
 	c := exec.Command("claude", "--resume", s.SessionID)
 	if s.Cwd != "" {
 		c.Dir = s.Cwd
 	}
-	return tea.ExecProcess(c, func(err error) tea.Msg {
+	ac := &attach.Command{Cmd: c}
+	return tea.Exec(ac, func(err error) tea.Msg {
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}
-		return attachDoneMsg{msg: "claude session ended"}
+		switch {
+		case ac.Result.Detached:
+			return attachDoneMsg{msg: "detached (claude session terminated)"}
+		case ac.Result.ExitErr != nil:
+			return attachDoneMsg{err: ac.Result.ExitErr}
+		default:
+			return attachDoneMsg{msg: "claude session ended"}
+		}
 	})
 }
 

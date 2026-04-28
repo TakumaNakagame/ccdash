@@ -54,6 +54,7 @@ internal/settings/              persisted preferences (settings table) + KindBoo
 internal/selfupdate/            `ccdash update` self-replace via os.Rename onto the running path
 internal/tui/                   Bubble Tea UI — keys, layout, transcript pane, settings page
 internal/wrapper/               optional `ccdash claude` exec wrapper that adds tmux pane / pid metadata
+internal/attach/                pty-based inline `claude --resume` runner with Ctrl+] mid-session detach
 internal/paths/                 state dir / db / settings paths (XDG-aware)
 internal/gitinfo/               `git -C cwd rev-parse` lookups for repo/branch/commit
 internal/model/                 plain data types (Session / Event / Approval) and DisplayTitle
@@ -95,6 +96,7 @@ The TUI render layer dispatches on `Spec.Kind` automatically; you don't normally
 - **Secure-mode toggles are explicit.** `approve_enabled`, `summary_enabled`, `attach_enabled`, `auto_install_sync` each turn off one risk-bearing capability; the "Apply secure preset" action flips all four. The TUI keys for these features check the flag and flash "<feature> is OFF" when disabled — don't bypass.
 - **Mouse wheel zoning is layout-aware.** `mouseInRightPane` re-derives geometry per-event because vertical layout splits Y instead of X. Auto-vertical decides via `m.width < settings.VerticalAutoCols`.
 - **`groupLocked` (from `--group`) hides the strip and disables h/l/Tab/Shift+Tab.** It also keeps `archiveCurrentGroup` from auto-advancing past the locked group. The deprecated `--tab` alias is still accepted (hidden) so existing scripts don't break.
+- **Inline attach uses `internal/attach`, not `tea.ExecProcess`.** For stopped sessions, `attachCurrent` builds an `attach.Command` and hands it to `tea.Exec`. Bubble Tea releases the alt-screen and calls `Run`, which puts the operator's terminal in raw mode, opens a PTY for `claude --resume <id>`, and relays I/O. `Ctrl+]` (`attach.EscapeByte`) is intercepted in the stdin pump — on hit we send SIGTERM, drain output, and return `Result{Detached: true}` so the operator can leave a still-running claude session and bounce back to the dashboard. tmux-pane attach (running session) is unchanged and still uses `tea.ExecProcess` with `tmux switch-client`.
 
 ### Common gotchas
 
