@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 type Entry struct {
@@ -99,25 +100,44 @@ func readEntry(path string) (Entry, bool) {
 }
 
 func pidAlive(pid int) bool {
-	// On Linux, /proc/<pid>/comm exists iff the process is alive.
+	// Linux fast path: /proc/<pid>/comm exists iff the process is alive.
 	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "comm"))
+	if err == nil {
+		return strings.TrimSpace(string(b)) == "claude"
+	}
+	// macOS fallback: Signal(0) checks process existence without killing it.
+	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
-	return strings.TrimSpace(string(b)) == "claude"
+	return proc.Signal(syscall.Signal(0)) == nil
 }
 
 func ttyForPID(pid int) string {
+	// Linux: resolve the TTY via /proc/<pid>/fd symlinks.
 	for _, fd := range []string{"0", "1", "2"} {
 		target, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "fd", fd))
 		if err != nil {
 			continue
 		}
-		if strings.HasPrefix(target, "/dev/pts/") {
+		if strings.HasPrefix(target, "/dev/pts/") || strings.HasPrefix(target, "/dev/ttys") {
 			return target
 		}
 	}
-	return ""
+	// macOS fallback: ask ps for the controlling TTY.
+	out, err := exec.Command("ps", "-o", "tty=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	tty := strings.TrimSpace(string(out))
+	if tty == "" || tty == "??" {
+		return ""
+	}
+	// ps returns the basename (e.g. "s001"); prepend /dev/tty.
+	if !strings.HasPrefix(tty, "/dev/") {
+		tty = "/dev/tty" + tty
+	}
+	return tty
 }
 
 type paneInfo struct {

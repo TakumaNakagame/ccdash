@@ -25,9 +25,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -190,7 +190,10 @@ func (s *Session) Attach() (Result, error) {
 	_ = syncWinsize(stdinFile, s.pty)
 	winchCh := make(chan os.Signal, 1)
 	signal.Notify(winchCh, syscall.SIGWINCH)
-	defer signal.Stop(winchCh)
+	defer func() {
+		signal.Stop(winchCh)
+		close(winchCh) // lets the goroutine exit cleanly
+	}()
 	go func() {
 		for range winchCh {
 			_ = syncWinsize(stdinFile, s.pty)
@@ -215,17 +218,45 @@ func (s *Session) Attach() (Result, error) {
 		_ = s.cmd.Process.Signal(syscall.SIGWINCH)
 	}
 
+	// Self-pipe used to interrupt the stdin reader goroutine. Writing to
+	// stopW (or closing it) makes unix.Poll on stopR return immediately,
+	// so we can always unblock the goroutine regardless of OS.
+	stopR, stopW, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		return Result{}, fmt.Errorf("attach: stop pipe: %w", pipeErr)
+	}
+	defer stopR.Close()
+
 	// Detach signal — set when the input pump sees Ctrl+D.
 	detachReq := make(chan struct{}, 1)
 
-	// Stdin → PTY with Ctrl+D interception. Tracked via inputDone so we
-	// can guarantee the goroutine is gone before Run returns; otherwise
-	// it would race Bubble Tea for the next keystroke.
+	// Stdin → PTY with Ctrl+D interception. Uses unix.Poll so the goroutine
+	// can be interrupted via stopW regardless of OS (SetReadDeadline is a
+	// no-op on terminal fds on macOS, so we can't rely on it).
+	stdinFd := int(stdinFile.Fd())
+	stopFd := int(stopR.Fd())
 	inputDone := make(chan struct{})
 	go func() {
 		defer close(inputDone)
 		buf := make([]byte, 4096)
+		pfds := []unix.PollFd{
+			{Fd: int32(stdinFd), Events: unix.POLLIN},
+			{Fd: int32(stopFd), Events: unix.POLLIN},
+		}
 		for {
+			_, perr := unix.Poll(pfds, -1)
+			if perr != nil {
+				if perr == unix.EINTR {
+					continue
+				}
+				return
+			}
+			if pfds[1].Revents != 0 {
+				return // stop pipe closed or written to
+			}
+			if pfds[0].Revents&unix.POLLIN == 0 {
+				continue
+			}
 			n, rerr := stdinFile.Read(buf)
 			if n > 0 {
 				idx := -1
@@ -255,9 +286,8 @@ func (s *Session) Attach() (Result, error) {
 		}
 	}()
 	stopInput := func() {
-		_ = stdinFile.SetReadDeadline(time.Unix(1, 0))
+		_ = stopW.Close() // unblocks unix.Poll in the goroutine via POLLHUP
 		<-inputDone
-		_ = stdinFile.SetReadDeadline(time.Time{})
 	}
 
 	select {
@@ -295,10 +325,13 @@ func (s *Session) spawn() error {
 		for {
 			n, err := s.pty.Read(buf)
 			if n > 0 {
+				// Hold the lock for the full write so that setSink(io.Discard)
+				// cannot race with an in-flight stdout write. Without this, a
+				// chunk queued just before detach could arrive on stdout after
+				// Bubble Tea starts restoring its screen state, corrupting it.
 				s.sinkMu.Lock()
-				w := s.sink
+				_, _ = s.sink.Write(buf[:n])
 				s.sinkMu.Unlock()
-				_, _ = w.Write(buf[:n])
 			}
 			if err != nil {
 				return
