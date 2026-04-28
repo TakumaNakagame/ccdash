@@ -27,6 +27,7 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
+	"github.com/hinshun/vt10x"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -80,6 +81,13 @@ type Session struct {
 	// closed flips to 1 when Close has been called, so subsequent Attach
 	// calls bail out cleanly instead of trying to re-spawn.
 	closed atomic.Int32
+
+	// vt + outputCh are the windowed-render hooks (see windowed.go). They
+	// stay nil until EnsureWindowed is called, so Sessions used only via
+	// fullscreen Attach pay no extra cost.
+	windowedOnce sync.Once
+	vt           vt10x.Terminal
+	outputCh     chan struct{}
 }
 
 // New builds a Session for the given exec.Cmd. The child is not started
@@ -332,6 +340,14 @@ func (s *Session) spawn() error {
 				s.sinkMu.Lock()
 				_, _ = s.sink.Write(buf[:n])
 				s.sinkMu.Unlock()
+				// If the windowed-render path is wired up, also feed the
+				// emulator and ping the output channel so a TUI watching
+				// it can re-render. vt10x.Terminal is goroutine-safe via
+				// its own internal mutex (Lock/Unlock around state reads).
+				if s.vt != nil {
+					_, _ = s.vt.Write(buf[:n])
+					s.notifyOutput()
+				}
 			}
 			if err != nil {
 				return
