@@ -21,6 +21,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/hinshun/vt10x"
+	"github.com/mattn/go-runewidth"
 )
 
 // Mirror of vt10x's private attribute bits. Keep in sync with state.go in
@@ -149,27 +150,58 @@ func (s *Session) RenderWindowed(width, height int) string {
 	// Track previous cell attributes so we only emit a new SGR when
 	// something actually changed — keeps the ANSI volume reasonable on
 	// flat regions of the screen.
+	//
+	// Visual-width handling: vt10x stores one rune per grid cell and
+	// advances its cursor by one regardless of the character's display
+	// width. That breaks down for CJK / emoji / box-drawing wide chars,
+	// which the terminal will render as 2 cells. We compensate by
+	// counting visual width as we walk and stopping a row at the pane
+	// width — emitting fewer cells from the grid is preferable to
+	// letting the terminal auto-wrap our line, which is what produces
+	// the "characters scattered everywhere" symptom.
 	var prev vt10x.Glyph
 	first := true
 	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+		used := 0
+		for x := 0; x < width && used < width; x++ {
 			cell := s.vt.Cell(x, y)
 			isCursor := curVisible && y == cur.Y && x == cur.X
+			ch := cell.Char
+			if ch == 0 {
+				ch = ' '
+			}
+			rw := runewidth.RuneWidth(ch)
+			if rw <= 0 {
+				rw = 1
+			}
+			if used+rw > width {
+				// A wide char that wouldn't fit gets replaced with a
+				// space so the row visual width still hits exactly
+				// `width`. Without this we'd either overflow (auto-wrap
+				// → scattered text) or undercount.
+				ch = ' '
+				rw = 1
+			}
 			if first || !sameAttrs(prev, cell, isCursor) {
 				writeSGR(&b, cell, isCursor)
 				prev = cell
 				first = false
 			}
-			ch := cell.Char
-			if ch == 0 {
-				ch = ' '
-			}
 			b.WriteRune(ch)
+			used += rw
 		}
-		// Reset at end-of-row so the row's attribute bleed doesn't extend
-		// past content if the parent layout pads further.
-		b.WriteString("\x1b[0m")
-		first = true
+		// Pad the rest of the row with spaces so the line's visual
+		// width is exactly the pane width. Mismatched widths are what
+		// triggers the terminal-side auto-wrap that scrambles the
+		// rendered output.
+		if used < width {
+			b.WriteString("\x1b[0m")
+			b.WriteString(strings.Repeat(" ", width-used))
+			first = true
+		} else {
+			b.WriteString("\x1b[0m")
+			first = true
+		}
 		if y < height-1 {
 			b.WriteByte('\n')
 		}
