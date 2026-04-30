@@ -94,6 +94,14 @@ func updateCmd(currentVersion string) *cobra.Command {
 			}
 			fmt.Printf("ccdash: upgraded to %s\n", res.NewVersion)
 			fmt.Printf("ccdash: replaced %s\n", res.BinaryPath)
+			// Print the release notes for the new tag so the operator
+			// knows what just changed. Best-effort — a probe failure
+			// (rate limit / offline) is silent.
+			if notes, err := selfupdate.ReleaseInfo(cmd.Context(), res.NewVersion); err == nil && notes != "" {
+				fmt.Println()
+				fmt.Printf("--- release notes for %s ---\n", res.NewVersion)
+				fmt.Println(notes)
+			}
 			return nil
 		},
 	}

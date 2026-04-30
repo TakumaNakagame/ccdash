@@ -40,6 +40,43 @@ func LatestTag(ctx context.Context) (string, error) {
 	return tag, err
 }
 
+// ReleaseInfo fetches the release body (notes) for the given tag, or
+// for the latest release when tag is empty. The body is whatever was
+// pasted into the GitHub UI / set by `gh release edit --notes` — we
+// don't strip Markdown so the renderer can decide what to do with it.
+func ReleaseInfo(ctx context.Context, tag string) (notes string, err error) {
+	url := "https://api.github.com/repos/" + Repo + "/releases/latest"
+	if tag != "" {
+		url = "https://api.github.com/repos/" + Repo + "/releases/tags/" + tag
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	c := &http.Client{Timeout: 10 * time.Second}
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		hint := ""
+		if resp.StatusCode == http.StatusForbidden {
+			hint = " — likely GitHub anonymous API rate limit (60/hr)"
+		}
+		return "", fmt.Errorf("github api: %s%s", resp.Status, hint)
+	}
+	var rel struct {
+		Body string `json:"body"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", err
+	}
+	return rel.Body, nil
+}
+
 // Run resolves the latest release and replaces the running binary in
 // place when its tag differs from currentVersion. Returns details of the
 // outcome; an error is returned only when we tried and failed.

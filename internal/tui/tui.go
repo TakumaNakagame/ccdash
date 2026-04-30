@@ -51,6 +51,7 @@ const (
 	paneSessions pane = iota
 	paneTranscript
 	paneSettings
+	paneReleaseNotes
 )
 
 type model struct {
@@ -159,13 +160,16 @@ type model struct {
 	// already on the latest tag, the check is still in flight, or the
 	// network probe failed (we stay quiet in that case rather than nag).
 	updateAvailable string
-	// awaitUpdateConfirm gates the y/n banner that fires when the
-	// operator presses 'u' on the update-available notice.
-	awaitUpdateConfirm bool
 	// updateRunning is true while selfupdate.Run is executing in a
 	// background goroutine. Drives the in-progress flash and prevents
 	// double-fires.
 	updateRunning bool
+	// updateNotes / updateNotesScroll back the paneReleaseNotes view.
+	// Notes are fetched lazily after 'u' triggers the modal; until the
+	// fetch returns we render a "loading…" stub.
+	updateNotes       string
+	updateNotesErr    error
+	updateNotesScroll int
 
 	// editingNewSession is true while the operator is typing a directory
 	// path in the new-session footer prompt (entered via 'n').
@@ -446,6 +450,19 @@ func (m *model) checkUpdateCmd() tea.Cmd {
 	}
 }
 
+// fetchReleaseNotesCmd asks GitHub for the release body of the given
+// tag and emits updateNotesMsg when it returns. The TUI renders that in
+// paneReleaseNotes — the operator reads the changelog and then chooses
+// whether to install.
+func (m *model) fetchReleaseNotesCmd(tag string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
+		defer cancel()
+		notes, err := selfupdate.ReleaseInfo(ctx, tag)
+		return updateNotesMsg{notes: notes, err: err}
+	}
+}
+
 // runUpdateCmd kicks off selfupdate.Run in a background goroutine and
 // emits updateDoneMsg when it returns. Used by the 'u' key handler after
 // the y/n confirm fires.
@@ -491,6 +508,14 @@ type updateCheckMsg struct {
 type updateDoneMsg struct {
 	res selfupdate.Result
 	err error
+}
+
+// updateNotesMsg carries the release-body text fetched for the
+// paneReleaseNotes view. err is set when the fetch failed; both empty
+// is "still loading" but in practice we only emit it on completion.
+type updateNotesMsg struct {
+	notes string
+	err   error
 }
 
 type sessionsMsg []mdl.Session
@@ -667,6 +692,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.flash = "updated to " + msg.res.NewVersion + " — restart ccdash to use the new binary"
 		m.updateAvailable = ""
+		return m, nil
+	case updateNotesMsg:
+		m.updateNotes = msg.notes
+		m.updateNotesErr = msg.err
+		m.updateNotesScroll = 0
 		return m, nil
 	case sessionsMsg:
 		prev := m.currentSessionID()
@@ -854,6 +884,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.pane == paneSettings {
 		return m.handleKeySettings(msg)
 	}
+	if m.pane == paneReleaseNotes {
+		return m.handleKeyReleaseNotes(msg)
+	}
 	if m.editingSearch {
 		return m.handleKeySearchEdit(msg)
 	}
@@ -893,21 +926,6 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.spawnNewSession(path, true)
 		default:
 			m.flash = "new session cancelled"
-			return m, nil
-		}
-	}
-	if m.awaitUpdateConfirm {
-		m.awaitUpdateConfirm = false
-		switch msg.String() {
-		case "y", "Y":
-			if m.updateRunning {
-				return m, nil
-			}
-			m.updateRunning = true
-			m.flash = "updating to " + m.updateAvailable + "…"
-			return m, m.runUpdateCmd()
-		default:
-			m.flash = "update cancelled"
 			return m, nil
 		}
 	}
@@ -1057,16 +1075,17 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.titleBuffer = m.searchQuery
 		return m, nil
 	case "u":
-		// Trigger the self-update flow if a newer release is on the
-		// shelf. Silently no-op when the startup probe hasn't surfaced
-		// anything — the operator can still run `ccdash update` from
-		// the shell to force a check.
+		// Trigger the release-notes preview modal. The actual install
+		// kicks off from inside paneReleaseNotes when the operator hits
+		// 'y' — that way they see the changelog before committing.
 		if m.updateAvailable == "" || m.updateRunning {
 			return m, nil
 		}
-		m.awaitUpdateConfirm = true
-		m.flash = "update to " + m.updateAvailable + " (current " + buildinfo.Version + ")? press 'y' to install, any other key to cancel"
-		return m, nil
+		m.pane = paneReleaseNotes
+		m.updateNotes = ""
+		m.updateNotesErr = nil
+		m.updateNotesScroll = 0
+		return m, m.fetchReleaseNotesCmd(m.updateAvailable)
 	case "n":
 		// Start a new claude session by typing a directory path. Default
 		// to ~/ so the operator only has to extend, not start over.
@@ -2002,6 +2021,64 @@ func (m *model) decideApproval(behavior string, keep bool) tea.Cmd {
 	}
 }
 
+// handleKeyReleaseNotes drives paneReleaseNotes: scroll the changelog,
+// 'y' to install, esc / q to back out.
+func (m *model) handleKeyReleaseNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	body := m.releaseNotesVisibleHeight()
+	max := m.maxReleaseNotesScroll(body)
+	switch msg.String() {
+	case "ctrl+c":
+		return m, m.quit()
+	case "q", "esc", "tab":
+		m.pane = paneSessions
+		return m, nil
+	case "y", "Y":
+		if m.updateRunning {
+			return m, nil
+		}
+		m.updateRunning = true
+		m.flash = "updating to " + m.updateAvailable + "…"
+		m.pane = paneSessions
+		return m, m.runUpdateCmd()
+	case "j", "down":
+		m.updateNotesScroll = clamp(m.updateNotesScroll+1, 0, max)
+	case "k", "up":
+		m.updateNotesScroll = clamp(m.updateNotesScroll-1, 0, max)
+	case "ctrl+d", "pgdown", " ":
+		m.updateNotesScroll = clamp(m.updateNotesScroll+body/2, 0, max)
+	case "ctrl+u", "pgup":
+		m.updateNotesScroll = clamp(m.updateNotesScroll-body/2, 0, max)
+	case "g", "home":
+		m.updateNotesScroll = 0
+	case "G", "end":
+		m.updateNotesScroll = max
+	}
+	return m, nil
+}
+
+// releaseNotesVisibleHeight is the number of body rows we get to fill
+// inside paneReleaseNotes — same arithmetic as transcriptVisibleHeight,
+// minus a header row.
+func (m *model) releaseNotesVisibleHeight() int {
+	headerH := countLines(m.renderHeader())
+	footerH := countLines(m.renderFooter()) + 1
+	h := m.height - headerH - footerH - 1 // -1 for the title row
+	if h < 5 {
+		h = 5
+	}
+	return h
+}
+
+// maxReleaseNotesScroll caps scrolling at "last line is on screen".
+func (m *model) maxReleaseNotesScroll(visible int) int {
+	total := strings.Count(m.updateNotes, "\n") + 1
+	max := total - visible
+	if max < 0 {
+		return 0
+	}
+	return max
+}
+
 func (m *model) handleKeyTranscript(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	bodyHeight := m.transcriptVisibleHeight()
 	switch msg.String() {
@@ -2348,7 +2425,7 @@ func (m *model) renderHeader() string {
 }
 
 func (m *model) renderFooter() string {
-	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm || m.awaitUpdateConfirm {
+	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm {
 		// y/n confirmation lands in a full-width yellow banner instead
 		// of the dim flash so operators don't miss the cue.
 		banner := confirmBannerStyle.Width(m.width).Render(m.flash)
@@ -2431,6 +2508,9 @@ func (m *model) renderFooter() string {
 	}
 	if m.pane == paneTranscript {
 		keys = "↑/↓ scroll  pgup/pgdn page  g/G top/end  r reload  esc/q back"
+	}
+	if m.pane == paneReleaseNotes {
+		keys = "↑/↓ scroll  pgup/pgdn page  g/G top/end  y install  esc/q back"
 	}
 	if m.err != nil {
 		return errStyle.Render("error: "+m.err.Error()) + "\n" + footerStyle.Render(keys)
@@ -2534,9 +2614,46 @@ func (m *model) renderBody(height int) string {
 		return m.renderTranscriptBody(height)
 	case paneSettings:
 		return m.renderSettingsBody(height)
+	case paneReleaseNotes:
+		return m.renderReleaseNotesBody(height)
 	default:
 		return m.renderSessionsBody(height)
 	}
+}
+
+// renderReleaseNotesBody renders the changelog modal: a heading row that
+// names the version diff (current → target), the GitHub release body
+// scrolled into view, and a footer hint reminding the operator how to
+// install or back out.
+func (m *model) renderReleaseNotesBody(height int) string {
+	title := pendingStyle.Render(fmt.Sprintf("update %s → %s", buildinfo.Version, m.updateAvailable))
+	bodyH := height - 1
+	if bodyH < 1 {
+		bodyH = 1
+	}
+	var body string
+	switch {
+	case m.updateNotesErr != nil:
+		body = errStyle.Render("failed to fetch release notes: " + m.updateNotesErr.Error() +
+			"\n\npress 'y' to install anyway, esc to cancel")
+	case m.updateNotes == "":
+		body = subtitleStyle.Render("loading release notes from github.com/" + selfupdate.Repo + " …")
+	default:
+		// The body is markdown. We display it as plain text — preserving
+		// blank lines and indentation — and let the width clip take care
+		// of overflow. A pretty Markdown renderer is a future polish.
+		lines := strings.Split(strings.ReplaceAll(m.updateNotes, "\r\n", "\n"), "\n")
+		from := m.updateNotesScroll
+		if from > len(lines) {
+			from = len(lines)
+		}
+		to := from + bodyH
+		if to > len(lines) {
+			to = len(lines)
+		}
+		body = strings.Join(lines[from:to], "\n")
+	}
+	return title + "\n" + body
 }
 
 func (m *model) handleKeySettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
