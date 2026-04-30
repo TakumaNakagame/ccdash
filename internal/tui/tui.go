@@ -427,6 +427,12 @@ type attachOutputMsg struct{ sid string }
 // own. Triggers cleanup similar to a tea.Exec callback.
 type attachExitedMsg struct{ sid string }
 
+// attachReenterWindowMsg fires when the operator hit Ctrl+F inside a
+// fullscreen attach. The tea.Exec'd Attach() returned with
+// Result.Windowed=true; we re-enter windowed mode for the same session
+// instead of falling all the way back to the dashboard.
+type attachReenterWindowMsg struct{ sid string }
+
 type sessionsMsg []mdl.Session
 type eventsMsg []mdl.Event
 type approvalsMsg []mdl.Approval
@@ -563,6 +569,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(m.attached, msg.sid)
 		}
 		m.flash = "claude session ended (id " + shortID(msg.sid) + ")"
+		return m, nil
+	case attachReenterWindowMsg:
+		// Operator hit Ctrl+F in fullscreen — restore windowed focus on
+		// the same session and re-arm the output subscription.
+		if sess, ok := m.attached[msg.sid]; ok && sess.Alive() {
+			m.attachFocus = true
+			m.attachFocusSID = msg.sid
+			cols, rows := m.windowedPaneDims()
+			_ = sess.Resize(cols, rows)
+			m.flash = "windowed (Ctrl+D detach · Ctrl+F fullscreen)"
+			return m, m.subscribeAttachOutput(sess, msg.sid)
+		}
 		return m, nil
 	case sessionsMsg:
 		prev := m.currentSessionID()
@@ -1362,17 +1380,52 @@ func (m *model) summarizeCurrent() tea.Cmd {
 }
 
 // handleKeyAttachFocus forwards keystrokes to the focused attach.Session's
-// PTY. Ctrl+D is the only intercept — it drops focus back to the dashboard
-// while leaving claude alive for re-attach. Everything else, including
-// Ctrl+C (claude binds it to interrupt-the-current-request), is passed
-// through verbatim.
+// PTY. Two intercepts:
+//
+//   - Ctrl+D detaches back to the dashboard (claude survives)
+//   - Ctrl+F switches to fullscreen via tea.Exec — Bubble Tea releases
+//     the alt-screen and Session.Attach takes over the whole terminal.
+//     Pressing Ctrl+F again from there flips back; Ctrl+D from there
+//     also detaches.
+//
+// Everything else, including Ctrl+C (claude's interrupt-the-request), is
+// passed through verbatim.
 func (m *model) handleKeyAttachFocus(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyCtrlD {
+	switch msg.Type {
+	case tea.KeyCtrlD:
 		m.attachFocus = false
 		sid := m.attachFocusSID
 		m.attachFocusSID = ""
 		m.flash = "detached — claude still running in background (Enter to reattach id " + shortID(sid) + ")"
 		return m, nil
+	case tea.KeyCtrlF:
+		sess, ok := m.attached[m.attachFocusSID]
+		if !ok || sess == nil || !sess.Alive() {
+			m.attachFocus = false
+			m.attachFocusSID = ""
+			return m, nil
+		}
+		sid := m.attachFocusSID
+		// Pause windowed forwarding while Bubble Tea hands the screen to
+		// the fullscreen path. attachFocus stays as a "what did we have"
+		// tag so the callback can re-enter windowed cleanly.
+		m.attachFocus = false
+		ac := &attach.AttachCmd{Session: sess}
+		return m, tea.Exec(ac, func(err error) tea.Msg {
+			if err != nil {
+				return attachDoneMsg{err: err}
+			}
+			switch {
+			case ac.Result.Windowed:
+				return attachReenterWindowMsg{sid: sid}
+			case ac.Result.Detached:
+				return attachDoneMsg{msg: "detached — claude still running in background (Enter to reattach id " + shortID(sid) + ")"}
+			case ac.Result.ExitErr != nil:
+				return attachExitedMsg{sid: sid}
+			default:
+				return attachExitedMsg{sid: sid}
+			}
+		})
 	}
 	sess, ok := m.attached[m.attachFocusSID]
 	if !ok || sess == nil || !sess.Alive() {
@@ -1954,7 +2007,7 @@ func (m *model) attachCurrent() tea.Cmd {
 	_ = sess.Resize(cols, rows)
 	m.attachFocus = true
 	m.attachFocusSID = s.SessionID
-	m.flash = "attached (Ctrl+D detach · keys go to claude)"
+	m.flash = "attached (Ctrl+D detach · Ctrl+F fullscreen)"
 	return m.subscribeAttachOutput(sess, s.SessionID)
 }
 
@@ -2855,7 +2908,7 @@ func (m *model) renderEventsList(width, height int) string {
 	// keystrokes are being forwarded.
 	if m.attachFocus && m.attachFocusSID == m.currentSessionID() {
 		if sess, ok := m.attached[m.attachFocusSID]; ok && sess != nil && sess.Alive() {
-			header := pendingStyle.Render(fmt.Sprintf("attached  (%s)  Ctrl+D detach", shortID(m.attachFocusSID)))
+			header := pendingStyle.Render(fmt.Sprintf("attached  (%s)  Ctrl+D detach · Ctrl+F fullscreen", shortID(m.attachFocusSID)))
 			bodyH := height - 1
 			if bodyH < 1 {
 				bodyH = 1
