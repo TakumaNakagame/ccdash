@@ -27,6 +27,7 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
+	"github.com/hinshun/vt10x"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -37,18 +38,34 @@ import (
 // stdin — its session remains live, ready for the next attach.
 const EscapeByte = 0x04
 
+// FullscreenToggleByte is Ctrl+F. In windowed mode the TUI binds it to
+// "switch to fullscreen"; in fullscreen mode the input pump intercepts
+// it and unwinds back to the TUI so the caller can return to windowed.
+// Either direction leaves claude running.
+const FullscreenToggleByte = 0x06
+
 // Banner is what we print just before handing control to claude so the
 // operator knows how to come back. Single line, ASCII-safe.
-const Banner = "[ccdash] attached — press Ctrl+D to detach (claude keeps running)\r\n"
+const Banner = "[ccdash] attached — Ctrl+D detach · Ctrl+F windowed\r\n"
 
-// Result carries why a single Attach call returned. Detached means the
-// operator hit Ctrl+D and the child is still alive in the background.
-// ExitErr is set when the child terminated on its own (or Close was
-// called from another goroutine).
+// Result carries why a single Attach call returned. Exactly one of
+// Detached / Windowed is true on a successful return; both false plus a
+// non-nil ExitErr means the child died on its own.
 type Result struct {
-	Detached bool
+	Detached bool // operator hit Ctrl+D
+	Windowed bool // operator hit Ctrl+F (back to TUI's windowed render)
 	ExitErr  error
 }
+
+// detachKind is the reason the input pump asked Attach to wind down.
+// Carried over the detachReq channel so the select branch knows which
+// flag to set on the returned Result.
+type detachKind int
+
+const (
+	detachKindBye detachKind = iota
+	detachKindWindowed
+)
 
 // Session is one claude child plus its PTY, reusable across attach/detach
 // cycles. Construct with New and pass to AttachCmd; do not copy.
@@ -80,6 +97,13 @@ type Session struct {
 	// closed flips to 1 when Close has been called, so subsequent Attach
 	// calls bail out cleanly instead of trying to re-spawn.
 	closed atomic.Int32
+
+	// vt + outputCh are the windowed-render hooks (see windowed.go). They
+	// stay nil until EnsureWindowed is called, so Sessions used only via
+	// fullscreen Attach pay no extra cost.
+	windowedOnce sync.Once
+	vt           vt10x.Terminal
+	outputCh     chan struct{}
 }
 
 // New builds a Session for the given exec.Cmd. The child is not started
@@ -227,12 +251,13 @@ func (s *Session) Attach() (Result, error) {
 	}
 	defer stopR.Close()
 
-	// Detach signal — set when the input pump sees Ctrl+D.
-	detachReq := make(chan struct{}, 1)
+	// Detach signal — set when the input pump sees Ctrl+D or Ctrl+F. The
+	// kind tells us which one so we can shape the Result correctly.
+	detachReq := make(chan detachKind, 1)
 
-	// Stdin → PTY with Ctrl+D interception. Uses unix.Poll so the goroutine
-	// can be interrupted via stopW regardless of OS (SetReadDeadline is a
-	// no-op on terminal fds on macOS, so we can't rely on it).
+	// Stdin → PTY with Ctrl+D / Ctrl+F interception. Uses unix.Poll so the
+	// goroutine can be interrupted via stopW regardless of OS
+	// (SetReadDeadline is a no-op on terminal fds on macOS).
 	stdinFd := int(stdinFile.Fd())
 	stopFd := int(stopR.Fd())
 	inputDone := make(chan struct{})
@@ -260,9 +285,16 @@ func (s *Session) Attach() (Result, error) {
 			n, rerr := stdinFile.Read(buf)
 			if n > 0 {
 				idx := -1
+				kind := detachKindBye
 				for i := 0; i < n; i++ {
 					if buf[i] == EscapeByte {
 						idx = i
+						kind = detachKindBye
+						break
+					}
+					if buf[i] == FullscreenToggleByte {
+						idx = i
+						kind = detachKindWindowed
 						break
 					}
 				}
@@ -271,7 +303,7 @@ func (s *Session) Attach() (Result, error) {
 						_, _ = s.pty.Write(buf[:idx])
 					}
 					select {
-					case detachReq <- struct{}{}:
+					case detachReq <- kind:
 					default:
 					}
 					return
@@ -294,9 +326,14 @@ func (s *Session) Attach() (Result, error) {
 	case <-s.childExit:
 		stopInput()
 		return Result{ExitErr: s.childErr}, nil
-	case <-detachReq:
+	case kind := <-detachReq:
 		stopInput()
-		return Result{Detached: true}, nil
+		switch kind {
+		case detachKindWindowed:
+			return Result{Windowed: true}, nil
+		default:
+			return Result{Detached: true}, nil
+		}
 	}
 }
 
@@ -332,6 +369,14 @@ func (s *Session) spawn() error {
 				s.sinkMu.Lock()
 				_, _ = s.sink.Write(buf[:n])
 				s.sinkMu.Unlock()
+				// If the windowed-render path is wired up, also feed the
+				// emulator and ping the output channel so a TUI watching
+				// it can re-render. vt10x.Terminal is goroutine-safe via
+				// its own internal mutex (Lock/Unlock around state reads).
+				if s.vt != nil {
+					_, _ = s.vt.Write(buf[:n])
+					s.notifyOutput()
+				}
 			}
 			if err != nil {
 				return
