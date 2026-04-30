@@ -3153,17 +3153,7 @@ func (m *model) renderEventsList(width, height int) string {
 				bodyH = 1
 			}
 			body := sess.RenderWindowed(width, bodyH)
-			// Skip lipgloss.Width().Height().Render here — it re-parses
-			// the body's ANSI when computing layout and ends up stripping
-			// our SGR escapes, which is what showed up as "side panel
-			// went monochrome". RenderWindowed already pads each row to
-			// exactly `width` cells, and we top up to `height` rows below.
-			out := header + "\n" + body
-			rows := strings.Count(out, "\n") + 1
-			if rows < height {
-				out += strings.Repeat("\n", height-rows)
-			}
-			return out
+			return lipgloss.NewStyle().Width(width).Height(height).Render(header + "\n" + body)
 		}
 	}
 
