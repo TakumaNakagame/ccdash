@@ -58,3 +58,7 @@ jobs:
           files: dist/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # Tags with a hyphen suffix (vX.Y.Z-beta.1, vX.Y.Z-rc.2, ...)
+          # are pre-releases. action-gh-release's auto-detection isn't
+          # reliable for our suffix style, so we set it explicitly.
+          prerelease: ${{ contains(github.ref_name, '-') }}
