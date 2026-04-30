@@ -23,6 +23,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/auth"
 	"github.com/takumanakagame/ccmanage/internal/buildinfo"
 	"github.com/takumanakagame/ccmanage/internal/db"
+	"github.com/takumanakagame/ccmanage/internal/selfupdate"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/settings"
@@ -152,6 +153,19 @@ type model struct {
 	// sessions are doing work right now. Wraps naturally — we mod into the
 	// frame slice on read.
 	animTick int
+
+	// updateAvailable is the GitHub release tag of a newer ccdash, set
+	// asynchronously a few seconds after startup. Empty when we're either
+	// already on the latest tag, the check is still in flight, or the
+	// network probe failed (we stay quiet in that case rather than nag).
+	updateAvailable string
+	// awaitUpdateConfirm gates the y/n banner that fires when the
+	// operator presses 'u' on the update-available notice.
+	awaitUpdateConfirm bool
+	// updateRunning is true while selfupdate.Run is executing in a
+	// background goroutine. Drives the in-progress flash and prevents
+	// double-fires.
+	updateRunning bool
 
 	// editingNewSession is true while the operator is typing a directory
 	// path in the new-session footer prompt (entered via 'n').
@@ -411,7 +425,38 @@ func completeDirPrefix(buf string) []string {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.refresh(), tickCmd(m.tickInterval()), animTickCmd())
+	return tea.Batch(m.refresh(), tickCmd(m.tickInterval()), animTickCmd(), m.checkUpdateCmd())
+}
+
+// checkUpdateCmd asks GitHub for the latest release tag in the background
+// and reports back via updateCheckMsg. Skipped on dev builds (no
+// version to compare) and when ccdash is the development binary running
+// against a still-publishable tag — the message simply doesn't arrive in
+// those cases. We give it a short timeout so a stalled network doesn't
+// keep a goroutine pinned for the whole session.
+func (m *model) checkUpdateCmd() tea.Cmd {
+	if buildinfo.IsDev() {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 8*time.Second)
+		defer cancel()
+		tag, err := selfupdate.LatestTag(ctx)
+		return updateCheckMsg{tag: tag, err: err}
+	}
+}
+
+// runUpdateCmd kicks off selfupdate.Run in a background goroutine and
+// emits updateDoneMsg when it returns. Used by the 'u' key handler after
+// the y/n confirm fires.
+func (m *model) runUpdateCmd() tea.Cmd {
+	current := buildinfo.Version
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
+		defer cancel()
+		res, err := selfupdate.Run(ctx, current)
+		return updateDoneMsg{res: res, err: err}
+	}
 }
 
 type tickMsg time.Time
@@ -432,6 +477,21 @@ type attachExitedMsg struct{ sid string }
 // Result.Windowed=true; we re-enter windowed mode for the same session
 // instead of falling all the way back to the dashboard.
 type attachReenterWindowMsg struct{ sid string }
+
+// updateCheckMsg is the result of the startup release-tag probe. tag is
+// the latest published tag (e.g. "v0.3.1"); err is set on a failed
+// probe and we just stay quiet instead of nagging.
+type updateCheckMsg struct {
+	tag string
+	err error
+}
+
+// updateDoneMsg fires when the operator-triggered selfupdate.Run finishes.
+// Whether it succeeded, was a no-op, or failed comes through Result/err.
+type updateDoneMsg struct {
+	res selfupdate.Result
+	err error
+}
 
 type sessionsMsg []mdl.Session
 type eventsMsg []mdl.Event
@@ -581,6 +641,32 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash = "windowed (Ctrl+D detach · Ctrl+F fullscreen)"
 			return m, m.subscribeAttachOutput(sess, msg.sid)
 		}
+		return m, nil
+	case updateCheckMsg:
+		// Stay quiet on errors (probe failure shouldn't nag) and on
+		// "already latest" matches. Anything else is a real new tag.
+		if msg.err != nil || msg.tag == "" {
+			return m, nil
+		}
+		if msg.tag == buildinfo.Version {
+			return m, nil
+		}
+		m.updateAvailable = msg.tag
+		m.flash = "update available: " + msg.tag + " — press 'u' to install"
+		return m, nil
+	case updateDoneMsg:
+		m.updateRunning = false
+		if msg.err != nil {
+			m.err = fmt.Errorf("update failed: %w", msg.err)
+			return m, nil
+		}
+		if msg.res.NoOp {
+			m.flash = "update: " + msg.res.Reason
+			m.updateAvailable = ""
+			return m, nil
+		}
+		m.flash = "updated to " + msg.res.NewVersion + " — restart ccdash to use the new binary"
+		m.updateAvailable = ""
 		return m, nil
 	case sessionsMsg:
 		prev := m.currentSessionID()
@@ -810,6 +896,21 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if m.awaitUpdateConfirm {
+		m.awaitUpdateConfirm = false
+		switch msg.String() {
+		case "y", "Y":
+			if m.updateRunning {
+				return m, nil
+			}
+			m.updateRunning = true
+			m.flash = "updating to " + m.updateAvailable + "…"
+			return m, m.runUpdateCmd()
+		default:
+			m.flash = "update cancelled"
+			return m, nil
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, m.quit()
@@ -954,6 +1055,17 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		m.editingSearch = true
 		m.titleBuffer = m.searchQuery
+		return m, nil
+	case "u":
+		// Trigger the self-update flow if a newer release is on the
+		// shelf. Silently no-op when the startup probe hasn't surfaced
+		// anything — the operator can still run `ccdash update` from
+		// the shell to force a check.
+		if m.updateAvailable == "" || m.updateRunning {
+			return m, nil
+		}
+		m.awaitUpdateConfirm = true
+		m.flash = "update to " + m.updateAvailable + " (current " + buildinfo.Version + ")? press 'y' to install, any other key to cancel"
 		return m, nil
 	case "n":
 		// Start a new claude session by typing a directory path. Default
@@ -2134,6 +2246,10 @@ var (
 	// Black on bright orange — meant to be unmissable so a stale dev build
 	// stands out against a release binary's clean header.
 	devBadgeStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("208")).Padding(0, 1)
+	// Bright cyan on black so it doesn't clash with the orange DEV chip
+	// (a dev binary can also have a newer release available, in which
+	// case both show side by side).
+	updateBadgeStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("33")).Padding(0, 1)
 	selectedRow       = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("15"))
 	pendingStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
 	pendingRowStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
@@ -2185,6 +2301,12 @@ func (m *model) renderHeader() string {
 		}
 		right += "  " + devBadgeStyle.Render(strings.Join(parts, " "))
 	}
+	if m.updateAvailable != "" {
+		// Reuse the dev badge style — operator-facing meaning differs
+		// (offer to upgrade vs. flag a dev build) but the visual weight
+		// is the same: an unmissable orange chip in the corner.
+		right += "  " + updateBadgeStyle.Render("↑ "+m.updateAvailable+" · u")
+	}
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
@@ -2226,7 +2348,7 @@ func (m *model) renderHeader() string {
 }
 
 func (m *model) renderFooter() string {
-	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm {
+	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm || m.awaitUpdateConfirm {
 		// y/n confirmation lands in a full-width yellow banner instead
 		// of the dim flash so operators don't miss the cue.
 		banner := confirmBannerStyle.Width(m.width).Render(m.flash)

@@ -30,6 +30,16 @@ type Result struct {
 	Reason     string
 }
 
+// LatestTag asks GitHub for the latest release tag and returns it
+// verbatim (e.g. "v0.3.0"). Used by the TUI's startup notifier so the
+// operator gets a banner when a newer release is available without
+// running `ccdash update` first. Network-bound; the caller should give
+// it a sensible context.
+func LatestTag(ctx context.Context) (string, error) {
+	tag, _, _, err := latestAsset(ctx)
+	return tag, err
+}
+
 // Run resolves the latest release and replaces the running binary in
 // place when its tag differs from currentVersion. Returns details of the
 // outcome; an error is returned only when we tried and failed.
