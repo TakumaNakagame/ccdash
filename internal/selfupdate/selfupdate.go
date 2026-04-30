@@ -18,9 +18,37 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"golang.org/x/mod/semver"
 )
 
 const Repo = "TakumaNakagame/ccdash"
+
+// Channel selects which slice of the release feed to consider. Stable
+// pulls only non-prerelease tags (the GitHub /releases/latest endpoint
+// already excludes prereleases). Dev pulls the newest published tag,
+// prereleases included, so beta builds the maintainer cuts on a Mac
+// can be tested on Linux without promoting them to stable first.
+type Channel string
+
+const (
+	ChannelStable Channel = "stable"
+	ChannelDev    Channel = "dev"
+)
+
+// ParseChannel normalises a CLI flag value into a Channel. Empty input
+// defaults to stable; unknown values are rejected so a typo doesn't
+// silently fall back.
+func ParseChannel(s string) (Channel, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "stable":
+		return ChannelStable, nil
+	case "dev", "beta", "prerelease", "pre":
+		return ChannelDev, nil
+	default:
+		return "", fmt.Errorf("unknown channel %q (want stable or dev)", s)
+	}
+}
 
 type Result struct {
 	OldVersion string
@@ -30,13 +58,12 @@ type Result struct {
 	Reason     string
 }
 
-// LatestTag asks GitHub for the latest release tag and returns it
-// verbatim (e.g. "v0.3.0"). Used by the TUI's startup notifier so the
-// operator gets a banner when a newer release is available without
-// running `ccdash update` first. Network-bound; the caller should give
-// it a sensible context.
-func LatestTag(ctx context.Context) (string, error) {
-	tag, _, _, err := latestAsset(ctx)
+// LatestTag asks GitHub for the latest release tag in the given channel
+// and returns it verbatim (e.g. "v0.3.0" or "v0.3.3-beta.1"). Empty
+// channel defaults to stable. Used by the TUI's startup notifier so the
+// operator gets a banner when a newer release is available.
+func LatestTag(ctx context.Context, channel Channel) (string, error) {
+	tag, _, _, err := latestAsset(ctx, channel)
 	return tag, err
 }
 
@@ -77,19 +104,32 @@ func ReleaseInfo(ctx context.Context, tag string) (notes string, err error) {
 	return rel.Body, nil
 }
 
-// Run resolves the latest release and replaces the running binary in
-// place when its tag differs from currentVersion. Returns details of the
-// outcome; an error is returned only when we tried and failed.
-func Run(ctx context.Context, currentVersion string) (Result, error) {
-	tag, asset, sumURL, err := latestAsset(ctx)
+// Run resolves the latest release in the given channel and replaces the
+// running binary when its tag is newer than currentVersion. Channel
+// "stable" excludes prereleases; channel "dev" includes them. Comparison
+// is semver-aware — a v0.3.3-beta.1 on disk plus a v0.3.2 in stable is
+// treated as already-newer, not a downgrade prompt.
+func Run(ctx context.Context, currentVersion string, channel Channel) (Result, error) {
+	tag, asset, sumURL, err := latestAsset(ctx, channel)
 	if err != nil {
 		return Result{}, err
 	}
 	res := Result{OldVersion: currentVersion, NewVersion: tag}
-	if currentVersion != "" && currentVersion != "dev" && tag == currentVersion {
-		res.NoOp = true
-		res.Reason = "already on the latest release"
-		return res, nil
+	// Skip when current is at or beyond the channel's latest. semver.Compare
+	// returns >= 0 when the first arg is newer or equal. Dev / unparseable
+	// versions fall back to string equality.
+	if currentVersion != "" && currentVersion != "dev" {
+		if semver.IsValid(currentVersion) && semver.IsValid(tag) {
+			if semver.Compare(currentVersion, tag) >= 0 {
+				res.NoOp = true
+				res.Reason = fmt.Sprintf("already on %s (latest in %s channel: %s)", currentVersion, channel, tag)
+				return res, nil
+			}
+		} else if tag == currentVersion {
+			res.NoOp = true
+			res.Reason = "already on the latest release"
+			return res, nil
+		}
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -128,45 +168,65 @@ func Run(ctx context.Context, currentVersion string) (Result, error) {
 	return res, nil
 }
 
-func latestAsset(ctx context.Context) (tag, assetURL, sumURL string, err error) {
-	req, err := http.NewRequestWithContext(ctx,
-		http.MethodGet,
-		"https://api.github.com/repos/"+Repo+"/releases/latest", nil)
-	if err != nil {
-		return "", "", "", err
+// release is the slice of the GitHub releases payload we care about.
+type release struct {
+	TagName    string `json:"tag_name"`
+	Prerelease bool   `json:"prerelease"`
+	Draft      bool   `json:"draft"`
+	Assets     []struct {
+		Name string `json:"name"`
+		URL  string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+// latestAsset finds the newest release that matches the channel and
+// returns its asset URLs for our GOOS/GOARCH. Stable hits the cheap
+// /releases/latest endpoint (already excludes prereleases). Dev hits
+// the paged /releases endpoint and picks the highest semver among
+// non-draft entries — including prereleases.
+func latestAsset(ctx context.Context, channel Channel) (tag, assetURL, sumURL string, err error) {
+	if channel == "" {
+		channel = ChannelStable
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	c := &http.Client{Timeout: 10 * time.Second}
-	resp, err := c.Do(req)
-	if err != nil {
-		return "", "", "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		// 403 + secondary-rate-limit body is the most common cause; surface
-		// a hint so the operator can switch to an explicit-version flow
-		// (currently only via the install script's CCDASH_VERSION env).
-		hint := ""
-		if resp.StatusCode == http.StatusForbidden {
-			hint = " — likely GitHub anonymous API rate limit (60/hr)"
+	var picked release
+	switch channel {
+	case ChannelStable:
+		var r release
+		if err := getJSON(ctx, "https://api.github.com/repos/"+Repo+"/releases/latest", &r); err != nil {
+			return "", "", "", err
 		}
-		return "", "", "", fmt.Errorf("github api: %s%s", resp.Status, hint)
+		picked = r
+	case ChannelDev:
+		var rs []release
+		if err := getJSON(ctx, "https://api.github.com/repos/"+Repo+"/releases?per_page=20", &rs); err != nil {
+			return "", "", "", err
+		}
+		// Pick the highest semver tag that isn't a draft. The API
+		// returns newest-first by created_at, which usually matches
+		// semver order, but we sort defensively in case the maintainer
+		// re-cuts an older line for a hotfix.
+		for _, r := range rs {
+			if r.Draft || r.TagName == "" {
+				continue
+			}
+			if !semver.IsValid(r.TagName) {
+				continue
+			}
+			if picked.TagName == "" || semver.Compare(r.TagName, picked.TagName) > 0 {
+				picked = r
+			}
+		}
+		if picked.TagName == "" {
+			return "", "", "", fmt.Errorf("no release found in dev channel")
+		}
+	default:
+		return "", "", "", fmt.Errorf("unknown channel %q", channel)
 	}
-	var rel struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
-			Name string `json:"name"`
-			URL  string `json:"browser_download_url"`
-		} `json:"assets"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return "", "", "", err
-	}
-	if rel.TagName == "" {
+	if picked.TagName == "" {
 		return "", "", "", fmt.Errorf("github api returned no tag name")
 	}
 	wanted := fmt.Sprintf("ccdash-%s-%s", runtime.GOOS, runtime.GOARCH)
-	for _, a := range rel.Assets {
+	for _, a := range picked.Assets {
 		if a.Name == wanted {
 			assetURL = a.URL
 		} else if a.Name == wanted+".sha256" {
@@ -174,9 +234,33 @@ func latestAsset(ctx context.Context) (tag, assetURL, sumURL string, err error) 
 		}
 	}
 	if assetURL == "" {
-		return "", "", "", fmt.Errorf("no release asset for %s/%s in %s", runtime.GOOS, runtime.GOARCH, rel.TagName)
+		return "", "", "", fmt.Errorf("no release asset for %s/%s in %s", runtime.GOOS, runtime.GOARCH, picked.TagName)
 	}
-	return rel.TagName, assetURL, sumURL, nil
+	return picked.TagName, assetURL, sumURL, nil
+}
+
+// getJSON fetches the URL and decodes the body into v. Returns the same
+// rate-limit-aware error message as the old inline code.
+func getJSON(ctx context.Context, url string, v any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	c := &http.Client{Timeout: 10 * time.Second}
+	resp, err := c.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		hint := ""
+		if resp.StatusCode == http.StatusForbidden {
+			hint = " — likely GitHub anonymous API rate limit (60/hr)"
+		}
+		return fmt.Errorf("github api: %s%s", resp.Status, hint)
+	}
+	return json.NewDecoder(resp.Body).Decode(v)
 }
 
 func download(ctx context.Context, url string, w io.Writer) error {

@@ -79,12 +79,23 @@ the TUI exits, so events are captured even while you're not watching. Use
 }
 
 func updateCmd(currentVersion string) *cobra.Command {
-	return &cobra.Command{
+	var channelFlag string
+	c := &cobra.Command{
 		Use:   "update",
 		Short: "Replace this binary with the latest GitHub release",
+		Long: `Update ccdash from a GitHub release.
+
+By default --channel=stable picks the latest tagged release that is not
+flagged as a pre-release. --channel=dev (alias: beta / pre / prerelease)
+includes pre-release tags so beta builds the maintainer cuts on a Mac
+can be installed before they're promoted to stable.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Printf("ccdash: current version %s\n", currentVersion)
-			res, err := selfupdate.Run(cmd.Context(), currentVersion)
+			channel, err := selfupdate.ParseChannel(channelFlag)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("ccdash: current version %s (channel %s)\n", currentVersion, channel)
+			res, err := selfupdate.Run(cmd.Context(), currentVersion, channel)
 			if err != nil {
 				return err
 			}
@@ -105,6 +116,9 @@ func updateCmd(currentVersion string) *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&channelFlag, "channel", "stable",
+		"release channel: 'stable' for tagged releases, 'dev' to include pre-releases")
+	return c
 }
 
 func serverCmd() *cobra.Command {

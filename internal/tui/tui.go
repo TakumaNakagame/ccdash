@@ -445,7 +445,7 @@ func (m *model) checkUpdateCmd() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 8*time.Second)
 		defer cancel()
-		tag, err := selfupdate.LatestTag(ctx)
+		tag, err := selfupdate.LatestTag(ctx, selfupdate.ChannelStable)
 		return updateCheckMsg{tag: tag, err: err}
 	}
 }
@@ -471,7 +471,7 @@ func (m *model) runUpdateCmd() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
 		defer cancel()
-		res, err := selfupdate.Run(ctx, current)
+		res, err := selfupdate.Run(ctx, current, selfupdate.ChannelStable)
 		return updateDoneMsg{res: res, err: err}
 	}
 }
