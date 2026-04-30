@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/hinshun/vt10x"
@@ -158,8 +159,15 @@ func (s *Session) Alive() bool {
 	}
 }
 
-// Close terminates the child (SIGTERM, then waits) and releases the PTY.
-// Idempotent; safe to call from any goroutine.
+// Close terminates the child (SIGTERM with a short SIGKILL escalation)
+// and releases the PTY. Idempotent; safe to call from any goroutine.
+//
+// The escalation matters for the `q` quit path on the dashboard: claude
+// can be midway through a tool call or a slow HTTP request when SIGTERM
+// arrives, and a vanilla `<-s.childExit` would wedge ccdash's render
+// loop until the child finally yielded — looked exactly like a freeze.
+// We give it a short grace window (closeGraceTimeout) and then send
+// SIGKILL, which is uncatchable so childExit fires promptly afterwards.
 func (s *Session) Close() error {
 	if s == nil {
 		return nil
@@ -171,7 +179,14 @@ func (s *Session) Close() error {
 		_ = s.cmd.Process.Signal(syscall.SIGTERM)
 	}
 	if s.childExit != nil {
-		<-s.childExit
+		select {
+		case <-s.childExit:
+		case <-time.After(closeGraceTimeout):
+			if s.cmd != nil && s.cmd.Process != nil {
+				_ = s.cmd.Process.Kill()
+			}
+			<-s.childExit
+		}
 	}
 	if s.pty != nil {
 		_ = s.pty.Close()
@@ -181,6 +196,12 @@ func (s *Session) Close() error {
 	}
 	return nil
 }
+
+// closeGraceTimeout is how long we let claude finish flushing on SIGTERM
+// before we escalate to SIGKILL. Tuned so the operator's `q` keystroke
+// doesn't feel laggy — claude usually closes well under a second when
+// idle, and even a stuck tool call gets cut after this window.
+const closeGraceTimeout = 1500 * time.Millisecond
 
 // Attach blocks while the operator is in attach mode. It puts the
 // terminal in raw mode, forwards stdin to the PTY (intercepting Ctrl+D),
