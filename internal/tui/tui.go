@@ -128,14 +128,6 @@ type model struct {
 	transcriptTitle    string
 	transcriptPath     string
 
-	// attachFocus is true while the operator's keystrokes should flow to a
-	// windowed-attached claude session instead of the dashboard. Cleared
-	// by Ctrl+D (detach) or by the child exiting. attachFocusSID names
-	// which session is focused — if the operator is in attachFocus mode
-	// the row's id and this field always agree.
-	attachFocus    bool
-	attachFocusSID string
-
 	// attached holds long-lived attach.Session instances keyed by session
 	// id. Detaching with Ctrl+D leaves the entry in place so the next
 	// Enter resumes the same child instead of spawning a new one. Sessions
@@ -479,22 +471,6 @@ func (m *model) runUpdateCmd() tea.Cmd {
 type tickMsg time.Time
 type animTickMsg time.Time
 
-// attachOutputMsg fires when an attach.Session pushed new bytes through
-// its PTY pump, so the TUI knows to re-render the windowed pane. The sid
-// names which session it came from; we only act if it matches the
-// currently focused attach.
-type attachOutputMsg struct{ sid string }
-
-// attachExitedMsg fires when the windowed-attached claude died on its
-// own. Triggers cleanup similar to a tea.Exec callback.
-type attachExitedMsg struct{ sid string }
-
-// attachReenterWindowMsg fires when the operator hit Ctrl+F inside a
-// fullscreen attach. The tea.Exec'd Attach() returned with
-// Result.Windowed=true; we re-enter windowed mode for the same session
-// instead of falling all the way back to the dashboard.
-type attachReenterWindowMsg struct{ sid string }
-
 // updateCheckMsg is the result of the startup release-tag probe. tag is
 // the latest published tag (e.g. "v0.3.1"); err is set on a failed
 // probe and we just stay quiet instead of nagging.
@@ -626,47 +602,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.resizeFocusedAttach()
 	case tickMsg:
 		m.lastTick = time.Time(msg)
 		return m, tea.Batch(m.refresh(), tickCmd(m.tickInterval()))
 	case animTickMsg:
 		m.animTick++
 		return m, animTickCmd()
-	case attachOutputMsg:
-		// Fresh PTY output for the focused attach. Re-render is implicit
-		// (the View call following this Update will see the new emulator
-		// state). Re-arm the subscription so the next chunk also fires.
-		if m.attachFocus && m.attachFocusSID == msg.sid {
-			if sess, ok := m.attached[msg.sid]; ok {
-				return m, m.subscribeAttachOutput(sess, msg.sid)
-			}
-		}
-		return m, nil
-	case attachExitedMsg:
-		// Child died on its own while windowed. Drop focus, prune, flash.
-		if m.attachFocusSID == msg.sid {
-			m.attachFocus = false
-			m.attachFocusSID = ""
-		}
-		if sess, ok := m.attached[msg.sid]; ok {
-			_ = sess.Close()
-			delete(m.attached, msg.sid)
-		}
-		m.flash = "claude session ended (id " + shortID(msg.sid) + ")"
-		return m, nil
-	case attachReenterWindowMsg:
-		// Operator hit Ctrl+F in fullscreen — restore windowed focus on
-		// the same session and re-arm the output subscription.
-		if sess, ok := m.attached[msg.sid]; ok && sess.Alive() {
-			m.attachFocus = true
-			m.attachFocusSID = msg.sid
-			cols, rows := m.windowedPaneDims()
-			_ = sess.Resize(cols, rows)
-			m.flash = "windowed (Ctrl+D detach · Ctrl+F fullscreen)"
-			return m, m.subscribeAttachOutput(sess, msg.sid)
-		}
-		return m, nil
 	case updateCheckMsg:
 		// Stay quiet on errors (probe failure shouldn't nag) and on
 		// "already latest" matches. Anything else is a real new tag.
@@ -868,16 +809,6 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Windowed-attach focus wins over everything else: every keystroke
-	// gets forwarded to claude's PTY. The only operator-side intercepts
-	// are Ctrl+D (detach back to the dashboard) and Ctrl+C (also detach,
-	// since claude itself binds Ctrl+C to "interrupt the current request"
-	// — the operator has no way to actually quit ccdash from within
-	// attach mode otherwise, and double-Ctrl+C from claude's own raw mode
-	// is what we'd expect anyway).
-	if m.attachFocus {
-		return m.handleKeyAttachFocus(msg)
-	}
 	if m.pane == paneTranscript {
 		return m.handleKeyTranscript(msg)
 	}
@@ -1375,65 +1306,6 @@ func (m *model) defaultSelectionIdx() int {
 	return 0
 }
 
-// windowedPaneDims returns the column and row budget the right pane has
-// available for a windowed attach render. Mirrors the geometry used by
-// renderEventsList: the same logic as mouseInRightPane / verticalSplit
-// but returning sizes instead of a click test. Subtracts one row for the
-// "attached (id) Ctrl+D detach" header.
-func (m *model) windowedPaneDims() (cols, rows int) {
-	if m.width <= 0 || m.height <= 0 {
-		return 80, 24
-	}
-	headerH := countLines(m.renderHeader())
-	tabH := 0
-	if m.renderTabBar() != "" {
-		tabH = 2
-	}
-	footerH := countLines(m.renderFooter()) + 1
-	bodyHeight := m.height - headerH - tabH - footerH
-	if bodyHeight < 5 {
-		bodyHeight = 5
-	}
-	if m.useVerticalLayout() {
-		_, rightH := m.verticalSplit(bodyHeight)
-		rows = rightH - 1 // header line above the body
-		if rows < 1 {
-			rows = 1
-		}
-		cols = m.width
-		return cols, rows
-	}
-	const sepW = 3
-	leftWidth := m.width / 2
-	if leftWidth < 30 {
-		leftWidth = 30
-	}
-	cols = m.width - leftWidth - sepW
-	if cols < 20 {
-		cols = 20
-	}
-	rows = bodyHeight - 1
-	if rows < 1 {
-		rows = 1
-	}
-	return cols, rows
-}
-
-// resizeFocusedAttach pushes the right-pane size to whichever attach
-// session is currently focused (if any). Called from WindowSizeMsg so the
-// emulator + PTY stay aligned with the pane geometry.
-func (m *model) resizeFocusedAttach() {
-	if !m.attachFocus || m.attachFocusSID == "" {
-		return
-	}
-	sess, ok := m.attached[m.attachFocusSID]
-	if !ok || sess == nil || !sess.Alive() {
-		return
-	}
-	cols, rows := m.windowedPaneDims()
-	_ = sess.Resize(cols, rows)
-}
-
 // mouseInRightPane decides whether a wheel event lands on the transcript
 // pane (vs the session list) based on the active layout. We recompute the
 // pane geometry on demand instead of caching it because View runs every
@@ -1510,206 +1382,6 @@ func (m *model) summarizeCurrent() tea.Cmd {
 	}
 }
 
-// handleKeyAttachFocus forwards keystrokes to the focused attach.Session's
-// PTY. Two intercepts:
-//
-//   - Ctrl+D detaches back to the dashboard (claude survives)
-//   - Ctrl+F switches to fullscreen via tea.Exec — Bubble Tea releases
-//     the alt-screen and Session.Attach takes over the whole terminal.
-//     Pressing Ctrl+F again from there flips back; Ctrl+D from there
-//     also detaches.
-//
-// Everything else, including Ctrl+C (claude's interrupt-the-request), is
-// passed through verbatim.
-func (m *model) handleKeyAttachFocus(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlD:
-		m.attachFocus = false
-		sid := m.attachFocusSID
-		m.attachFocusSID = ""
-		m.flash = "detached — claude still running in background (Enter to reattach id " + shortID(sid) + ")"
-		return m, nil
-	case tea.KeyCtrlF:
-		sess, ok := m.attached[m.attachFocusSID]
-		if !ok || sess == nil || !sess.Alive() {
-			m.attachFocus = false
-			m.attachFocusSID = ""
-			return m, nil
-		}
-		sid := m.attachFocusSID
-		// Pause windowed forwarding while Bubble Tea hands the screen to
-		// the fullscreen path. attachFocus stays as a "what did we have"
-		// tag so the callback can re-enter windowed cleanly.
-		m.attachFocus = false
-		ac := &attach.AttachCmd{Session: sess}
-		return m, tea.Exec(ac, func(err error) tea.Msg {
-			if err != nil {
-				return attachDoneMsg{err: err}
-			}
-			switch {
-			case ac.Result.Windowed:
-				return attachReenterWindowMsg{sid: sid}
-			case ac.Result.Detached:
-				return attachDoneMsg{msg: "detached — claude still running in background (Enter to reattach id " + shortID(sid) + ")"}
-			case ac.Result.ExitErr != nil:
-				return attachExitedMsg{sid: sid}
-			default:
-				return attachExitedMsg{sid: sid}
-			}
-		})
-	}
-	sess, ok := m.attached[m.attachFocusSID]
-	if !ok || sess == nil || !sess.Alive() {
-		// The session disappeared out from under us (e.g. claude died
-		// just before this key arrived). Drop focus and let the dashboard
-		// take over.
-		m.attachFocus = false
-		m.attachFocusSID = ""
-		return m, nil
-	}
-	if data := keyMsgToBytes(msg); len(data) > 0 {
-		_ = sess.SendInput(data)
-	}
-	return m, nil
-}
-
-// keyMsgToBytes translates a Bubble Tea KeyMsg back into the byte sequence
-// the underlying terminal would have produced. Bubble Tea consumes raw
-// input and parses it into typed events; for forwarding to a child PTY we
-// have to invert that. Common keys are covered; rare ones (numeric keypad
-// distinctions, very specific function keys with modifiers) fall back to
-// no bytes — the operator can use claude's own keymap workarounds.
-func keyMsgToBytes(msg tea.KeyMsg) []byte {
-	if msg.Type == tea.KeyRunes {
-		// Plain text input. Alt prepends Esc per xterm convention.
-		s := string(msg.Runes)
-		if msg.Alt {
-			return append([]byte{0x1b}, []byte(s)...)
-		}
-		return []byte(s)
-	}
-	var raw string
-	switch msg.Type {
-	case tea.KeyEnter:
-		raw = "\r"
-	case tea.KeyTab:
-		raw = "\t"
-	case tea.KeyBackspace:
-		raw = "\x7f"
-	case tea.KeySpace:
-		raw = " "
-	case tea.KeyEsc:
-		raw = "\x1b"
-	case tea.KeyUp:
-		raw = "\x1b[A"
-	case tea.KeyDown:
-		raw = "\x1b[B"
-	case tea.KeyRight:
-		raw = "\x1b[C"
-	case tea.KeyLeft:
-		raw = "\x1b[D"
-	case tea.KeyHome:
-		raw = "\x1b[H"
-	case tea.KeyEnd:
-		raw = "\x1b[F"
-	case tea.KeyPgUp:
-		raw = "\x1b[5~"
-	case tea.KeyPgDown:
-		raw = "\x1b[6~"
-	case tea.KeyDelete:
-		raw = "\x1b[3~"
-	case tea.KeyInsert:
-		raw = "\x1b[2~"
-	case tea.KeyShiftTab:
-		raw = "\x1b[Z"
-	case tea.KeyCtrlAt:
-		raw = "\x00"
-	case tea.KeyCtrlA:
-		raw = "\x01"
-	case tea.KeyCtrlB:
-		raw = "\x02"
-	case tea.KeyCtrlC:
-		raw = "\x03"
-	case tea.KeyCtrlE:
-		raw = "\x05"
-	case tea.KeyCtrlF:
-		raw = "\x06"
-	case tea.KeyCtrlG:
-		raw = "\x07"
-	case tea.KeyCtrlH:
-		raw = "\x08"
-	case tea.KeyCtrlJ:
-		raw = "\x0a"
-	case tea.KeyCtrlK:
-		raw = "\x0b"
-	case tea.KeyCtrlL:
-		raw = "\x0c"
-	case tea.KeyCtrlN:
-		raw = "\x0e"
-	case tea.KeyCtrlO:
-		raw = "\x0f"
-	case tea.KeyCtrlP:
-		raw = "\x10"
-	case tea.KeyCtrlQ:
-		raw = "\x11"
-	case tea.KeyCtrlR:
-		raw = "\x12"
-	case tea.KeyCtrlS:
-		raw = "\x13"
-	case tea.KeyCtrlT:
-		raw = "\x14"
-	case tea.KeyCtrlU:
-		raw = "\x15"
-	case tea.KeyCtrlV:
-		raw = "\x16"
-	case tea.KeyCtrlW:
-		raw = "\x17"
-	case tea.KeyCtrlX:
-		raw = "\x18"
-	case tea.KeyCtrlY:
-		raw = "\x19"
-	case tea.KeyCtrlZ:
-		raw = "\x1a"
-	case tea.KeyCtrlBackslash:
-		raw = "\x1c"
-	case tea.KeyCtrlCloseBracket:
-		raw = "\x1d"
-	case tea.KeyCtrlCaret:
-		raw = "\x1e"
-	case tea.KeyCtrlUnderscore:
-		raw = "\x1f"
-	case tea.KeyF1:
-		raw = "\x1bOP"
-	case tea.KeyF2:
-		raw = "\x1bOQ"
-	case tea.KeyF3:
-		raw = "\x1bOR"
-	case tea.KeyF4:
-		raw = "\x1bOS"
-	case tea.KeyF5:
-		raw = "\x1b[15~"
-	case tea.KeyF6:
-		raw = "\x1b[17~"
-	case tea.KeyF7:
-		raw = "\x1b[18~"
-	case tea.KeyF8:
-		raw = "\x1b[19~"
-	case tea.KeyF9:
-		raw = "\x1b[20~"
-	case tea.KeyF10:
-		raw = "\x1b[21~"
-	case tea.KeyF11:
-		raw = "\x1b[23~"
-	case tea.KeyF12:
-		raw = "\x1b[24~"
-	default:
-		return nil
-	}
-	if msg.Alt {
-		return append([]byte{0x1b}, []byte(raw)...)
-	}
-	return []byte(raw)
-}
 
 // handleKeyTitleEdit consumes keystrokes while the rename input is active.
 // We avoid the larger key map here so typed letters land in the buffer
@@ -2188,61 +1860,26 @@ func (m *model) attachCurrent() tea.Cmd {
 		sess = attach.New(c)
 		m.attached[s.SessionID] = sess
 	}
-	if !m.settings.WindowedAttach {
-		// Default: fullscreen pass-through. Bubble Tea suspends, claude
-		// owns the terminal until the operator hits Ctrl+D (detach) or
-		// claude exits on its own.
-		ac := &attach.AttachCmd{Session: sess}
-		sid := s.SessionID
-		return tea.Exec(ac, func(err error) tea.Msg {
-			if err != nil {
-				return attachDoneMsg{err: err}
-			}
-			switch {
-			case ac.Result.Detached:
-				return attachDoneMsg{msg: "detached — claude still running in background (Enter to reattach)"}
-			case ac.Result.ExitErr != nil:
-				return attachDoneMsg{err: ac.Result.ExitErr, msg: "claude session ended (id " + shortID(sid) + ")"}
-			default:
-				return attachDoneMsg{msg: "claude session ended (id " + shortID(sid) + ")"}
-			}
-		})
-	}
-	// Opt-in windowed path. Vt10x emulator + key forwarding; Ctrl+F
-	// flips to the fullscreen path above and back.
-	if err := sess.Start(); err != nil {
-		delete(m.attached, s.SessionID)
-		return func() tea.Msg { return attachDoneMsg{err: err} }
-	}
-	sess.EnsureWindowed()
-	cols, rows := m.windowedPaneDims()
-	_ = sess.Resize(cols, rows)
-	m.attachFocus = true
-	m.attachFocusSID = s.SessionID
-	m.flash = "attached (Ctrl+D detach · Ctrl+F fullscreen)"
-	return m.subscribeAttachOutput(sess, s.SessionID)
-}
-
-// subscribeAttachOutput returns a one-shot tea.Cmd that blocks on the
-// session's output channel and emits attachOutputMsg when bytes arrive
-// (or attachExitedMsg if the child died). The TUI re-issues the
-// subscription on each output so it's always armed for the next chunk.
-func (m *model) subscribeAttachOutput(sess *attach.Session, sid string) tea.Cmd {
-	return func() tea.Msg {
-		ch := sess.OutputCh()
-		// childExit isn't directly exposed; we poll Alive() on each
-		// notification. Sufficient because the PTY pump pings outputCh
-		// when the child closes the PTY.
-		select {
-		case _, ok := <-ch:
-			if !ok || !sess.Alive() {
-				return attachExitedMsg{sid: sid}
-			}
-			return attachOutputMsg{sid: sid}
-		case <-m.ctx.Done():
-			return nil
+	// Fullscreen pass-through: Bubble Tea suspends, claude owns the
+	// terminal until the operator hits Ctrl+D (detach) or claude exits
+	// on its own. The earlier windowed (right-pane) attach was removed
+	// after the TUI-in-TUI architecture turned out to be incompatible
+	// with IME composition + CJK rendering — see docs/decisions/0001-no-windowed-attach.md.
+	ac := &attach.AttachCmd{Session: sess}
+	sid := s.SessionID
+	return tea.Exec(ac, func(err error) tea.Msg {
+		if err != nil {
+			return attachDoneMsg{err: err}
 		}
-	}
+		switch {
+		case ac.Result.Detached:
+			return attachDoneMsg{msg: "detached — claude still running in background (Enter to reattach)"}
+		case ac.Result.ExitErr != nil:
+			return attachDoneMsg{err: ac.Result.ExitErr, msg: "claude session ended (id " + shortID(sid) + ")"}
+		default:
+			return attachDoneMsg{msg: "claude session ended (id " + shortID(sid) + ")"}
+		}
+	})
 }
 
 // move shifts the selection. Returns a Cmd that refreshes the right pane
@@ -3161,23 +2798,6 @@ func padRight(s string, width int) string {
 func (m *model) renderEventsList(width, height int) string {
 	if m.currentSessionID() == "" {
 		return ""
-	}
-
-	// Windowed-attach takeover: when an attach.Session is focused and it
-	// matches the operator's currently selected row, render the emulator
-	// state in place of the transcript tail. Header still shows the
-	// session id but with an "attached" tag so the operator knows
-	// keystrokes are being forwarded.
-	if m.attachFocus && m.attachFocusSID == m.currentSessionID() {
-		if sess, ok := m.attached[m.attachFocusSID]; ok && sess != nil && sess.Alive() {
-			header := pendingStyle.Render(fmt.Sprintf("attached  (%s)  Ctrl+D detach · Ctrl+F fullscreen", shortID(m.attachFocusSID)))
-			bodyH := height - 1
-			if bodyH < 1 {
-				bodyH = 1
-			}
-			body := sess.RenderWindowed(width, bodyH)
-			return lipgloss.NewStyle().Width(width).Height(height).Render(header + "\n" + body)
-		}
 	}
 
 	header := subtitleStyle.Render(fmt.Sprintf("transcript  (%s)", shortID(m.currentSessionID())))

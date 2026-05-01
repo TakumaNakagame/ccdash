@@ -35,13 +35,6 @@ type Settings struct {
 	AttachEnabled   bool // Enter spawns claude --resume / tmux switch
 	AutoInstallSync bool // server boot rewrites settings.json on token mismatch
 
-	// WindowedAttach renders attach in the right pane via the vt10x
-	// emulator instead of suspending Bubble Tea for a fullscreen
-	// pass-through. Off by default — the emulator path doesn't yet handle
-	// CJK / wide chars correctly so heavy Japanese input drifts. Operators
-	// who want the side-panel UX can opt in from the settings page.
-	WindowedAttach bool
-
 	TailBudgetKB      int
 	SummaryTimeoutSec int
 	RefreshIntervalMs int
@@ -64,7 +57,6 @@ const (
 	keySummaryEnabled    = "summary_enabled"
 	keyAttachEnabled     = "attach_enabled"
 	keyAutoInstallSync   = "auto_install_sync"
-	keyWindowedAttach    = "windowed_attach"
 	keyPresetSecure      = "preset_secure"
 	keyTailBudgetKB      = "tail_budget_kb"
 	keySummaryTimeoutSec = "summary_timeout_sec"
@@ -83,7 +75,6 @@ func Defaults() Settings {
 		SummaryEnabled:    true,
 		AttachEnabled:     true,
 		AutoInstallSync:   true,
-		WindowedAttach:    false, // opt-in: vt10x has CJK render bugs
 
 		TailBudgetKB:      256,
 		SummaryTimeoutSec: 180,
@@ -114,7 +105,6 @@ func Load(ctx context.Context, d *db.DB) (Settings, error) {
 		{keySummaryEnabled, func(v string) { out.SummaryEnabled = parseBool(v, out.SummaryEnabled) }},
 		{keyAttachEnabled, func(v string) { out.AttachEnabled = parseBool(v, out.AttachEnabled) }},
 		{keyAutoInstallSync, func(v string) { out.AutoInstallSync = parseBool(v, out.AutoInstallSync) }},
-		{keyWindowedAttach, func(v string) { out.WindowedAttach = parseBool(v, out.WindowedAttach) }},
 		{keyTailBudgetKB, func(v string) { out.TailBudgetKB = parseInt(v, out.TailBudgetKB) }},
 		{keySummaryTimeoutSec, func(v string) { out.SummaryTimeoutSec = parseInt(v, out.SummaryTimeoutSec) }},
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
@@ -214,7 +204,6 @@ func AllSpecs() []Spec {
 		{Key: keySummaryEnabled, Label: "Summarize via claude -p", Help: "When OFF, the 's' key is disabled and ccdash never spawns claude -p (no transcript digests sent over the network)", Kind: KindBool},
 		{Key: keyAttachEnabled, Label: "Attach (enter)", Help: "When OFF, Enter only shows session info — ccdash never spawns claude --resume or runs tmux switch-client", Kind: KindBool},
 		{Key: keyAutoInstallSync, Label: "Auto-rewrite settings.json", Help: "When OFF, server start does NOT silently rewrite ~/.claude/settings.json when the token rotates; you'll need to run install-hooks manually", Kind: KindBool},
-		{Key: keyWindowedAttach, Label: "Windowed attach (experimental)", Help: "When ON, Enter renders claude inside ccdash's right pane via a vt10x emulator (Ctrl+F to fullscreen, Ctrl+D to detach). When OFF (default), Enter suspends Bubble Tea and hands the whole terminal to claude. The windowed path doesn't yet handle CJK / wide chars correctly, so heavy Japanese input drifts.", Kind: KindBool},
 		{Key: keyPresetSecure, Label: "Apply secure preset", Help: "Observation-only mode: turns off approval blocking, summarize, attach, and auto-install sync in one go", Kind: KindAction, Apply: applySecurePreset},
 		// Numeric tunables
 		{Key: keyTailBudgetKB, Label: "Right-pane tail budget (KB)", Help: "Bytes of transcript loaded for the inline live tail; bigger == more context, slower", Kind: KindInt, Min: 32, Max: 8192},
@@ -270,8 +259,6 @@ func Get(s Settings, key string) any {
 		return s.AttachEnabled
 	case keyAutoInstallSync:
 		return s.AutoInstallSync
-	case keyWindowedAttach:
-		return s.WindowedAttach
 	case keyTailBudgetKB:
 		return s.TailBudgetKB
 	case keySummaryTimeoutSec:
@@ -314,8 +301,6 @@ func Set(ctx context.Context, d *db.DB, s Settings, key string, value any) (Sett
 		s.AttachEnabled = value.(bool)
 	case keyAutoInstallSync:
 		s.AutoInstallSync = value.(bool)
-	case keyWindowedAttach:
-		s.WindowedAttach = value.(bool)
 	case keyTailBudgetKB:
 		s.TailBudgetKB = value.(int)
 	case keySummaryTimeoutSec:
