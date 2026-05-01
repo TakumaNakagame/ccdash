@@ -218,6 +218,12 @@ func (s *Session) Attach() (Result, error) {
 		return Result{}, errors.New("attach: stdin is not a terminal")
 	}
 
+	// Capture "is this a re-attach?" before Start runs. If childExit is
+	// already non-nil, spawn happened on a previous Attach and we're
+	// coming back to a backgrounded claude — claude has already done its
+	// initial render and will sit idle until we prod it.
+	reattach := s.childExit != nil
+
 	// Lazy spawn on first Attach (idempotent with explicit Start callers).
 	if err := s.Start(); err != nil {
 		return Result{}, err
@@ -258,9 +264,17 @@ func (s *Session) Attach() (Result, error) {
 
 	// Nudge claude to redraw against the (possibly changed) winsize so
 	// the operator sees a clean screen instead of stale bytes from before
-	// they detached. SIGWINCH is the gentlest "redraw please" signal.
+	// they detached. SIGWINCH alone often isn't enough on re-attach —
+	// Ink-based TUIs may skip the resize handler when the dimensions
+	// haven't changed, leaving the operator staring at a blank shell
+	// because Bubble Tea released the alt-screen and we're not replaying
+	// any of claude's prior output. So on re-attach we ALSO send Ctrl+L
+	// (form feed, 0x0c) which most TUIs treat as "clear and redraw".
 	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Signal(syscall.SIGWINCH)
+	}
+	if reattach {
+		_, _ = s.pty.Write([]byte{0x0c})
 	}
 
 	// Self-pipe used to interrupt the stdin reader goroutine. Writing to
