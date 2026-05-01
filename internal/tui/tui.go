@@ -2152,11 +2152,12 @@ type attachDoneMsg struct {
 	msg string
 }
 
-// attachCurrent enters windowed-attach mode on the selected session: claude
-// (re)starts in a PTY and ccdash starts forwarding keystrokes to it while
-// rendering the emulator's screen state in the right pane. tmux pane
-// switches still go through tea.ExecProcess; that's a one-shot terminal
-// hand-off and doesn't need the windowed plumbing.
+// attachCurrent enters attach mode on the selected session. The default
+// path suspends Bubble Tea and hands the whole terminal to claude
+// (Session.Attach via tea.Exec — same shape as v0.2.x); when the
+// `windowed_attach` setting is on, claude renders inside ccdash's right
+// pane via the vt10x emulator instead. tmux pane switches still go
+// through tea.ExecProcess regardless; that's a one-shot hand-off.
 func (m *model) attachCurrent() tea.Cmd {
 	if m.pane != paneSessions || len(m.sessions) == 0 {
 		return nil
@@ -2187,6 +2188,28 @@ func (m *model) attachCurrent() tea.Cmd {
 		sess = attach.New(c)
 		m.attached[s.SessionID] = sess
 	}
+	if !m.settings.WindowedAttach {
+		// Default: fullscreen pass-through. Bubble Tea suspends, claude
+		// owns the terminal until the operator hits Ctrl+D (detach) or
+		// claude exits on its own.
+		ac := &attach.AttachCmd{Session: sess}
+		sid := s.SessionID
+		return tea.Exec(ac, func(err error) tea.Msg {
+			if err != nil {
+				return attachDoneMsg{err: err}
+			}
+			switch {
+			case ac.Result.Detached:
+				return attachDoneMsg{msg: "detached — claude still running in background (Enter to reattach)"}
+			case ac.Result.ExitErr != nil:
+				return attachDoneMsg{err: ac.Result.ExitErr, msg: "claude session ended (id " + shortID(sid) + ")"}
+			default:
+				return attachDoneMsg{msg: "claude session ended (id " + shortID(sid) + ")"}
+			}
+		})
+	}
+	// Opt-in windowed path. Vt10x emulator + key forwarding; Ctrl+F
+	// flips to the fullscreen path above and back.
 	if err := sess.Start(); err != nil {
 		delete(m.attached, s.SessionID)
 		return func() tea.Msg { return attachDoneMsg{err: err} }
