@@ -55,6 +55,11 @@ func Load(path string) ([]Message, error) {
 		out = append(out, parseLine(line)...)
 	}
 	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
+		if errors.Is(err, bufio.ErrTooLong) {
+			// A line exceeded the buffer (likely a large base64 image). Return
+			// what we have — the partial result is more useful than nothing.
+			return out, nil
+		}
 		return out, err
 	}
 	return out, nil
@@ -105,6 +110,9 @@ func LoadTail(path string, budget int64) ([]Message, error) {
 		out = append(out, parseLine(line)...)
 	}
 	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return out, nil
+		}
 		return out, err
 	}
 	return out, nil
@@ -166,28 +174,37 @@ func parseUserMessage(raw json.RawMessage, ts time.Time) []Message {
 		}
 		return nil
 	}
-	// Array => tool_result blocks.
+	// Array => mixed content blocks (tool_result, text, image, …).
 	var blocks []struct {
 		Type      string          `json:"type"`
 		ToolUseID string          `json:"tool_use_id"`
 		Content   json.RawMessage `json:"content"`
 		IsError   bool            `json:"is_error"`
+		Text      string          `json:"text"`
 	}
 	if err := json.Unmarshal(m.Content, &blocks); err != nil {
 		return nil
 	}
 	var out []Message
 	for _, b := range blocks {
-		if b.Type != "tool_result" {
-			continue
+		switch b.Type {
+		case "tool_result":
+			out = append(out, Message{
+				Kind:      KindToolResult,
+				Timestamp: ts,
+				Text:      flattenContent(b.Content),
+				ToolUseID: b.ToolUseID,
+				IsError:   b.IsError,
+			})
+		case "text":
+			t := strings.TrimSpace(b.Text)
+			if t == "" || strings.HasPrefix(t, "<command-") {
+				continue
+			}
+			out = append(out, Message{Kind: KindUser, Timestamp: ts, Text: t})
+		case "image":
+			out = append(out, Message{Kind: KindUser, Timestamp: ts, Text: "[image]"})
 		}
-		out = append(out, Message{
-			Kind:      KindToolResult,
-			Timestamp: ts,
-			Text:      flattenContent(b.Content),
-			ToolUseID: b.ToolUseID,
-			IsError:   b.IsError,
-		})
 	}
 	return out
 }
@@ -256,12 +273,18 @@ func flattenContent(raw json.RawMessage) string {
 	}
 	if err := json.Unmarshal(raw, &blocks); err == nil {
 		var b strings.Builder
-		for i, blk := range blocks {
-			if blk.Type == "text" {
-				if i > 0 {
+		for _, blk := range blocks {
+			switch blk.Type {
+			case "text":
+				if b.Len() > 0 {
 					b.WriteByte('\n')
 				}
 				b.WriteString(blk.Text)
+			case "image":
+				if b.Len() > 0 {
+					b.WriteByte('\n')
+				}
+				b.WriteString("[image]")
 			}
 		}
 		return b.String()
