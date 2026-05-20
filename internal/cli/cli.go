@@ -139,7 +139,35 @@ func serverCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&addr, "addr", fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort), "bind address")
+	c.AddCommand(serverStopCmd())
 	return c
+}
+
+func serverStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Gracefully shut down the running ccdash server",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
+			tok, err := loadToken()
+			if err != nil {
+				return fmt.Errorf("load token: %w", err)
+			}
+			req, err := http.NewRequestWithContext(cmd.Context(), http.MethodPost,
+				"http://"+addr+"/shutdown", nil)
+			if err != nil {
+				return err
+			}
+			req.Header.Set("X-Ccdash-Token", tok)
+			resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+			if err != nil {
+				return fmt.Errorf("shutdown: %w", err)
+			}
+			resp.Body.Close()
+			fmt.Println("server stop requested")
+			return nil
+		},
+	}
 }
 
 func claudeCmd() *cobra.Command {
@@ -341,67 +369,36 @@ func tuiCmd() *cobra.Command {
 	return c
 }
 
-func runTUI(ctx context.Context, keepServer bool, lockGroup string) error {
+func runTUI(ctx context.Context, _ bool, lockGroup string) error {
+	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
+
+	// Redirect log output before the TUI takes the screen. Stray stderr
+	// writes during Bubble Tea's alt-screen corrupt the visible buffer.
+	restoreLog, _ := redirectLog()
+	defer restoreLog()
+
+	if !pingServer(addr) {
+		// No running server — spawn a detached one. Close/reopen the DB
+		// around the spawn so the child can acquire the SQLite lock.
+		d0, err := openDB()
+		if err != nil {
+			return err
+		}
+		_ = d0.Close()
+		if err := spawnDetachedServer(addr); err != nil {
+			// Non-fatal: fall through and let the TUI show an error if
+			// the server is truly unavailable.
+			fmt.Fprintf(os.Stderr, "warn: could not spawn detached server: %v\n", err)
+		}
+	}
+
 	d, err := openDB()
 	if err != nil {
 		return err
 	}
 	defer d.Close()
 
-	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
-
-	// Redirect log output to a file before the TUI takes the screen,
-	// regardless of whether we end up running an embedded server. Stray
-	// stderr writes during Bubble Tea's alt-screen would otherwise corrupt
-	// the visible buffer — and in embedded mode we know server goroutines
-	// will log; in the other modes we still want any debug log.Printf
-	// calls (and panics) to land somewhere visible to the operator
-	// instead of nowhere.
-	restoreLog, _ := redirectLog()
-	defer restoreLog()
-
-	serverCtx, cancelServer := context.WithCancel(ctx)
-	defer cancelServer()
-	var serverDone chan struct{}
-	embedded := false
-
-	switch {
-	case pingServer(addr):
-		// Someone (probably `ccdash server`) is already running. Just open the
-		// TUI and let them keep collecting.
-	case keepServer:
-		// Detach a child process running `ccdash server` so it survives the
-		// TUI's lifetime. Close the DB first so the child can take the lock.
-		_ = d.Close()
-		if err := spawnDetachedServer(addr); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: could not spawn detached server: %v\n", err)
-		}
-		// Reopen the DB now that the child has a chance to be writing too.
-		d, err = openDB()
-		if err != nil {
-			return err
-		}
-	default:
-		// Embedded mode: run the server in this process; tear it down on quit.
-		s := server.New(d, addr)
-		serverDone = make(chan struct{})
-		embedded = true
-		go func() {
-			defer close(serverDone)
-			_ = s.ListenAndServe(serverCtx)
-		}()
-	}
-
-	tuiErr := tui.Run(ctx, d, lockGroup)
-
-	cancelServer()
-	if embedded && serverDone != nil {
-		select {
-		case <-serverDone:
-		case <-time.After(2 * time.Second):
-		}
-	}
-	return tuiErr
+	return tui.Run(ctx, d, lockGroup)
 }
 
 // spawnDetachedServer launches `ccdash server` as a session-leader child that
@@ -481,6 +478,18 @@ func pingServer(addr string) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+func loadToken() (string, error) {
+	p, err := paths.StateDir()
+	if err != nil {
+		return "", err
+	}
+	b, err := os.ReadFile(filepath.Join(p, "token"))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 func openDB() (*db.DB, error) {

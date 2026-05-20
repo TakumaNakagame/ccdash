@@ -128,18 +128,11 @@ type model struct {
 	transcriptTitle    string
 	transcriptPath     string
 
-	// attached holds long-lived attach.Session instances keyed by session
-	// id. Detaching with Ctrl+D leaves the entry in place so the next
-	// Enter resumes the same child instead of spawning a new one. Sessions
-	// whose child has died are pruned at attach time.
-	attached map[string]*attach.Session
-
-	// attachedByPID is the staging area for sessions we spawn ourselves
-	// (via 'n' new-session). The session id only becomes known after
-	// claude writes its first JSONL line and discovery picks it up — until
-	// then we key by PID. The promotion to `attached` happens in
-	// promoteAttached, called from refresh.
-	attachedByPID map[int]*attach.Session
+	// pendingPTYKeys maps child PID → server ptyKey for new sessions we
+	// spawned via 'n'. The sessionID only becomes known after discovery
+	// picks up the JSONL; until then we key by PID. promotePTYKeys
+	// registers the alias via POST /pty/{key}/register once the row appears.
+	pendingPTYKeys map[int]string
 
 	// animTick advances on every animTickMsg (~150 ms). Drives the spinner
 	// frame for active rows so the operator can tell at a glance which
@@ -175,56 +168,51 @@ type model struct {
 
 func newModel(ctx context.Context, d *db.DB) *model {
 	return &model{
-		ctx:           ctx,
-		db:            d,
-		settings:      settings.Defaults(),
-		attached:      map[string]*attach.Session{},
-		attachedByPID: map[int]*attach.Session{},
+		ctx:            ctx,
+		db:             d,
+		settings:       settings.Defaults(),
+		pendingPTYKeys: map[int]string{},
 	}
 }
 
-// quit tears down any backgrounded attach.Sessions before returning
-// tea.Quit, so we don't leave orphan claude processes attached to a PTY
-// whose only owner just exited. Each Close sends SIGTERM and waits — fast
-// in practice (claude flushes its JSONL and exits quickly) but bounded by
-// the kernel's process-exit semantics either way.
 func (m *model) quit() tea.Cmd {
-	for sid, s := range m.attached {
-		_ = s.Close()
-		delete(m.attached, sid)
-	}
-	for pid, s := range m.attachedByPID {
-		_ = s.Close()
-		delete(m.attachedByPID, pid)
-	}
 	return tea.Quit
 }
 
-// promoteAttached walks freshly-loaded session rows and links any pending
-// PID-keyed attach.Session into the SessionID-keyed map. Called from the
-// sessionsMsg handler so that the moment discovery picks up a new session
-// the row's Enter key wires through to the same child the operator just
-// detached from.
-func (m *model) promoteAttached() {
-	if len(m.attachedByPID) == 0 {
+// promotePTYKeys walks freshly-loaded session rows and registers any pending
+// PID-based ptyKeys (from newly spawned sessions) with their real sessionID.
+// Called from the sessionsMsg handler so registration happens as soon as
+// discovery resolves a new session's id.
+func (m *model) promotePTYKeys() {
+	if len(m.pendingPTYKeys) == 0 {
 		return
 	}
+	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
+	tok, _ := auth.Load()
 	for _, s := range m.allSessions {
 		if s.ProcPID == 0 || s.SessionID == "" {
 			continue
 		}
-		sess, ok := m.attachedByPID[s.ProcPID]
+		ptyKey, ok := m.pendingPTYKeys[s.ProcPID]
 		if !ok {
 			continue
 		}
-		if existing, already := m.attached[s.SessionID]; !already || existing != sess {
-			// Existing entries by id win — there's no safe automatic
-			// merge of two different live PTYs onto the same id.
-			if !already {
-				m.attached[s.SessionID] = sess
+		delete(m.pendingPTYKeys, s.ProcPID)
+		sid := s.SessionID
+		go func() {
+			body, _ := json.Marshal(map[string]string{"sessionId": sid})
+			url := "http://" + addr + "/pty/" + ptyKey + "/register"
+			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+			if err != nil {
+				return
 			}
-		}
-		delete(m.attachedByPID, s.ProcPID)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(auth.HeaderName, tok)
+			resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}()
 	}
 }
 
@@ -272,93 +260,29 @@ func (m *model) spawnNewSession(expanded string, created bool) tea.Cmd {
 			return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("mkdir %s: %w", expanded, mkErr)} }
 		}
 	}
-	c := claudeViaShell()
-	c.Dir = expanded
-	c.Env = ptySafeEnv()
-	sess := attach.New(c)
-	if err := sess.Start(); err != nil {
-		return func() tea.Msg { return attachDoneMsg{err: err} }
-	}
-	m.attachedByPID[sess.PID()] = sess
-	ac := &attach.AttachCmd{Session: sess}
 	cwd := expanded
 	createdNote := ""
 	if created {
 		createdNote = " (created)"
 	}
-	return tea.Exec(ac, func(err error) tea.Msg {
+	return func() tea.Msg {
+		ptyKey, err := postPTYStart("", "", cwd)
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}
-		switch {
-		case ac.Result.Detached:
-			return attachDoneMsg{msg: "detached — new claude session running in " + cwd + createdNote + " (Enter on the row to reattach)"}
-		case ac.Result.ExitErr != nil:
-			return attachDoneMsg{err: ac.Result.ExitErr, msg: "claude session ended"}
-		default:
-			return attachDoneMsg{msg: "claude session ended"}
-		}
-	})
+		return ptyStartedMsg{ptyKey: ptyKey, cwd: cwd, createdNote: createdNote}
+	}
 }
 
-// claudeViaShell returns an exec.Cmd that invokes claude through the user's
-// interactive shell ($SHELL -i -c). This ensures shell functions defined in
-// .zshrc/.bashrc — such as wrappers that set up authentication credentials or
-// custom environment variables — are available when claude starts. Falls back
-// to a direct exec.Command("claude", ...) when $SHELL is unset.
-func claudeViaShell(args ...string) *exec.Cmd {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		return exec.Command("claude", args...)
+// parsePIDFromPTYKey extracts the PID from a ptyKey of the form "pid-<N>".
+// Returns 0 if the key is not in that format.
+func parsePIDFromPTYKey(key string) int {
+	s := strings.TrimPrefix(key, "pid-")
+	if s == key {
+		return 0
 	}
-	parts := make([]string, 0, len(args)+1)
-	parts = append(parts, "claude")
-	for _, a := range args {
-		parts = append(parts, shellQuote(a))
-	}
-	return exec.Command(shell, "-i", "-c", strings.Join(parts, " "))
-}
-
-// shellQuote wraps s in single quotes, escaping any embedded single quotes.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// ptySafeEnv returns a copy of the current environment with terminal-emulator-
-// specific variables stripped or overridden so they are not inherited by the
-// child PTY process. Variables like VSCODE_INJECTION or WARP_* signal to claude
-// that it is running inside a specific IDE or terminal, which activates
-// integration code paths that do not work inside a ccdash PTY.
-func ptySafeEnv() []string {
-	stripPfx := []string{"WARP_", "GHOSTTY_", "ITERM_", "KITTY_", "TABBY_", "CLAUDE_CODE_", "VSCODE_"}
-	stripKey := map[string]bool{
-		"TERM_PROGRAM":         true,
-		"TERM_PROGRAM_VERSION": true,
-	}
-	src := os.Environ()
-	out := make([]string, 0, len(src))
-	for _, kv := range src {
-		key, _, _ := strings.Cut(kv, "=")
-		if stripKey[key] {
-			continue
-		}
-		skip := false
-		for _, p := range stripPfx {
-			if strings.HasPrefix(key, p) {
-				skip = true
-				break
-			}
-		}
-		if skip {
-			continue
-		}
-		if key == "TERM" {
-			out = append(out, "TERM=xterm-256color")
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
+	n, _ := strconv.Atoi(s)
+	return n
 }
 
 // expandPath replaces a leading ~ with the operator's home dir and
@@ -643,10 +567,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		prev := m.currentSessionID()
 		m.allSessions = []mdl.Session(msg)
 		// Promote any newly-discovered sessions whose PID matches a
-		// freshly-spawned attach.Session into the by-id map so that
-		// pressing Enter on the row reattaches the same child instead of
-		// starting a competing `claude --resume`.
-		m.promoteAttached()
+		// freshly-spawned PTY so the server can alias the ptyKey to the
+		// real sessionID, enabling reattach by sessionID on next Enter.
+		m.promotePTYKeys()
 		// If the tab the operator was looking at vanished (its last
 		// session got archived, removed, or moved to a different tab),
 		// step onto the next available tab so the body isn't blank.
@@ -737,6 +660,39 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
+	case ptyStartedMsg:
+		// Track PID-based ptyKeys for new sessions so promotePTYKeys can
+		// register the alias once discovery resolves the sessionID.
+		if msg.sessionID == "" {
+			// ptyKey format for new sessions is "pid-<N>"
+			if pid := parsePIDFromPTYKey(msg.ptyKey); pid > 0 {
+				m.pendingPTYKeys[pid] = msg.ptyKey
+			}
+		}
+		tok, _ := auth.Load()
+		addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
+		cwd := msg.cwd
+		createdNote := msg.createdNote
+		sc := &attach.StreamClient{
+			SessionID: msg.ptyKey,
+			Addr:      addr,
+			Token:     tok,
+		}
+		return m, tea.Exec(sc, func(err error) tea.Msg {
+			if err != nil {
+				return attachDoneMsg{err: err}
+			}
+			switch {
+			case sc.Result.Detached && cwd != "":
+				return attachDoneMsg{msg: "detached — new claude session running in " + cwd + createdNote + " (Enter on the row to reattach)"}
+			case sc.Result.Detached:
+				return attachDoneMsg{msg: "detached — claude still running (Enter to reattach)"}
+			case sc.Result.ExitErr != nil:
+				return attachDoneMsg{err: sc.Result.ExitErr, msg: "claude session ended"}
+			default:
+				return attachDoneMsg{msg: "claude session ended"}
+			}
+		})
 	case attachDoneMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -1824,12 +1780,55 @@ type attachDoneMsg struct {
 	msg string
 }
 
-// attachCurrent enters attach mode on the selected session. The default
-// path suspends Bubble Tea and hands the whole terminal to claude
-// (Session.Attach via tea.Exec — same shape as v0.2.x); when the
-// `windowed_attach` setting is on, claude renders inside ccdash's right
-// pane via the vt10x emulator instead. tmux pane switches still go
-// through tea.ExecProcess regardless; that's a one-shot hand-off.
+// ptyStartedMsg is returned by a Cmd after POST /pty/start succeeds. The
+// Update handler receives it, optionally stores the PID→ptyKey mapping for
+// promotion, then launches a StreamClient via tea.Exec.
+type ptyStartedMsg struct {
+	ptyKey    string
+	sessionID string // empty for new sessions (no id yet)
+	cwd       string
+	createdNote string
+}
+
+// postPTYStart calls POST /pty/start on the local server and returns the ptyKey.
+// sessionId and resumeId may be empty for brand-new sessions.
+func postPTYStart(sessionID, resumeID, cwd string) (string, error) {
+	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
+	body, _ := json.Marshal(map[string]string{
+		"sessionId": sessionID,
+		"resumeId":  resumeID,
+		"cwd":       cwd,
+	})
+	req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/pty/start", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if tok, err := auth.Load(); err == nil {
+		req.Header.Set(auth.HeaderName, tok)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("pty/start: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("pty/start: %s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	var out struct {
+		PtyKey string `json:"ptyKey"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("pty/start decode: %w", err)
+	}
+	return out.PtyKey, nil
+}
+
+// attachCurrent decides how to attach to the selected session and returns the
+// appropriate command. It prefers switching to the existing tmux pane when we
+// know one; otherwise it asks the server to start/resume the PTY session and
+// connects to it via StreamClient.
 func (m *model) attachCurrent() tea.Cmd {
 	if m.pane != paneSessions || len(m.sessions) == 0 {
 		return nil
@@ -1841,45 +1840,15 @@ func (m *model) attachCurrent() tea.Cmd {
 			return attachDoneMsg{err: err, msg: "switched to " + s.Pane}
 		})
 	}
-	// Persistent Session per id so detach leaves claude running in
-	// the background — the next Enter resumes the same child instead
-	// of forking a divergent `claude --resume`.
-	sess, ok := m.attached[s.SessionID]
-	if ok && !sess.Alive() {
-		_ = sess.Close()
-		delete(m.attached, s.SessionID)
-		sess = nil
-		ok = false
-	}
-	if !ok {
-		c := claudeViaShell("--resume", s.SessionID)
-		if s.Cwd != "" {
-			c.Dir = s.Cwd
-		}
-		c.Env = ptySafeEnv()
-		sess = attach.New(c)
-		m.attached[s.SessionID] = sess
-	}
-	// Fullscreen pass-through: Bubble Tea suspends, claude owns the
-	// terminal until the operator hits Ctrl+D (detach) or claude exits
-	// on its own. The earlier windowed (right-pane) attach was removed
-	// after the TUI-in-TUI architecture turned out to be incompatible
-	// with IME composition + CJK rendering — see docs/decisions/0001-no-windowed-attach.md.
-	ac := &attach.AttachCmd{Session: sess}
 	sid := s.SessionID
-	return tea.Exec(ac, func(err error) tea.Msg {
+	cwd := s.Cwd
+	return func() tea.Msg {
+		ptyKey, err := postPTYStart(sid, sid, cwd)
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}
-		switch {
-		case ac.Result.Detached:
-			return attachDoneMsg{msg: "detached — claude still running in background (Enter to reattach)"}
-		case ac.Result.ExitErr != nil:
-			return attachDoneMsg{err: ac.Result.ExitErr, msg: "claude session ended (id " + shortID(sid) + ")"}
-		default:
-			return attachDoneMsg{msg: "claude session ended (id " + shortID(sid) + ")"}
-		}
-	})
+		return ptyStartedMsg{ptyKey: ptyKey, sessionID: sid}
+	}
 }
 
 // move shifts the selection. Returns a Cmd that refreshes the right pane

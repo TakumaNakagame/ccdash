@@ -39,6 +39,15 @@ type Server struct {
 	// channel and unblocks the handler.
 	pendingMu sync.Mutex
 	pending   map[int64]chan approvalDecision
+
+	// ptyMu guards ptyMap. Long-lived PTY sessions are keyed by a ptyKey
+	// (UUID assigned at start time) which is later aliased to the real
+	// sessionID once discovery picks it up.
+	ptyMu    sync.Mutex
+	ptyMap   map[string]*ptyEntry
+
+	// cancelFn stops the server's context (graceful shutdown).
+	cancelFn context.CancelFunc
 }
 
 type approvalDecision struct {
@@ -67,6 +76,7 @@ func New(d *db.DB, addr string) *Server {
 		token:   tok,
 		limiter: newTokenBucket(50, 100),
 		pending: map[int64]chan approvalDecision{},
+		ptyMap:  map[string]*ptyEntry{},
 	}
 	s.routes()
 	return s
@@ -96,6 +106,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/hooks/subagent-stop", wrap(s.handleSubagentStop))
 	s.mux.HandleFunc("/hooks/notification", wrap(s.handleNotification))
 	s.mux.HandleFunc("/approvals/", wrap(s.handleApprovalDecide))
+	s.mux.HandleFunc("/pty/", wrap(s.handlePTY))
+	s.mux.HandleFunc("/shutdown", wrap(s.handleShutdown))
 }
 
 // requireToken wraps a handler so requests without a matching X-Ccdash-Token
@@ -118,6 +130,10 @@ func (s *Server) requireToken(h http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	s.cancelFn = cancel
+	defer cancel()
+
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
 		return err
@@ -129,8 +145,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	log.Printf("ccdash server listening on http://%s", ln.Addr())
 	go func() {
 		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutCancel()
 		_ = s.srv.Shutdown(shutCtx)
 	}()
 	s.syncInstalledHooks()

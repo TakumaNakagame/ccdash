@@ -233,8 +233,8 @@ func (s *Session) Attach() (Result, error) {
 
 	// Ask the PTY reader goroutine to start writing chunks to the
 	// operator's terminal. When we return, we'll flip it back to discard.
-	s.setSink(stdoutFile)
-	defer s.setSink(io.Discard)
+	s.SetSink(stdoutFile)
+	defer s.SetSink(io.Discard)
 
 	// Nudge claude to redraw against the (possibly changed) winsize so
 	// the operator sees a clean screen instead of stale bytes from before
@@ -374,10 +374,29 @@ func (s *Session) spawn() error {
 	return nil
 }
 
-func (s *Session) setSink(w io.Writer) {
+// SetSink atomically swaps the destination for PTY output. Pass os.Stdout
+// to route output to the operator's terminal; pass io.Discard when detached.
+func (s *Session) SetSink(w io.Writer) {
 	s.sinkMu.Lock()
 	s.sink = w
 	s.sinkMu.Unlock()
+}
+
+// Pty returns the PTY master file so callers can perform direct I/O or resize
+// operations (pty.Setsize) without going through Session internals.
+func (s *Session) Pty() *os.File { return s.pty }
+
+// ChildExit returns a channel that is closed once the child process has been
+// waited on. Reading childErr (via Process/Wait result) is only safe after
+// this channel closes.
+func (s *Session) ChildExit() <-chan struct{} { return s.childExit }
+
+// Process returns the child's os.Process, or nil before Start has been called.
+func (s *Session) Process() *os.Process {
+	if s == nil || s.cmd == nil {
+		return nil
+	}
+	return s.cmd.Process
 }
 
 // AttachCmd implements bubbletea.ExecCommand. It's a thin shim that calls
