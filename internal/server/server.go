@@ -87,7 +87,8 @@ func (s *Server) routes() {
 	// server before deciding whether to spawn an embedded one. It returns
 	// only "ok"; no sensitive info leaks.
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("ok"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"pty":true}`))
 	})
 	// Compose: rate limit → token check → handler. Rate limit comes first
 	// so a flood of unauth'd requests still gets 429 quickly without the

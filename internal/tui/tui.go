@@ -31,8 +31,19 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
-func Run(ctx context.Context, d *db.DB, lockGroup string) error {
+// ServerMode describes how the ccdash daemon was acquired for this session.
+type ServerMode string
+
+const (
+	// ServerModeExisting means a server was already listening when the TUI started.
+	ServerModeExisting ServerMode = "existing"
+	// ServerModeSpawned means the TUI started the daemon itself on this launch.
+	ServerModeSpawned ServerMode = "spawned"
+)
+
+func Run(ctx context.Context, d *db.DB, lockGroup string, srvMode ServerMode) error {
 	m := newModel(ctx, d)
+	m.serverMode = srvMode
 	if s, err := settings.Load(ctx, d); err == nil {
 		m.settings = s
 	}
@@ -133,6 +144,10 @@ type model struct {
 	// picks up the JSONL; until then we key by PID. promotePTYKeys
 	// registers the alias via POST /pty/{key}/register once the row appears.
 	pendingPTYKeys map[int]string
+
+	// serverMode indicates whether the ccdash daemon was already running
+	// (ServerModeExisting) or was spawned by this TUI launch (ServerModeSpawned).
+	serverMode ServerMode
 
 	// animTick advances on every animTickMsg (~150 ms). Drives the spinner
 	// frame for active rows so the operator can tell at a glance which
@@ -1951,7 +1966,9 @@ var (
 	subtitleStyle     = lipgloss.NewStyle().Faint(true)
 	// Black on bright orange — meant to be unmissable so a stale dev build
 	// stands out against a release binary's clean header.
-	devBadgeStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("208")).Padding(0, 1)
+	devBadgeStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("208")).Padding(0, 1)
+	srvExistingBadgeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Faint(true) // bright green, dim
+	srvSpawnedBadgeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Faint(true) // yellow, dim
 	// Bright cyan on black so it doesn't clash with the orange DEV chip
 	// (a dev binary can also have a newer release available, in which
 	// case both show side by side).
@@ -1994,6 +2011,12 @@ func (m *model) renderHeader() string {
 	right := subtitleStyle.Render(fmt.Sprintf("sessions: %d  ", len(m.sessions))) +
 		pendingPart +
 		subtitleStyle.Render("  "+m.lastTick.Format("15:04:05"))
+	switch m.serverMode {
+	case ServerModeExisting:
+		right += "  " + srvExistingBadgeStyle.Render("⬡ server")
+	case ServerModeSpawned:
+		right += "  " + srvSpawnedBadgeStyle.Render("⬡ spawned")
+	}
 	if buildinfo.IsDev() {
 		// On dev builds: bright orange "DEV", a content-derived hash so we
 		// can spot stale binaries at a glance, and the binary's mtime as

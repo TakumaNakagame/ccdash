@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -377,9 +378,18 @@ func runTUI(ctx context.Context, _ bool, lockGroup string) error {
 	restoreLog, _ := redirectLog()
 	defer restoreLog()
 
-	if !pingServer(addr) {
-		// No running server — spawn a detached one. Close/reopen the DB
-		// around the spawn so the child can acquire the SQLite lock.
+	srvMode := tui.ServerModeExisting
+	alive, hasPTY := serverCapabilities(addr)
+	if !alive || !hasPTY {
+		srvMode = tui.ServerModeSpawned
+		if alive && !hasPTY {
+			// Stale server (built before PTY support): terminate it so we can
+			// bind the port with the new binary.
+			killStaleServer(addr)
+		}
+		// No running server (or just killed the stale one) — spawn a detached
+		// one. Close/reopen the DB around the spawn so the child can acquire
+		// the SQLite lock.
 		d0, err := openDB()
 		if err != nil {
 			return err
@@ -398,7 +408,7 @@ func runTUI(ctx context.Context, _ bool, lockGroup string) error {
 	}
 	defer d.Close()
 
-	return tui.Run(ctx, d, lockGroup)
+	return tui.Run(ctx, d, lockGroup, srvMode)
 }
 
 // spawnDetachedServer launches `ccdash server` as a session-leader child that
@@ -424,6 +434,8 @@ func spawnDetachedServer(addr string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	// Save PID so we can kill a stale server on the next startup.
+	saveServerPID(cmd.Process.Pid)
 	// Detach: don't Wait. Release the child's process handle so the OS can
 	// reap it on its own once it eventually exits.
 	_ = cmd.Process.Release()
@@ -467,17 +479,82 @@ func redirectLog() (func(), error) {
 	}, nil
 }
 
+// serverCapabilities probes the healthz endpoint and returns (alive, hasPTY).
+// Old servers return plain "ok"; new servers return JSON {"ok":true,"pty":true}.
+// When the body can't be parsed as JSON we assume the server is alive but
+// lacks PTY support so the caller can kill and respawn it.
+func serverCapabilities(addr string) (alive, hasPTY bool) {
+	c := &http.Client{Timeout: 200 * time.Millisecond}
+	resp, err := c.Get("http://" + addr + "/healthz")
+	if err != nil {
+		return false, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return true, false
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	var caps struct {
+		PTY bool `json:"pty"`
+	}
+	_ = json.Unmarshal(body, &caps)
+	return true, caps.PTY
+}
+
 // pingServer returns true when an existing ccdash server already accepts
 // requests on the address. We use a very short timeout because both endpoints
 // are local; anything slower than ~200ms means the port isn't actually ours.
 func pingServer(addr string) bool {
-	c := &http.Client{Timeout: 200 * time.Millisecond}
-	resp, err := c.Get("http://" + addr + "/healthz")
+	alive, _ := serverCapabilities(addr)
+	return alive
+}
+
+// saveServerPID writes the PID of the spawned server to state dir so we can
+// kill a stale server on the next startup.
+func saveServerPID(pid int) {
+	stateDir, err := paths.StateDir()
 	if err != nil {
-		return false
+		return
 	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	_ = os.WriteFile(filepath.Join(stateDir, "server.pid"),
+		[]byte(strconv.Itoa(pid)), 0o600)
+}
+
+// killStaleServer terminates an existing server that doesn't support PTY.
+// It tries a graceful shutdown first, then falls back to SIGTERM via the PID
+// file. Waits up to 2s for the port to free before returning.
+func killStaleServer(addr string) {
+	tok, _ := loadToken()
+	if tok != "" {
+		req, err := http.NewRequestWithContext(context.Background(),
+			http.MethodPost, "http://"+addr+"/shutdown", nil)
+		if err == nil {
+			req.Header.Set("X-Ccdash-Token", tok)
+			resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}
+	}
+	// Fallback: kill via PID file.
+	stateDir, err := paths.StateDir()
+	if err == nil {
+		data, err := os.ReadFile(filepath.Join(stateDir, "server.pid"))
+		if err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				if proc, err := os.FindProcess(pid); err == nil {
+					_ = proc.Signal(syscall.SIGTERM)
+				}
+			}
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !pingServer(addr) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func loadToken() (string, error) {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/creack/pty"
 	"github.com/takumanakagame/ccmanage/internal/attach"
@@ -174,6 +175,12 @@ func (s *Server) handlePTYStream(w http.ResponseWriter, r *http.Request, id stri
 	_, _ = fmt.Fprintf(brw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: pty-raw\r\nConnection: Upgrade\r\n\r\n")
 	_ = brw.Flush()
 
+	// Route PTY output to the client connection BEFORE resizing.
+	// Setsize triggers SIGWINCH → claude full redraw; the sink must already
+	// point at conn or the redraw bytes go to io.Discard.
+	entry.sess.SetSink(conn)
+	defer entry.sess.SetSink(io.Discard)
+
 	// Read JSON handshake: {"rows":N,"cols":N}
 	var hs struct {
 		Rows uint16 `json:"rows"`
@@ -184,10 +191,11 @@ func (s *Server) handlePTYStream(w http.ResponseWriter, r *http.Request, id stri
 			_ = pty.Setsize(f, &pty.Winsize{Rows: hs.Rows, Cols: hs.Cols})
 		}
 	}
-
-	// Route PTY output to the client connection.
-	entry.sess.SetSink(conn)
-	defer entry.sess.SetSink(io.Discard)
+	// Explicit SIGWINCH: Setsize may not always deliver SIGWINCH (e.g. when
+	// the size hasn't changed). Sending it directly guarantees a full redraw.
+	if p := entry.sess.Process(); p != nil {
+		_ = p.Signal(syscall.SIGWINCH)
+	}
 
 	// client → PTY: copy until conn closes or PTY dies.
 	copyDone := make(chan struct{})
