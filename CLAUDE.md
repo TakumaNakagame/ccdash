@@ -22,6 +22,8 @@ ccdash -k                    # spawns a detached collector, then opens the TUI
 ccdash --group home-lab        # locks the TUI to a single project / user-named group
 ccdash --version             # prints the build-time main.Version
 ccdash update                # self-update from the latest GitHub release
+ccdash server --listen 0.0.0.0:9123   # opt-in: bind beyond loopback for remote mode
+ccdash --remote http://host:9123 --token-file ~/.ccdash-token  # TUI on a different host than the collector
 ```
 
 CI (`.github/workflows/ci.yml`) runs `go vet`, `go test`, `go build` on every push / PR. The `release.yml` workflow fires on `v*` tag pushes and produces 4 binaries (linux/darwin × amd64/arm64) plus sha256 sidecars. Tags can be cut from the GitHub UI via the manual `tag` workflow.
@@ -43,6 +45,7 @@ cmd/ccdash/main.go              entry; main.Version is injected via -ldflags at 
 internal/cli/                   cobra command tree (run, server, install-hooks, update, ...)
 internal/server/                HTTP collector + rate limiter + auth middleware + discovery loop
 internal/db/                    SQLite layer (sessions / events / approvals / settings)
+internal/store/                 Store seam between TUI/CLI and data: Local (*db.DB + files + summarize) / Remote (HTTP client for --remote)
 internal/discovery/             scans ~/.claude/projects/*.jsonl, extracts cwd / first user prompt
 internal/procmap/               PID ↔ session_id ↔ tmux pane via ~/.claude/sessions/<pid>.json
 internal/transcript/            JSONL parser + LoadTail for fast right-pane previews
@@ -84,7 +87,8 @@ The TUI render layer dispatches on `Spec.Kind` automatically; you don't normally
 
 ### Key invariants and behaviors
 
-- **127.0.0.1 is hardcoded.** No flag, no env var, no opt-out. ccdash is single-host, single-user. `internal/paths.DefaultHost` is the only place that names the bind.
+- **127.0.0.1 is the default, not a hardcoded ceiling.** The embedded/managed collector (plain `ccdash`, `-k`) always binds `internal/paths.DefaultHost` — no flag changes that path. A standalone `ccdash server --listen <addr>` can opt into a non-loopback bind for remote mode (`internal/cli.checkBindSafety` logs a warning and refuses to start without an existing token); every request, loopback or not, still needs `X-Ccdash-Token`. See "Remote mode" in the README and the Store seam note below.
+- **The Store seam (`internal/store`) is what makes remote mode possible.** `internal/tui` and the plain-text `internal/cli` subcommands (sessions/approvals) talk to a `store.Store` interface, never to `*db.DB` or the filesystem directly. `store.Local` wraps `*db.DB` + direct file reads + `internal/summarize`, preserving pre-remote-mode behavior exactly (including running `DecideApproval` over HTTP to the collector's own `/approvals/{id}/decide` — the pending PermissionRequest hold lives in `Server.pending`, a channel in the collector's memory, not in SQLite, so even Local can't just write the DB). `store.Remote` talks the same shape of operations to `internal/server`'s `/api/...` routes. `internal/server` itself is NOT part of this seam — it keeps working directly against `*db.DB` internally; only the client side goes through `store.Store`. When adding a TUI/CLI capability that reads or mutates session data, add it to the `Store` interface (both impls) rather than reaching for `*db.DB` from `internal/tui` or `internal/cli` again.
 - **Hook entries belong to ccdash via the `X-Ccdash-Managed: true` marker.** `install-hooks` and `uninstall-hooks` use it to round-trip our entries without disturbing the operator's other hooks. Don't touch hook entries that lack the marker.
 - **The auth token rotates only when the file is missing.** On first start `auth.LoadOrCreate` writes a fresh 32 B hex token to `$XDG_STATE_HOME/ccdash/token` (mode 0600). `server.syncInstalledHooks()` re-runs `install-hooks` on boot when the token in `settings.json` doesn't match — but only if `auto_install_sync` is on and there are existing hook entries to update.
 - **The DB is never reset by code.** `migrate()` is `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` only; ignore `duplicate column` errors. Operators can hand-delete `~/.local/state/ccdash/ccdash.sqlite` to start over.

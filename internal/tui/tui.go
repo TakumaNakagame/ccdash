@@ -22,11 +22,11 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/attach"
 	"github.com/takumanakagame/ccmanage/internal/auth"
 	"github.com/takumanakagame/ccmanage/internal/buildinfo"
-	"github.com/takumanakagame/ccmanage/internal/db"
-	"github.com/takumanakagame/ccmanage/internal/selfupdate"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/takumanakagame/ccmanage/internal/selfupdate"
 	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/takumanakagame/ccmanage/internal/store"
 	"github.com/takumanakagame/ccmanage/internal/summarize"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
@@ -39,12 +39,26 @@ const (
 	ServerModeExisting ServerMode = "existing"
 	// ServerModeSpawned means the TUI started the daemon itself on this launch.
 	ServerModeSpawned ServerMode = "spawned"
+	// ServerModeRemote means the Store talks HTTP to a collector on another
+	// host (--remote); there is no local daemon at all.
+	ServerModeRemote ServerMode = "remote"
 )
 
-func Run(ctx context.Context, d *db.DB, lockGroup string, srvMode ServerMode) error {
-	m := newModel(ctx, d)
+// RemoteInfo carries what the TUI needs to know when its Store is backed by
+// a remote collector rather than the local DB/filesystem: whether remote
+// mode is on at all, and the ssh target used for attach / new-session
+// spawns. The server-side PTY machinery reached via /pty/* only serves the
+// LOCAL daemon's clients today, so remote mode goes through `ssh -t`
+// instead — see attachRemote / spawnNewSessionRemote.
+type RemoteInfo struct {
+	Enabled   bool
+	SSHTarget string
+}
+
+func Run(ctx context.Context, st store.Store, lockGroup string, srvMode ServerMode, remote RemoteInfo) error {
+	m := newModel(ctx, st, remote)
 	m.serverMode = srvMode
-	if s, err := settings.Load(ctx, d); err == nil {
+	if s, err := settings.Load(ctx, st); err == nil {
 		m.settings = s
 	}
 	if lockGroup != "" {
@@ -66,21 +80,22 @@ const (
 )
 
 type model struct {
-	ctx        context.Context
-	db         *db.DB
-	width      int
-	height     int
+	ctx         context.Context
+	store       store.Store
+	remote      RemoteInfo
+	width       int
+	height      int
 	allSessions []mdl.Session // unfiltered, latest from DB
 	sessions    []mdl.Session // post-project-filter — what the list actually renders
-	events     []mdl.Event
-	approvals  []mdl.Approval
-	selSess    int
-	selAppr    int
-	sessScroll int
-	pane       pane
-	err        error
-	flash      string
-	lastTick   time.Time
+	events      []mdl.Event
+	approvals   []mdl.Approval
+	selSess     int
+	selAppr     int
+	sessScroll  int
+	pane        pane
+	err         error
+	flash       string
+	lastTick    time.Time
 
 	// pending-approval alert state
 	lastPendingTotal int
@@ -98,11 +113,11 @@ type model struct {
 	// list mode + inline editor state
 	showArchived  bool
 	editingTitle  bool
-	editingGroup    bool
+	editingGroup  bool
 	editingSearch bool
 	titleBuffer   string
-	groupCandIdx    int    // index into filteredGroupCandidates(); -1 == "no pick yet"
-	groupFilter string // "" = All; otherwise repo / cwd basename
+	groupCandIdx  int    // index into filteredGroupCandidates(); -1 == "no pick yet"
+	groupFilter   string // "" = All; otherwise repo / cwd basename
 	searchQuery   string // "" = no filter; case-insensitive substring search
 
 	settings settings.Settings
@@ -138,6 +153,10 @@ type model struct {
 	transcriptScroll   int
 	transcriptTitle    string
 	transcriptPath     string
+	// transcriptSession is the full session row behind the modal viewer —
+	// needed (not just the path) so 'r' reload can re-fetch through the
+	// Store interface, which takes a model.Session rather than a bare path.
+	transcriptSession mdl.Session
 
 	// pendingPTYKeys maps child PID → server ptyKey for new sessions we
 	// spawned via 'n'. The sessionID only becomes known after discovery
@@ -181,10 +200,11 @@ type model struct {
 	newSessionCompIdx     int
 }
 
-func newModel(ctx context.Context, d *db.DB) *model {
+func newModel(ctx context.Context, st store.Store, remote RemoteInfo) *model {
 	return &model{
 		ctx:            ctx,
-		db:             d,
+		store:          st,
+		remote:         remote,
 		settings:       settings.Defaults(),
 		pendingPTYKeys: map[int]string{},
 	}
@@ -236,11 +256,18 @@ func (m *model) promotePTYKeys() {
 //   - immediately spawns claude (if the dir is fine), or
 //   - parks the path on awaitMkdirConfirm so the next keystroke can
 //     decide whether to create it.
+//
 // Real mkdir + spawn live in spawnNewSession, which is also reused
 // directly when the confirmation gate fires.
 func (m *model) startNewSession(dir string) tea.Cmd {
 	if dir == "" {
 		return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("path required")} }
+	}
+	if m.remote.Enabled {
+		// No local filesystem to stat/mkdir against — the path only means
+		// something on the remote host, so we hand it to the remote shell
+		// as-is and let a typo fail there instead of catching it up front.
+		return m.spawnNewSessionRemote(dir)
 	}
 	expanded, err := expandPath(dir)
 	if err != nil {
@@ -464,14 +491,14 @@ func (m *model) refresh() tea.Cmd {
 	archived := m.showArchived
 	cmds := []tea.Cmd{
 		func() tea.Msg {
-			ss, err := m.db.ListSessions(m.ctx, archived)
+			ss, err := m.store.ListSessions(m.ctx, archived)
 			if err != nil {
 				return errMsg{err}
 			}
 			return sessionsMsg(ss)
 		},
 		func() tea.Msg {
-			as, err := m.db.ListPendingApprovals(m.ctx)
+			as, err := m.store.ListPendingApprovals(m.ctx)
 			if err != nil {
 				return errMsg{err}
 			}
@@ -498,26 +525,32 @@ func (m *model) loadTailCmd() tea.Cmd {
 	}
 	prevPath := m.tailPath
 	prevMtime := m.tailMtime
+	budgetKB := m.settings.TailBudgetKB
+	if budgetKB <= 0 {
+		budgetKB = 256
+	}
+	st := m.store
+	ctx := m.ctx
 	return func() tea.Msg {
-		fi, err := os.Stat(path)
+		statCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		mtime, _, err := st.TranscriptStat(statCtx, s)
+		cancel()
 		if err != nil {
 			return tailMsg{path: path, err: err}
 		}
-		if path == prevPath && !fi.ModTime().After(prevMtime) {
-			return tailMsg{path: path, mtime: fi.ModTime(), unchanged: true}
+		if path == prevPath && !mtime.After(prevMtime) {
+			return tailMsg{path: path, mtime: mtime, unchanged: true}
 		}
 		// Tail-read keeps session-switching fast even for transcripts in
 		// the tens of megabytes; we only need the recent end for the
 		// inline pane (the modal viewer pulls the full file).
-		budgetKB := m.settings.TailBudgetKB
-		if budgetKB <= 0 {
-			budgetKB = 256
-		}
-		msgs, err := transcript.LoadTail(path, int64(budgetKB)*1024)
+		tailCtx, cancel2 := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel2()
+		tail, err := st.TranscriptTail(tailCtx, s, budgetKB*1024)
 		if err != nil {
-			return tailMsg{path: path, mtime: fi.ModTime(), err: err}
+			return tailMsg{path: path, mtime: mtime, err: err}
 		}
-		return tailMsg{path: path, mtime: fi.ModTime(), messages: msgs}
+		return tailMsg{path: path, mtime: tail.Mtime, messages: tail.Messages}
 	}
 }
 
@@ -715,15 +748,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash = msg.msg
 		}
 		return m, tea.Batch(tea.ClearScreen, m.refresh())
-	case summaryDoneMsg:
-		if msg.err != nil {
-			_ = m.db.SetSummary(m.ctx, msg.sessionID, msg.err.Error(), "error")
-			m.flash = "summary failed: " + msg.err.Error()
-		} else {
-			_ = m.db.SetSummary(m.ctx, msg.sessionID, msg.summary, "done")
-			m.flash = "summary updated"
-		}
-		return m, m.refresh()
 	case transcriptLoadedMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -916,7 +940,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.cycleGroup(-1)
 	case "R":
-		next, err := settings.Set(m.ctx, m.db, m.settings, "auto_repo_tabs", !m.settings.AutoRepoTabs)
+		next, err := settings.Set(m.ctx, m.store, m.settings, "auto_repo_tabs", !m.settings.AutoRepoTabs)
 		if err != nil {
 			m.err = err
 			return m, nil
@@ -995,10 +1019,17 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flash = "attach is OFF (settings ',')"
 			return m, nil
 		}
-		if home, err := os.UserHomeDir(); err == nil {
-			m.newSessionBuffer = home + string(filepath.Separator)
-		} else {
-			m.newSessionBuffer = ""
+		switch {
+		case m.remote.Enabled:
+			// The local home dir means nothing on the remote host; seed
+			// with a tilde the remote shell will expand itself.
+			m.newSessionBuffer = "~/"
+		default:
+			if home, err := os.UserHomeDir(); err == nil {
+				m.newSessionBuffer = home + string(filepath.Separator)
+			} else {
+				m.newSessionBuffer = ""
+			}
 		}
 		m.newSessionCompletions = nil
 		m.newSessionCompIdx = -1
@@ -1095,12 +1126,12 @@ func (m *model) handleKeySearchEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleKeyNewSessionEdit drives the footer prompt for `n`. The buffer is
 // a directory path. UX:
 //   - Tab          : cycle highlight through live candidates (preview only,
-//                    buffer stays put so the operator can keep typing).
+//     buffer stays put so the operator can keep typing).
 //   - / or Enter   : when a candidate is highlighted, commit it into the
-//                    buffer and reset the highlight — Enter then "descends"
-//                    one more level on the next press.
+//     buffer and reset the highlight — Enter then "descends"
+//     one more level on the next press.
 //   - Enter        : with no highlight, starts a `claude` session in the
-//                    buffer path (creates the dir if missing).
+//     buffer path (creates the dir if missing).
 //   - Esc          : cancel.
 func (m *model) handleKeyNewSessionEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	hasHighlight := m.newSessionCompIdx >= 0 && m.newSessionCompIdx < len(m.newSessionCompletions)
@@ -1132,7 +1163,11 @@ func (m *model) handleKeyNewSessionEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyTab:
 		// Tab is preview only — recompute against the current buffer and
 		// advance the highlight index. The buffer is untouched until the
-		// operator commits with `/` or Enter.
+		// operator commits with `/` or Enter. There's no local filesystem
+		// to complete against in remote mode, so it's a no-op there.
+		if m.remote.Enabled {
+			return m, nil
+		}
 		m.newSessionCompletions = completeDirPrefix(m.newSessionBuffer)
 		if len(m.newSessionCompletions) == 0 {
 			m.flash = "no directory matches"
@@ -1142,6 +1177,9 @@ func (m *model) handleKeyNewSessionEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.newSessionCompIdx = (m.newSessionCompIdx + 1) % len(m.newSessionCompletions)
 		return m, nil
 	case tea.KeyShiftTab:
+		if m.remote.Enabled {
+			return m, nil
+		}
 		m.newSessionCompletions = completeDirPrefix(m.newSessionBuffer)
 		if len(m.newSessionCompletions) == 0 {
 			m.flash = "no directory matches"
@@ -1318,16 +1356,11 @@ func (m *model) tailHalfPage() int {
 	return step
 }
 
-type summaryDoneMsg struct {
-	sessionID string
-	summary   string
-	err       error
-}
-
-// summarizeCurrent kicks off `claude -p` against the selected session's
-// transcript. The DB row is flipped to summary_status='running' immediately
-// so the list row shows the in-progress indicator on the next tick. The
-// summary text comes back via a summaryDoneMsg which writes to the DB.
+// summarizeCurrent kicks off the store's `claude -p` summary flow for the
+// selected session and returns as soon as that kick is acknowledged — the
+// store (Local or Remote) flips summary_status to "running" synchronously
+// on its end, so the next refresh() tick already shows the in-progress
+// indicator without the TUI writing anything itself.
 func (m *model) summarizeCurrent() tea.Cmd {
 	if len(m.sessions) == 0 {
 		return nil
@@ -1338,21 +1371,15 @@ func (m *model) summarizeCurrent() tea.Cmd {
 		return nil
 	}
 	sid := s.SessionID
-	path := s.TranscriptPath
-	// Flip status synchronously so the next refresh shows "summarizing".
-	_ = m.db.SetSummaryStatus(m.ctx, sid, "running")
-	secs := m.settings.SummaryTimeoutSec
-	if secs <= 0 {
-		secs = 180
-	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, time.Duration(secs)*time.Second)
+		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 		defer cancel()
-		summary, err := summarize.Run(ctx, path)
-		return summaryDoneMsg{sessionID: sid, summary: summary, err: err}
+		if err := m.store.Summarize(ctx, sid); err != nil {
+			return attachDoneMsg{err: fmt.Errorf("summarize: %w", err)}
+		}
+		return attachDoneMsg{msg: "summarizing…"}
 	}
 }
-
 
 // handleKeyTitleEdit consumes keystrokes while the rename input is active.
 // We avoid the larger key map here so typed letters land in the buffer
@@ -1476,7 +1503,7 @@ func (m *model) archiveCurrentGroup() tea.Cmd {
 		cycleCmd,
 		func() tea.Msg {
 			for _, sid := range sids {
-				_ = m.db.SetArchived(m.ctx, sid, want)
+				_ = m.store.SetArchived(m.ctx, sid, want)
 			}
 			return attachDoneMsg{msg: fmt.Sprintf("%s %d sessions in '%s'", verb, len(sids), group)}
 		},
@@ -1496,7 +1523,7 @@ func (m *model) toggleArchiveCurrent() tea.Cmd {
 		verb = "unarchived"
 	}
 	return func() tea.Msg {
-		if err := m.db.SetArchived(m.ctx, sid, want); err != nil {
+		if err := m.store.SetArchived(m.ctx, sid, want); err != nil {
 			return attachDoneMsg{err: err}
 		}
 		return attachDoneMsg{msg: verb + " " + shortID(sid)}
@@ -1515,7 +1542,7 @@ func (m *model) toggleFavoriteCurrent() tea.Cmd {
 		verb = "unfavorited"
 	}
 	return func() tea.Msg {
-		if err := m.db.SetFavorite(m.ctx, sid, want); err != nil {
+		if err := m.store.SetFavorite(m.ctx, sid, want); err != nil {
 			return attachDoneMsg{err: err}
 		}
 		return attachDoneMsg{msg: verb + " " + shortID(sid)}
@@ -1590,7 +1617,7 @@ func (m *model) commitGroupEdit() tea.Cmd {
 	sid := s.SessionID
 	group := strings.TrimSpace(m.titleBuffer)
 	return func() tea.Msg {
-		if err := m.db.SetUserGroup(m.ctx, sid, group); err != nil {
+		if err := m.store.SetUserGroup(m.ctx, sid, group); err != nil {
 			return attachDoneMsg{err: err}
 		}
 		if group == "" {
@@ -1613,7 +1640,7 @@ func (m *model) commitTitleEdit() tea.Cmd {
 		title = ""
 	}
 	return func() tea.Msg {
-		if err := m.db.SetCustomTitle(m.ctx, sid, title); err != nil {
+		if err := m.store.SetCustomTitle(m.ctx, sid, title); err != nil {
 			return attachDoneMsg{err: err}
 		}
 		if title == "" {
@@ -1637,22 +1664,10 @@ func (m *model) decideApproval(behavior string, keep bool) tea.Cmd {
 	id := a.ID
 	tool := a.Tool
 	return func() tea.Msg {
-		body, _ := json.Marshal(map[string]any{"behavior": behavior, "keep": keep})
-		url := fmt.Sprintf("http://%s:%d/approvals/%d/decide", paths.DefaultHost, paths.DefaultPort, id)
-		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		if tok, err := auth.Load(); err == nil {
-			req.Header.Set(auth.HeaderName, tok)
-		}
-		client := &http.Client{Timeout: 2 * time.Second}
-		resp, err := client.Do(req)
-		if err != nil {
+		ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
+		defer cancel()
+		if err := m.store.DecideApproval(ctx, id, behavior, "", keep); err != nil {
 			return attachDoneMsg{err: err}
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 300 {
-			b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-			return attachDoneMsg{err: fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))}
 		}
 		verb := "allowed"
 		if behavior == "deny" {
@@ -1767,13 +1782,15 @@ func (m *model) openTranscript() tea.Cmd {
 	path := s.TranscriptPath
 	title := s.DisplayTitle()
 	if title == "" {
-		title = s.DisplayTitle()
-	}
-	if title == "" {
 		title = shortID(s.SessionID)
 	}
+	m.transcriptSession = s
+	st := m.store
+	ctx := m.ctx
 	return func() tea.Msg {
-		msgs, err := transcript.Load(path)
+		tctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		msgs, err := st.TranscriptFull(tctx, s)
 		return transcriptLoadedMsg{path: path, title: title, messages: msgs, err: err}
 	}
 }
@@ -1784,8 +1801,13 @@ func (m *model) reloadTranscript() tea.Cmd {
 	}
 	path := m.transcriptPath
 	title := m.transcriptTitle
+	s := m.transcriptSession
+	st := m.store
+	ctx := m.ctx
 	return func() tea.Msg {
-		msgs, err := transcript.Load(path)
+		tctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		msgs, err := st.TranscriptFull(tctx, s)
 		return transcriptLoadedMsg{path: path, title: title, messages: msgs, err: err}
 	}
 }
@@ -1849,6 +1871,9 @@ func (m *model) attachCurrent() tea.Cmd {
 		return nil
 	}
 	s := m.sessions[m.selSess]
+	if m.remote.Enabled {
+		return m.attachRemote(s)
+	}
 	if s.Pane != "" {
 		c := exec.Command("tmux", "switch-client", "-t", s.Pane)
 		return tea.ExecProcess(c, func(err error) tea.Msg {
@@ -1863,6 +1888,80 @@ func (m *model) attachCurrent() tea.Cmd {
 			return attachDoneMsg{err: err}
 		}
 		return ptyStartedMsg{ptyKey: ptyKey, sessionID: sid}
+	}
+}
+
+// attachRemote hands the whole terminal to `ssh -t <target> <script>` for
+// the selected session. internal/attach's PTY machinery only manages a
+// claude child on THIS host, so it can't attach anything remote; instead we
+// shell out to ssh and let the remote host's own terminal drive claude,
+// exactly like an operator would type it by hand after ssh-ing in.
+func (m *model) attachRemote(s mdl.Session) tea.Cmd {
+	target := m.remote.SSHTarget
+	if target == "" {
+		return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("no ssh target configured (--ssh-target)")} }
+	}
+	var script string
+	if s.Pane != "" {
+		// A remote ssh session attaches its own tmux client to the pane —
+		// there's no local client to switch, unlike the same-host case.
+		script = "tmux attach -t " + shellQuote(s.Pane)
+	} else {
+		if s.Cwd == "" {
+			return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("no cwd recorded for this session")} }
+		}
+		script = remoteCD(s.Cwd) + " && exec claude --resume " + shellQuote(s.SessionID)
+	}
+	c := exec.Command("ssh", "-t", target, script)
+	sid := s.SessionID
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		if err != nil {
+			return attachDoneMsg{err: err}
+		}
+		return attachDoneMsg{msg: "ssh session ended (id " + shortID(sid) + ")"}
+	})
+}
+
+// spawnNewSessionRemote is the remote-mode counterpart of spawnNewSession:
+// there's no local directory to mkdir or stat, so we just ssh in and run
+// claude in the operator-typed directory, letting the remote shell's own
+// `cd` fail (and print an error the operator sees, since -t gives them a
+// real interactive terminal) if the path doesn't exist there.
+func (m *model) spawnNewSessionRemote(dir string) tea.Cmd {
+	target := m.remote.SSHTarget
+	if target == "" {
+		return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("no ssh target configured (--ssh-target)")} }
+	}
+	script := remoteCD(dir) + " && exec claude"
+	c := exec.Command("ssh", "-t", target, script)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		if err != nil {
+			return attachDoneMsg{err: err}
+		}
+		return attachDoneMsg{msg: "ssh session ended"}
+	})
+}
+
+// shellQuote wraps s in single quotes, escaping any embedded single quotes,
+// so operator-typed values can be embedded safely in an ssh script.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// remoteCD builds a `cd <dir>` shell fragment for an ssh script. A leading
+// `~` is deliberately left unquoted so the remote shell still performs
+// tilde expansion — quoting it (`cd '~/foo'`) would make the remote shell
+// look for a directory literally named "~", which almost never exists.
+// Everything else is single-quoted against injection from the
+// operator-typed path.
+func remoteCD(dir string) string {
+	switch {
+	case dir == "~":
+		return "cd ~"
+	case strings.HasPrefix(dir, "~/"):
+		return "cd ~/" + shellQuote(strings.TrimPrefix(dir, "~/"))
+	default:
+		return "cd " + shellQuote(dir)
 	}
 }
 
@@ -1962,19 +2061,20 @@ func clampLines(s string, n int) string {
 }
 
 var (
-	titleStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	subtitleStyle     = lipgloss.NewStyle().Faint(true)
+	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	subtitleStyle = lipgloss.NewStyle().Faint(true)
 	// Black on bright orange — meant to be unmissable so a stale dev build
 	// stands out against a release binary's clean header.
-	devBadgeStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("208")).Padding(0, 1)
+	devBadgeStyle         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("208")).Padding(0, 1)
 	srvExistingBadgeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Faint(true) // bright green, dim
 	srvSpawnedBadgeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Faint(true) // yellow, dim
+	srvRemoteBadgeStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Faint(true) // cyan, dim
 	// Bright cyan on black so it doesn't clash with the orange DEV chip
 	// (a dev binary can also have a newer release available, in which
 	// case both show side by side).
-	updateBadgeStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("33")).Padding(0, 1)
-	selectedRow       = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("15"))
-	pendingStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
+	updateBadgeStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("33")).Padding(0, 1)
+	selectedRow        = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("15"))
+	pendingStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
 	pendingRowStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	groupHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("237"))
 	tabActiveStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("12"))
@@ -1982,17 +2082,17 @@ var (
 	// Inactive tabs were on bg 236 + fg 8 — both grays, basically illegible.
 	// Drop the background so inactive labels read against the terminal
 	// default and bump the fg to 250 (light gray) for solid contrast.
-	tabInactiveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	tabInactiveStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	approvalRowStyle   = lipgloss.NewStyle().Background(lipgloss.Color("58")).Foreground(lipgloss.Color("15"))
 	approvalLabelStyle = lipgloss.NewStyle().Background(lipgloss.Color("11")).Foreground(lipgloss.Color("0")).Bold(true)
-	statusActive      = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // bright green: busy
-	statusIdle        = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // bright cyan: alive idle
-	statusRecent      = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))  // yellow: dead but <6h
-	statusStop        = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // dim gray: long-dead
-	footerStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	paneTitle         = lipgloss.NewStyle().Bold(true).Padding(0, 1).Background(lipgloss.Color("237")).Foreground(lipgloss.Color("15"))
-	paneTitleDim      = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("8"))
-	errStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	statusActive       = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // bright green: busy
+	statusIdle         = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // bright cyan: alive idle
+	statusRecent       = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))  // yellow: dead but <6h
+	statusStop         = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // dim gray: long-dead
+	footerStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	paneTitle          = lipgloss.NewStyle().Bold(true).Padding(0, 1).Background(lipgloss.Color("237")).Foreground(lipgloss.Color("15"))
+	paneTitleDim       = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("8"))
+	errStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 )
 
 func (m *model) renderHeader() string {
@@ -2016,6 +2116,8 @@ func (m *model) renderHeader() string {
 		right += "  " + srvExistingBadgeStyle.Render("⬡ server")
 	case ServerModeSpawned:
 		right += "  " + srvSpawnedBadgeStyle.Render("⬡ spawned")
+	case ServerModeRemote:
+		right += "  " + srvRemoteBadgeStyle.Render("⬡ remote")
 	}
 	if buildinfo.IsDev() {
 		// On dev builds: bright orange "DEV", a content-derived hash so we
@@ -2322,7 +2424,7 @@ func (m *model) handleKeySettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if cur.Max > 0 && n > cur.Max {
 					n = cur.Max
 				}
-				next, err := settings.Set(m.ctx, m.db, m.settings, cur.Key, n)
+				next, err := settings.Set(m.ctx, m.store, m.settings, cur.Key, n)
 				if err == nil {
 					m.settings = next
 				} else {
@@ -2374,7 +2476,7 @@ func (m *model) handleKeySettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch cur.Kind {
 		case settings.KindBool:
 			old := settings.Get(m.settings, cur.Key).(bool)
-			next, err := settings.Set(m.ctx, m.db, m.settings, cur.Key, !old)
+			next, err := settings.Set(m.ctx, m.store, m.settings, cur.Key, !old)
 			if err == nil {
 				m.settings = next
 			} else {
@@ -2386,7 +2488,7 @@ func (m *model) handleKeySettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.settingsBuffer = strconv.Itoa(v)
 		case settings.KindAction:
 			if cur.Apply != nil {
-				next, err := cur.Apply(m.ctx, m.db, m.settings)
+				next, err := cur.Apply(m.ctx, m.store, m.settings)
 				if err == nil {
 					m.settings = next
 					m.flash = "applied: " + cur.Label
@@ -2405,7 +2507,7 @@ func (m *model) handleKeySettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 				next := cur.Options[(idx+1)%len(cur.Options)]
-				updated, err := settings.Set(m.ctx, m.db, m.settings, cur.Key, next)
+				updated, err := settings.Set(m.ctx, m.store, m.settings, cur.Key, next)
 				if err == nil {
 					m.settings = updated
 				} else {
@@ -3131,20 +3233,20 @@ func (m *model) maxTranscriptScroll(height int) int {
 // width and rendered with the background color so the color extends across
 // the full row, making message boundaries obvious.
 var (
-	userRowStyle       = lipgloss.NewStyle().Background(lipgloss.Color("17")).Foreground(lipgloss.Color("15")) // dark blue
-	userLabelStyle     = lipgloss.NewStyle().Background(lipgloss.Color("12")).Foreground(lipgloss.Color("15")).Bold(true)
-	assistantRowStyle  = lipgloss.NewStyle().Background(lipgloss.Color("22")).Foreground(lipgloss.Color("15")) // dark green
+	userRowStyle        = lipgloss.NewStyle().Background(lipgloss.Color("17")).Foreground(lipgloss.Color("15")) // dark blue
+	userLabelStyle      = lipgloss.NewStyle().Background(lipgloss.Color("12")).Foreground(lipgloss.Color("15")).Bold(true)
+	assistantRowStyle   = lipgloss.NewStyle().Background(lipgloss.Color("22")).Foreground(lipgloss.Color("15")) // dark green
 	assistantLabelStyle = lipgloss.NewStyle().Background(lipgloss.Color("10")).Foreground(lipgloss.Color("0")).Bold(true)
-	toolRowStyle       = lipgloss.NewStyle().Background(lipgloss.Color("23")).Foreground(lipgloss.Color("15")) // teal
-	toolLabelStyle     = lipgloss.NewStyle().Background(lipgloss.Color("14")).Foreground(lipgloss.Color("0")).Bold(true)
-	resultRowStyle     = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("7")) // dark gray
-	resultLabelStyle   = lipgloss.NewStyle().Background(lipgloss.Color("242")).Foreground(lipgloss.Color("0")).Bold(true)
-	errorRowStyle      = lipgloss.NewStyle().Background(lipgloss.Color("52")).Foreground(lipgloss.Color("15"))  // dark red
-	errorLabelStyle    = lipgloss.NewStyle().Background(lipgloss.Color("9")).Foreground(lipgloss.Color("15")).Bold(true)
-	thinkingRowStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
-	thinkingLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true).Bold(true)
-	systemRowStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	systemLabelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Bold(true)
+	toolRowStyle        = lipgloss.NewStyle().Background(lipgloss.Color("23")).Foreground(lipgloss.Color("15")) // teal
+	toolLabelStyle      = lipgloss.NewStyle().Background(lipgloss.Color("14")).Foreground(lipgloss.Color("0")).Bold(true)
+	resultRowStyle      = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("7")) // dark gray
+	resultLabelStyle    = lipgloss.NewStyle().Background(lipgloss.Color("242")).Foreground(lipgloss.Color("0")).Bold(true)
+	errorRowStyle       = lipgloss.NewStyle().Background(lipgloss.Color("52")).Foreground(lipgloss.Color("15")) // dark red
+	errorLabelStyle     = lipgloss.NewStyle().Background(lipgloss.Color("9")).Foreground(lipgloss.Color("15")).Bold(true)
+	thinkingRowStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
+	thinkingLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true).Bold(true)
+	systemRowStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	systemLabelStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Bold(true)
 )
 
 func renderTranscriptMessage(msg transcript.Message, width int) []string {

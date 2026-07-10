@@ -330,6 +330,53 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 	return out, rows.Err()
 }
 
+// GetSession fetches a single session row by id. ok is false when no row
+// matches — that's not an error condition, it's how callers like
+// store.Local.Summarize and the server's transcript/summarize API handlers
+// distinguish "no such session" (404/skip) from a hard DB failure.
+func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, bool, error) {
+	row := d.sql.QueryRowContext(ctx, `
+		SELECT s.session_id, s.cwd, COALESCE(s.repo,''), COALESCE(s.branch,''), COALESCE(s.commit_hash,''),
+		       COALESCE(s.wrapper_pid,0), COALESCE(s.proc_pid,0), COALESCE(s.pane,''),
+		       COALESCE(s.tmux_pane,''), COALESCE(s.tmux_session,''),
+		       COALESCE(s.transcript_path,''), COALESCE(s.model,''),
+		       COALESCE(s.title,''), COALESCE(s.custom_title,''), COALESCE(s.user_group,''),
+		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
+		       COALESCE(s.summary,''), COALESCE(s.summary_status,''), COALESCE(s.summary_at,0),
+		       s.first_seen, s.last_seen, s.status,
+		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending
+		FROM sessions s
+		WHERE s.session_id = ?
+	`, sessionID)
+	var s model.Session
+	var first, last, sumAt int64
+	var status string
+	var arch, fav int
+	err := row.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
+		&s.WrapperPID, &s.ProcPID, &s.Pane,
+		&s.TmuxPane, &s.TmuxSession,
+		&s.TranscriptPath, &s.Model,
+		&s.Title, &s.CustomTitle, &s.UserGroup,
+		&arch, &fav,
+		&s.Summary, &s.SummaryStatus, &sumAt,
+		&first, &last, &status, &s.PendingCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Session{}, false, nil
+	}
+	if err != nil {
+		return model.Session{}, false, err
+	}
+	s.FirstSeen = time.Unix(first, 0).UTC()
+	s.LastSeen = time.Unix(last, 0).UTC()
+	s.Status = model.SessionStatus(status)
+	s.Archived = arch != 0
+	s.Favorite = fav != 0
+	if sumAt > 0 {
+		s.SummaryAt = time.Unix(sumAt, 0).UTC()
+	}
+	return s, true, nil
+}
+
 // SetArchived flips the archived flag.
 func (d *DB) SetArchived(ctx context.Context, sessionID string, archived bool) error {
 	v := 0

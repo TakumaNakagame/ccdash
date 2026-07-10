@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +26,8 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/procmap"
 	"github.com/takumanakagame/ccmanage/internal/redact"
 	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/takumanakagame/ccmanage/internal/summarize"
+	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
 type Server struct {
@@ -109,6 +114,21 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/approvals/", wrap(s.handleApprovalDecide))
 	s.mux.HandleFunc("/pty/", wrap(s.handlePTY))
 	s.mux.HandleFunc("/shutdown", wrap(s.handleShutdown))
+
+	// Remote-mode API — consumed by internal/store.Remote so a TUI can run
+	// on a different host than the collector. Same rate-limit + token
+	// wrapper as the hook routes; nothing here is reachable without the
+	// shared secret.
+	s.mux.HandleFunc("GET /api/sessions", wrap(s.handleAPISessions))
+	s.mux.HandleFunc("GET /api/approvals", wrap(s.handleAPIApprovals))
+	s.mux.HandleFunc("POST /api/sessions/{id}/archive", wrap(s.handleAPIArchive))
+	s.mux.HandleFunc("POST /api/sessions/{id}/favorite", wrap(s.handleAPIFavorite))
+	s.mux.HandleFunc("POST /api/sessions/{id}/title", wrap(s.handleAPITitle))
+	s.mux.HandleFunc("POST /api/sessions/{id}/group", wrap(s.handleAPIGroup))
+	s.mux.HandleFunc("POST /api/sessions/{id}/summarize", wrap(s.handleAPISummarize))
+	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
+	s.mux.HandleFunc("GET /api/settings", wrap(s.handleAPISettingsList))
+	s.mux.HandleFunc("PUT /api/settings/{key}", wrap(s.handleAPISettingSet))
 }
 
 // requireToken wraps a handler so requests without a matching X-Ccdash-Token
@@ -122,7 +142,7 @@ func (s *Server) requireToken(h http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		got := r.Header.Get(auth.HeaderName)
-		if got == "" || got != s.token {
+		if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
 			http.Error(w, "ccdash: bad or missing token", http.StatusUnauthorized)
 			return
 		}
@@ -173,7 +193,7 @@ func (s *Server) syncInstalledHooks() {
 	if s.token == "" {
 		return
 	}
-	cfg, err := settings.Load(context.Background(), s.db)
+	cfg, err := settings.Load(context.Background(), localSettingsStore{s.db})
 	if err == nil && !cfg.AutoInstallSync {
 		return
 	}
@@ -546,7 +566,7 @@ func (s *Server) handlePermissionRequest(w http.ResponseWriter, r *http.Request)
 	// it would without ccdash. The pending row stays in the DB so the
 	// dashboard still surfaces it for visibility, but the discovery loop
 	// will sweep it to 'timeout' shortly.
-	cfg, _ := settings.Load(r.Context(), s.db)
+	cfg, _ := settings.Load(r.Context(), localSettingsStore{s.db})
 	if !cfg.ApproveEnabled {
 		writeOK(w, nil)
 		return
@@ -771,4 +791,278 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// --- Remote-mode API (internal/store.Remote's server side) -----------------
+
+func decodeJSONBody(r *http.Request, v any) error {
+	defer r.Body.Close()
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(v); err != nil {
+		return fmt.Errorf("decode request body: %w", err)
+	}
+	return nil
+}
+
+func writeJSONStatus(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if body == nil {
+		_, _ = w.Write([]byte("{}"))
+		return
+	}
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func (s *Server) handleAPISessions(w http.ResponseWriter, r *http.Request) {
+	archived := r.URL.Query().Get("archived") == "1"
+	ss, err := s.db.ListSessions(r.Context(), archived)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, ss)
+}
+
+func (s *Server) handleAPIApprovals(w http.ResponseWriter, r *http.Request) {
+	as, err := s.db.ListPendingApprovals(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, as)
+}
+
+func (s *Server) handleAPIArchive(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Archived bool `json:"archived"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetArchived(r.Context(), id, body.Archived); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+func (s *Server) handleAPIFavorite(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Favorite bool `json:"favorite"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetFavorite(r.Context(), id, body.Favorite); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+func (s *Server) handleAPITitle(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetCustomTitle(r.Context(), id, body.Title); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+func (s *Server) handleAPIGroup(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Group string `json:"group"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetUserGroup(r.Context(), id, body.Group); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+// handleAPISummarize kicks off the same claude -p flow the TUI used to run
+// itself (internal/summarize), but on the collector host — the server has
+// the claude binary and the transcripts, a remote TUI's host may have
+// neither. Gated on summary_enabled: a remote client bypasses the TUI's own
+// "s is disabled" shortcut check, so the server has to enforce the gate
+// itself where it actually matters.
+func (s *Server) handleAPISummarize(w http.ResponseWriter, r *http.Request) {
+	cfg, err := settings.Load(r.Context(), localSettingsStore{s.db})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !cfg.SummaryEnabled {
+		http.Error(w, "summarize is disabled (summary_enabled=off)", http.StatusForbidden)
+		return
+	}
+	id := r.PathValue("id")
+	sess, ok, err := s.db.GetSession(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if sess.TranscriptPath == "" {
+		http.Error(w, "no transcript path recorded for this session", http.StatusUnprocessableEntity)
+		return
+	}
+	if err := s.db.SetSummaryStatus(r.Context(), id, "running"); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	timeoutSec := cfg.SummaryTimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = 180
+	}
+	path := sess.TranscriptPath
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+		defer cancel()
+		summary, err := summarize.Run(ctx, path)
+		if err != nil {
+			_ = s.db.SetSummary(context.Background(), id, err.Error(), "error")
+			return
+		}
+		_ = s.db.SetSummary(context.Background(), id, summary, "done")
+	}()
+	writeJSONStatus(w, http.StatusAccepted, nil)
+}
+
+// transcriptEnvelope mirrors store.Remote's decoding side.
+type transcriptEnvelope struct {
+	Mtime string `json:"mtime"`
+	Size  int64  `json:"size"`
+	Data  string `json:"data,omitempty"`
+}
+
+// handleAPITranscript serves tail/full/stat reads of a session's transcript.
+// The path always comes from the DB row keyed by the {id} in the URL — never
+// from a client-supplied path — so there's no way to walk this into an
+// arbitrary file on the collector host.
+func (s *Server) handleAPITranscript(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sess, ok, err := s.db.GetSession(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !ok || sess.TranscriptPath == "" {
+		http.NotFound(w, r)
+		return
+	}
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "tail"
+	}
+	switch mode {
+	case "stat":
+		fi, err := os.Stat(sess.TranscriptPath)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeOK(w, transcriptEnvelope{Mtime: fi.ModTime().UTC().Format(time.RFC3339Nano), Size: fi.Size()})
+	case "full":
+		data, err := os.ReadFile(sess.TranscriptPath)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		mtime, size := statOrZero(sess.TranscriptPath)
+		writeOK(w, transcriptEnvelope{
+			Mtime: mtime.UTC().Format(time.RFC3339Nano),
+			Size:  size,
+			Data:  base64.StdEncoding.EncodeToString(data),
+		})
+	case "tail":
+		budget := int64(256 * 1024)
+		if v := r.URL.Query().Get("bytes"); v != "" {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+				budget = n
+			}
+		}
+		data, mtime, size, err := transcript.TailBytes(sess.TranscriptPath, budget)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeOK(w, transcriptEnvelope{
+			Mtime: mtime.UTC().Format(time.RFC3339Nano),
+			Size:  size,
+			Data:  base64.StdEncoding.EncodeToString(data),
+		})
+	default:
+		http.Error(w, "unknown mode (want tail, full, or stat)", http.StatusBadRequest)
+	}
+}
+
+func statOrZero(path string) (time.Time, int64) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}, 0
+	}
+	return fi.ModTime(), fi.Size()
+}
+
+func (s *Server) handleAPISettingsList(w http.ResponseWriter, r *http.Request) {
+	out := make(map[string]string, len(settings.AllKeys()))
+	for _, key := range settings.AllKeys() {
+		v, err := s.db.GetSetting(r.Context(), key)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		out[key] = v
+	}
+	writeOK(w, out)
+}
+
+func (s *Server) handleAPISettingSet(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	var body struct {
+		Value string `json:"value"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetSetting(r.Context(), key, body.Value); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+// localSettingsStore adapts *db.DB to the two methods settings.Load actually
+// needs, without pulling internal/store into internal/server (which would
+// otherwise be the only reason this package imports it — server stays a
+// *db.DB shop internally; only the TUI/CLI go through the Store seam).
+type localSettingsStore struct{ db *db.DB }
+
+func (l localSettingsStore) GetSetting(ctx context.Context, key string) (string, error) {
+	return l.db.GetSetting(ctx, key)
+}
+
+func (l localSettingsStore) SetSetting(ctx context.Context, key, value string) error {
+	return l.db.SetSetting(ctx, key, value)
 }

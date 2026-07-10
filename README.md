@@ -175,28 +175,116 @@ can dial back ccdash's reach when they want pure observation:
 The **"Apply secure preset"** action flips all four to off in one shot
 for a fully observation-only deployment.
 
+## Remote mode
+
+By default the collector only binds `127.0.0.1` and the TUI reads its
+SQLite DB / transcripts directly off the same disk — the two have to run
+on the same host. Remote mode lifts that: run the collector on a dev
+server, and point a TUI on any other machine at it over HTTP.
+
+**1. Start a collector that listens beyond loopback**, on the host that
+runs `claude` (call it `dev-box`):
+
+```sh
+ccdash server --listen 0.0.0.0:9123
+# or a specific address if the host has more than one interface:
+ccdash server --listen 192.168.20.132:9123
+```
+
+`--listen` is opt-in and separate from the default `--addr` (which stays
+`127.0.0.1:9123`). Binding non-loopback logs a clear warning, and ccdash
+refuses to start if no auth token exists yet — run `ccdash server` (or
+`ccdash install-hooks`) locally once first so `$XDG_STATE_HOME/ccdash/token`
+gets created, *then* add `--listen`.
+
+For a persistent setup, run it as a systemd user unit:
+
+```ini
+# ~/.config/systemd/user/ccdash.service
+[Unit]
+Description=ccdash collector
+
+[Service]
+ExecStart=%h/.local/bin/ccdash server --listen 0.0.0.0:9123
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user enable --now ccdash.service
+```
+
+**2. Copy the collector's token** to the machine that will run the TUI —
+it's the same shared secret hook events already use, just scp'd over:
+
+```sh
+scp dev-box:~/.local/state/ccdash/token ~/.ccdash-token
+```
+
+**3. Point the TUI at it**:
+
+```sh
+ccdash --remote http://192.168.20.132:9123 --token-file ~/.ccdash-token
+```
+
+Token resolution order: `--token-file <path>` → `$CCDASH_TOKEN` env var →
+a helpful error telling you to scp the token over. In remote mode ccdash
+never opens a local DB and never spawns/pings a local collector — every
+session list, approval decision, and transcript read goes over HTTP to
+`--remote`'s origin, authenticated the same way hook events are (the
+`X-Ccdash-Token` header).
+
+**Attach and new-session in remote mode** go through `ssh -t` instead of a
+local PTY (`internal/attach` only manages a claude process on the machine
+running ccdash, which in remote mode isn't `dev-box`): pressing `enter` on
+a running session with a tmux pane runs `ssh -t <target> tmux attach -t
+<pane>`; on a stopped session it runs `cd <cwd> && exec claude --resume
+<id>` over ssh. `n` (new session) works the same way with an
+operator-typed directory — there's no local filesystem to check or
+tab-complete against, so the path is passed through as-is and a typo just
+fails inside the ssh session. The ssh target defaults to the hostname in
+`--remote`; override it with `--ssh-target user@host` when it differs
+(e.g. a different SSH alias or username).
+
+`sessions` and `approvals` (the plain-text CLI subcommands) also accept
+`--remote` / `--token-file` / `--ssh-target`; `events` stays local-only.
+
 ## Threat model
 
-ccdash is built for a single user managing their own Claude Code sessions
-on a single workstation.
+ccdash is built for a single user (or a small trusted team, via remote
+mode) managing their own Claude Code sessions.
 
 **Inside the trust boundary** (assumed honest):
 - The local user account running ccdash and `claude`
 - The `claude` binary and its on-disk state under `~/.claude/`
 - Files the operator opens or edits via Claude
+- In remote mode: whoever holds the collector's token, and the network
+  path between the TUI and the collector (see "Explicitly out of scope"
+  below for what that does *not* cover)
 
 **Outside the trust boundary** (treated as adversarial):
 - Other UNIX users on the same host
 - Repositories the operator opens whose `.claude/settings.json` could try
   to inject hooks (Claude Code's concern; ccdash never writes into a
   project-scoped settings file, only `~/.claude/settings.json`)
-- Network access of any kind — ccdash's collector binds to `127.0.0.1`
-  and will not accept connections from other interfaces
+- Network access of any kind by default — the embedded/managed collector
+  binds `127.0.0.1` and will not accept connections from other interfaces.
+  **Non-loopback binding requires an explicit opt-in** (`ccdash server
+  --listen <addr>`) and a token always still gates every request; see
+  "Remote mode" above.
 
 #### Explicitly out of scope
 
-- Multi-user / shared-host deployments
-- Public or LAN exposure of the collector
+- Multi-user / shared-host deployments where operators don't trust each
+  other (remote mode is for one operator's own collector, reachable from
+  their own other machines — not a shared multi-tenant service)
+- Public internet exposure of the collector, remote mode or not
+- **No TLS in v1.** Remote mode's HTTP traffic (including the token
+  header, prompts, and approval decisions) is unencrypted on the wire —
+  intended for a trusted LAN or a VPN/Tailscale overlay, not an open or
+  untrusted network
 - Web UI / browser access (there is none — TUI only)
 - Defense against the operator pasting their own secrets into prompts.
   The best ccdash can do is mask common token patterns before persisting.
@@ -205,15 +293,21 @@ on a single workstation.
 
 #### Mitigations in this codebase
 
-- Loopback-only bind, hardcoded — no flag changes the host
+- Loopback by default. The embedded/managed collector (plain `ccdash`,
+  `-k`) is loopback-only, unconditionally — no flag changes that. A
+  standalone `ccdash server` can opt into a non-loopback bind via
+  `--listen`, which logs a clear warning and refuses to start without an
+  existing auth token (see "Remote mode")
 - DB file at `$XDG_STATE_HOME/ccdash/ccdash.sqlite` with `0600` permissions
 - Hook entries in `~/.claude/settings.json` carry an `X-Ccdash-Managed`
   marker so `install-hooks` and `uninstall-hooks` round-trip them
   idempotently without disturbing other user hooks
-- Random shared token at `$XDG_STATE_HOME/ccdash/token` (mode `0600`).
-  Required on every hook + decision request, so other UNIX users on the
-  same host can't forge events or approve tools by reaching the loopback
-  port. The server auto-rewrites the hook headers when it rotates.
+- Random shared token at `$XDG_STATE_HOME/ccdash/token` (mode `0600`),
+  compared with a constant-time check. Required on every hook, decision,
+  and remote-mode API request — whether loopback or not — so other UNIX
+  users on the host, or other hosts on the network in remote mode, can't
+  forge events, approve tools, or read session data without it. The
+  server auto-rewrites the hook headers when it rotates.
 - Token-bucket rate limit on every authenticated route (50 QPS / 100
   burst) bounds the impact of runaway loops or scripted floods
 - Pattern-based masking on hook payloads / titles / summaries before
@@ -221,6 +315,9 @@ on a single workstation.
   OpenAI / Anthropic key formats, URL credentials, etc.). The masking
   matters mainly for the summarize feature (which does send a digest
   over the network); on-disk Claude transcripts are unaffected.
+- The remote-mode transcript API resolves the file path from the
+  session's DB row only — never from anything the client sends — so a
+  remote TUI can't ask the collector to read an arbitrary path.
 
 ## Layout
 
@@ -243,6 +340,7 @@ internal/hookcfg/               install-hooks settings.json merge
 internal/wrapper/               `ccdash claude` exec wrapper
 internal/paths/                 state dir / db / settings paths
 internal/gitinfo/               git repo / branch / commit lookup
+internal/store/                 Store seam (Local: *db.DB + files; Remote: HTTP client for --remote)
 docs/usage_en.md                hands-on usage guide (English)
 docs/usage_jp.md                hands-on usage guide (Japanese)
 install.sh                      curl-installable shell installer
@@ -253,7 +351,10 @@ install.sh                      curl-installable shell installer
 
 - DB: `$XDG_STATE_HOME/ccdash/ccdash.sqlite` (default `~/.local/state/ccdash/`), `0600`
 - Token: `$XDG_STATE_HOME/ccdash/token`, `0600`
-- Server bind: `127.0.0.1:9123` (loopback only — never exposed externally)
+- Server bind: `127.0.0.1:9123` by default (loopback only). `ccdash server
+  --listen <addr>` opts a standalone collector into a non-default bind for
+  remote mode — see "Remote mode" above. The embedded/managed collector
+  (plain `ccdash`, `-k`) always stays loopback-only.
 - ccdash hook entries are tagged with the `X-Ccdash-Managed: true`
   header so install / uninstall are idempotent and don't collide with
   user hooks

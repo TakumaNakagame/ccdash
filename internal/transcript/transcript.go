@@ -5,9 +5,8 @@
 package transcript
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
 	"strings"
@@ -17,12 +16,12 @@ import (
 type Kind string
 
 const (
-	KindUser      Kind = "user"
-	KindAssistant Kind = "assistant"
-	KindThinking  Kind = "thinking"
-	KindToolUse   Kind = "tool_use"
+	KindUser       Kind = "user"
+	KindAssistant  Kind = "assistant"
+	KindThinking   Kind = "thinking"
+	KindToolUse    Kind = "tool_use"
 	KindToolResult Kind = "tool_result"
-	KindSystem    Kind = "system"
+	KindSystem     Kind = "system"
 )
 
 type Message struct {
@@ -38,84 +37,87 @@ type Message struct {
 // Load reads the entire transcript file and returns parsed messages in
 // chronological order.
 func Load(path string) ([]Message, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
-	var out []Message
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 16<<20)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		out = append(out, parseLine(line)...)
-	}
-	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
-		if errors.Is(err, bufio.ErrTooLong) {
-			// A line exceeded the buffer (likely a large base64 image). Return
-			// what we have — the partial result is more useful than nothing.
-			return out, nil
-		}
-		return out, err
-	}
-	return out, nil
+	return ParseBytes(data), nil
 }
 
 // LoadTail reads at most the trailing `budget` bytes from a transcript and
 // parses only the messages it can find there. This is the fast path for
 // live-tailing pane updates when the file is huge — we don't need a 30 MB
-// JSONL fully parsed just to show the last few exchanges. The first line
-// may be a fragment of a longer record split across the seek boundary; we
-// drop it so we never feed half-objects into the JSON parser.
+// JSONL fully parsed just to show the last few exchanges.
 func LoadTail(path string, budget int64) ([]Message, error) {
+	data, _, _, err := TailBytes(path, budget)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBytes(data), nil
+}
+
+// TailBytes reads the trailing `budget` bytes of the transcript at path
+// along with its current mtime/size, and drops the leading line if the read
+// started mid-file — that line may be the tail end of a record split across
+// the seek boundary, and feeding half a JSON object into the parser would
+// just silently produce nothing useful anyway.
+//
+// This is the shared primitive behind both LoadTail (used directly by the
+// local Store) and the server's transcript API (GET
+// /api/sessions/{id}/transcript?mode=tail), so a remote TUI sees exactly the
+// same trimming behavior as the local one: the caller only needs to run the
+// returned bytes through ParseBytes.
+func TailBytes(path string, budget int64) (data []byte, mtime time.Time, size int64, err error) {
 	if budget <= 0 {
 		budget = 256 * 1024
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, 0, err
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, 0, err
 	}
 	var startOffset int64
 	if fi.Size() > budget {
 		startOffset = fi.Size() - budget
 	}
 	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
-		return nil, err
+		return nil, time.Time{}, 0, err
 	}
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 16<<20)
-	var out []Message
-	skipFirst := startOffset > 0
-	for sc.Scan() {
-		if skipFirst {
-			// The first line may be the tail of a record that started
-			// before our seek point — drop it to avoid garbled JSON.
-			skipFirst = false
-			continue
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return nil, fi.ModTime(), fi.Size(), err
+	}
+	if startOffset > 0 {
+		if i := bytes.IndexByte(raw, '\n'); i >= 0 {
+			raw = raw[i+1:]
+		} else {
+			raw = nil
 		}
-		line := sc.Bytes()
+	}
+	return raw, fi.ModTime(), fi.Size(), nil
+}
+
+// ParseBytes parses an in-memory JSONL blob (already loaded — from disk or
+// fetched from a remote collector) into Messages. Load, LoadTail, and
+// store.Remote's transcript methods all funnel through this so the parsing
+// logic is identical regardless of where the bytes came from. Unlike the
+// old bufio.Scanner implementation there is no per-line length limit, so a
+// JSONL line carrying a large base64 image can't blank the pane (the
+// v0.3.8 bufio.ErrTooLong partial-result fix is subsumed by this design).
+func ParseBytes(data []byte) []Message {
+	var out []Message
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		line = bytes.TrimRight(line, "\r")
 		if len(line) == 0 {
 			continue
 		}
 		out = append(out, parseLine(line)...)
 	}
-	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
-		if errors.Is(err, bufio.ErrTooLong) {
-			return out, nil
-		}
-		return out, err
-	}
-	return out, nil
+	return out
 }
 
 func parseLine(line []byte) []Message {
