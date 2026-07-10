@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/takumanakagame/ccmanage/internal/auth"
+	"github.com/takumanakagame/ccmanage/internal/clientcfg"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/hookcfg"
 	"github.com/takumanakagame/ccmanage/internal/paths"
@@ -32,15 +34,26 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/wrapper"
 )
 
-// remoteFlags backs the --remote/--token-file/--ssh-target persistent flags.
-// They're defined once on the root command and shared (by pointer) with
-// every subcommand that can talk to a Store, so cobra fills the same struct
-// regardless of whether the operator ran `ccdash --remote ...` or
-// `ccdash tui --remote ...` / `ccdash sessions --remote ...`.
+// remoteFlags backs the -r/--remote, --remote-url, --token-file and
+// --ssh-target persistent flags. They're defined once on the root command
+// and shared (by pointer) with every subcommand that can talk to a Store,
+// so cobra fills the same struct regardless of whether the operator ran
+// `ccdash -r` or `ccdash sessions -r` / `ccdash tui --remote-url ...`.
 type remoteFlags struct {
+	// remoteEnabled is -r/--remote: use the remote collector configured in
+	// $XDG_CONFIG_HOME/ccdash/config.json (written by `ccdash remote set`).
+	remoteEnabled bool
+	// remoteURL is --remote-url: an explicit collector origin that both
+	// implies remote mode and overrides the configured url.
 	remoteURL string
 	tokenFile string
 	sshTarget string
+}
+
+// wantsRemote reports whether this invocation asked for remote mode at all
+// — via -r or via an explicit --remote-url.
+func (rf *remoteFlags) wantsRemote() bool {
+	return rf.remoteEnabled || rf.remoteURL != ""
 }
 
 func Root(version string) *cobra.Command {
@@ -66,9 +79,10 @@ Pass --keep-server (-k) to spawn a detached server that keeps running after
 the TUI exits, so events are captured even while you're not watching. Use
 'ccdash server' for a foreground collector (e.g. as a systemd user unit).
 
-Remote mode: point the TUI at a collector running on another host with
---remote http://host:9123 (see README "Remote mode"). In that mode ccdash
-never opens a local DB or spawns a collector — everything goes over HTTP.`,
+Remote mode: configure a collector on another host once with
+'ccdash remote set --url http://host:9123 ...' and then run 'ccdash -r'
+(see README "Remote mode"). In that mode ccdash never opens a local DB or
+spawns a collector — everything goes over HTTP.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if showVersion {
@@ -87,12 +101,14 @@ never opens a local DB or spawns a collector — everything goes over HTTP.`,
 	// existing scripts don't break, but encourage the new name.
 	root.Flags().StringVar(&initialGroup, "tab", "", "deprecated alias for --group")
 	_ = root.Flags().MarkHidden("tab")
-	root.PersistentFlags().StringVar(&rf.remoteURL, "remote", "",
-		"talk to a remote ccdash collector over HTTP instead of the local DB, e.g. http://192.168.20.132:9123")
+	root.PersistentFlags().BoolVarP(&rf.remoteEnabled, "remote", "r", false,
+		"use the remote collector configured via `ccdash remote set` (~/.config/ccdash/config.json)")
+	root.PersistentFlags().StringVar(&rf.remoteURL, "remote-url", "",
+		"remote collector URL, e.g. http://192.168.20.132:9123 (implies -r; overrides the configured url)")
 	root.PersistentFlags().StringVar(&rf.tokenFile, "token-file", "",
-		"path to the remote collector's token file (default: $CCDASH_TOKEN env var)")
+		"path to the remote collector's token file (overrides config; falls back to $CCDASH_TOKEN)")
 	root.PersistentFlags().StringVar(&rf.sshTarget, "ssh-target", "",
-		"user@host for ssh attach/new-session in remote mode (default: host portion of --remote)")
+		"user@host for ssh attach/new-session in remote mode (overrides config; default: URL hostname)")
 	root.AddCommand(serverCmd())
 	root.AddCommand(claudeCmd())
 	root.AddCommand(sessionsCmd(rf))
@@ -105,53 +121,89 @@ never opens a local DB or spawns a collector — everything goes over HTTP.`,
 	return root
 }
 
-// resolveRemote turns the --remote/--token-file/--ssh-target flags into a
-// remoteConfig, or (nil, nil) when --remote wasn't passed at all — the
-// signal for "stay in local mode".
+// resolveRemote combines the -r/--remote-url/--token-file/--ssh-target
+// flags with the client config file (clientcfg) into a remoteConfig, or
+// (nil, nil) when remote mode wasn't requested at all — the signal for
+// "stay in local mode".
+//
+// Precedence for every field: explicit flag > config file > (for the token
+// only) $CCDASH_TOKEN env > error. The config file is optional as long as
+// the flags cover the URL; a MALFORMED config file is always an error, even
+// with overriding flags, so a broken file never gets silently ignored.
 func resolveRemote(rf *remoteFlags) (*remoteConfig, error) {
-	if rf.remoteURL == "" {
+	if !rf.wantsRemote() {
 		return nil, nil
 	}
-	u, err := url.Parse(rf.remoteURL)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("--remote must be a full URL like http://192.168.20.132:9123, got %q", rf.remoteURL)
+	var fileCfg clientcfg.Remote
+	cfg, err := clientcfg.Load()
+	switch {
+	case err == nil:
+		fileCfg = cfg.Remote
+	case errors.Is(err, clientcfg.ErrNotFound):
+		// Not configured — fine if the flags carry everything we need.
+	default:
+		return nil, err
 	}
-	token, err := resolveToken(rf)
+
+	rawURL := rf.remoteURL
+	if rawURL == "" {
+		rawURL = fileCfg.URL
+	}
+	if rawURL == "" {
+		cfgPath, _ := clientcfg.Path()
+		return nil, fmt.Errorf(`remote mode requested but no remote is configured — run:
+  ccdash remote set --url http://HOST:9123 [--token-file PATH] [--ssh-target user@host]
+first (writes %s), or pass --remote-url explicitly`, cfgPath)
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("remote URL must be a full URL like http://192.168.20.132:9123, got %q", rawURL)
+	}
+	token, err := resolveToken(rf, fileCfg, rawURL)
 	if err != nil {
 		return nil, err
 	}
 	sshTarget := rf.sshTarget
 	if sshTarget == "" {
+		sshTarget = fileCfg.SSHTarget
+	}
+	if sshTarget == "" {
 		sshTarget = u.Hostname()
 	}
 	return &remoteConfig{
-		baseURL:   strings.TrimRight(rf.remoteURL, "/"),
+		baseURL:   strings.TrimRight(rawURL, "/"),
 		token:     token,
 		sshTarget: sshTarget,
 	}, nil
 }
 
-// resolveToken implements the documented resolution order: --token-file,
-// then $CCDASH_TOKEN, then a helpful error pointing at scp-ing the server's
-// token file (it never invents or fetches one on its own — the operator
-// must have the collector's actual secret).
-func resolveToken(rf *remoteFlags) (string, error) {
-	switch {
-	case rf.tokenFile != "":
-		b, err := os.ReadFile(rf.tokenFile)
+// resolveToken implements the documented resolution order: --token-file
+// flag, then the config file's token_file, then $CCDASH_TOKEN, then a
+// helpful error pointing at scp-ing the server's token file (it never
+// invents or fetches one on its own — the operator must have the
+// collector's actual secret).
+func resolveToken(rf *remoteFlags, fileCfg clientcfg.Remote, remoteURL string) (string, error) {
+	readTokenFile := func(path, source string) (string, error) {
+		b, err := os.ReadFile(path)
 		if err != nil {
-			return "", fmt.Errorf("--token-file %s: %w", rf.tokenFile, err)
+			return "", fmt.Errorf("%s %s: %w", source, path, err)
 		}
 		if tok := strings.TrimSpace(string(b)); tok != "" {
 			return tok, nil
 		}
-		return "", fmt.Errorf("--token-file %s is empty", rf.tokenFile)
+		return "", fmt.Errorf("%s %s is empty", source, path)
+	}
+	switch {
+	case rf.tokenFile != "":
+		return readTokenFile(rf.tokenFile, "--token-file")
+	case fileCfg.TokenFile != "":
+		return readTokenFile(fileCfg.TokenFile, "configured token_file")
 	case os.Getenv("CCDASH_TOKEN") != "":
 		return strings.TrimSpace(os.Getenv("CCDASH_TOKEN")), nil
 	default:
-		return "", fmt.Errorf(`remote mode needs the collector's token: pass --token-file <path>, set $CCDASH_TOKEN, or copy it over first, e.g.:
-  scp <server-host>:~/.local/state/ccdash/token ~/.ccdash-token
-  ccdash --remote %s --token-file ~/.ccdash-token`, rf.remoteURL)
+		return "", fmt.Errorf(`remote mode needs the collector's token: run `+"`ccdash remote set --token-file <path>`"+`, pass --token-file, or set $CCDASH_TOKEN — copying it over first, e.g.:
+  scp <server-host>:~/.local/state/ccdash/token ~/.config/ccdash/collector.token
+  ccdash remote set --url %s --token-file ~/.config/ccdash/collector.token`, remoteURL)
 	}
 }
 
@@ -406,11 +458,11 @@ func eventsCmd(rf *remoteFlags) *cobra.Command {
 		Short: "List events for a session",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if rf.remoteURL != "" {
+			if rf.wantsRemote() {
 				// Without this guard the command would open (and create!)
 				// the LOCAL empty DB and print nothing — which reads like
 				// the remote collector lost the data.
-				return fmt.Errorf("events does not support --remote yet; run it on the collector host")
+				return fmt.Errorf("events does not support remote mode (-r) yet; run it on the collector host")
 			}
 			d, err := openDB()
 			if err != nil {

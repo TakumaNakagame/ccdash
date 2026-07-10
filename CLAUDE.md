@@ -23,7 +23,8 @@ ccdash --group home-lab        # locks the TUI to a single project / user-named 
 ccdash --version             # prints the build-time main.Version
 ccdash update                # self-update from the latest GitHub release
 ccdash server --listen 0.0.0.0:9123   # opt-in: bind beyond loopback for remote mode
-ccdash --remote http://host:9123 --token-file ~/.ccdash-token  # TUI on a different host than the collector
+ccdash remote set --url http://host:9123 --token-file ~/.ccdash-token   # one-time client config (~/.config/ccdash/config.json)
+ccdash -r                    # TUI against the configured remote collector (--remote-url overrides ad hoc)
 ```
 
 CI (`.github/workflows/ci.yml`) runs `go vet`, `go test`, `go build` on every push / PR. The `release.yml` workflow fires on `v*` tag pushes and produces 4 binaries (linux/darwin × amd64/arm64) plus sha256 sidecars. Tags can be cut from the GitHub UI via the manual `tag` workflow.
@@ -45,7 +46,8 @@ cmd/ccdash/main.go              entry; main.Version is injected via -ldflags at 
 internal/cli/                   cobra command tree (run, server, install-hooks, update, ...)
 internal/server/                HTTP collector + rate limiter + auth middleware + discovery loop
 internal/db/                    SQLite layer (sessions / events / approvals / settings)
-internal/store/                 Store seam between TUI/CLI and data: Local (*db.DB + files + summarize) / Remote (HTTP client for --remote)
+internal/store/                 Store seam between TUI/CLI and data: Local (*db.DB + files + summarize) / Remote (HTTP client for -r remote mode)
+internal/clientcfg/             client-side remote config (~/.config/ccdash/config.json) read by -r, written by `ccdash remote set`
 internal/discovery/             scans ~/.claude/projects/*.jsonl, extracts cwd / first user prompt
 internal/procmap/               PID ↔ session_id ↔ tmux pane via ~/.claude/sessions/<pid>.json
 internal/transcript/            JSONL parser + LoadTail for fast right-pane previews

@@ -228,21 +228,40 @@ systemctl --user enable --now ccdash.service
 it's the same shared secret hook events already use, just scp'd over:
 
 ```sh
-scp dev-box:~/.local/state/ccdash/token ~/.ccdash-token
+scp dev-box:~/.local/state/ccdash/token ~/.config/ccdash/collector.token
 ```
 
-**3. Point the TUI at it**:
+**3. Configure the remote once**, then use `-r` from anywhere:
 
 ```sh
-ccdash --remote http://192.168.20.132:9123 --token-file ~/.ccdash-token
+ccdash remote set --url http://192.168.20.132:9123 \
+  --token-file ~/.config/ccdash/collector.token \
+  --ssh-target dev-box        # optional; defaults to the URL hostname
+ccdash remote show            # prints the effective config + sources
+ccdash -r                     # open the TUI against the configured remote
 ```
 
-Token resolution order: `--token-file <path>` → `$CCDASH_TOKEN` env var →
-a helpful error telling you to scp the token over. In remote mode ccdash
-never opens a local DB and never spawns/pings a local collector — every
-session list, approval decision, and transcript read goes over HTTP to
-`--remote`'s origin, authenticated the same way hook events are (the
-`X-Ccdash-Token` header).
+`ccdash remote set` writes `~/.config/ccdash/config.json`
+(`$XDG_CONFIG_HOME/ccdash/config.json`, mode 0600):
+
+```json
+{
+  "remote": {
+    "url": "http://192.168.20.132:9123",
+    "token_file": "/home/op/.config/ccdash/collector.token",
+    "ssh_target": "dev-box"
+  }
+}
+```
+
+Per-invocation overrides: `--remote-url <url>` (implies `-r`, overrides the
+configured url), `--token-file`, `--ssh-target`. Precedence for every
+field: explicit flag → config file → (token only) `$CCDASH_TOKEN` env var →
+a helpful error. `ccdash -r` without any configuration tells you to run
+`ccdash remote set` first. In remote mode ccdash never opens a local DB and
+never spawns/pings a local collector — every session list, approval
+decision, and transcript read goes over HTTP to the remote origin,
+authenticated the same way hook events are (the `X-Ccdash-Token` header).
 
 **Attach and new-session in remote mode** go through `ssh -t` instead of a
 local PTY (`internal/attach` only manages a claude process on the machine
@@ -255,13 +274,13 @@ claude usually lives) apply even though ssh's remote-command path skips rc
 files. `n` (new session) works the same way with an operator-typed
 directory — there's no local filesystem to check or tab-complete against,
 so the path is passed through as-is and a typo just fails inside the ssh
-session. The ssh target defaults to the hostname in `--remote`; override it
-with `--ssh-target user@host` when it differs (e.g. a different SSH alias
-or username).
+session. The ssh target defaults to the remote URL's hostname; set
+`ssh_target` in the config (or pass `--ssh-target user@host`) when it
+differs (e.g. a different SSH alias or username).
 
 `sessions` and `approvals` (the plain-text CLI subcommands) also accept
-`--remote` / `--token-file` / `--ssh-target`; `events` stays local-only and
-says so if you pass `--remote`.
+`-r` / `--remote-url` / `--token-file` / `--ssh-target`; `events` stays
+local-only and says so if you pass `-r`.
 
 **Known limitation (v1):** toggling a value on the settings page (`,`) in
 remote mode performs a synchronous HTTP write; if the collector just went
@@ -358,7 +377,8 @@ internal/hookcfg/               install-hooks settings.json merge
 internal/wrapper/               `ccdash claude` exec wrapper
 internal/paths/                 state dir / db / settings paths
 internal/gitinfo/               git repo / branch / commit lookup
-internal/store/                 Store seam (Local: *db.DB + files; Remote: HTTP client for --remote)
+internal/store/                 Store seam (Local: *db.DB + files; Remote: HTTP client for -r remote mode)
+internal/clientcfg/             client-side remote config (~/.config/ccdash/config.json) for -r
 docs/usage_en.md                hands-on usage guide (English)
 docs/usage_jp.md                hands-on usage guide (Japanese)
 install.sh                      curl-installable shell installer
