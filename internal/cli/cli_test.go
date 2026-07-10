@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/takumanakagame/ccmanage/internal/clientcfg"
 )
 
 func TestIsLoopbackHost(t *testing.T) {
@@ -204,5 +207,74 @@ func TestResolveRemoteConfigMissingURL(t *testing.T) {
 	_, err := resolveRemote(&remoteFlags{remoteEnabled: true})
 	if err == nil || !strings.Contains(err.Error(), "ccdash remote set") {
 		t.Fatalf("config without url = %v, want remote-set guidance", err)
+	}
+}
+
+// TestRemoteSetRoundTrip drives the real cobra command tree: `remote set`
+// writes the config, a second partial set merges instead of clobbering,
+// and resolveRemote picks the values up for -r.
+func TestRemoteSetRoundTrip(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("CCDASH_TOKEN", "")
+	tokenPath := writeTokenFile(t, "roundtrip-token")
+
+	run := func(args ...string) error {
+		root := Root("test")
+		root.SetArgs(args)
+		root.SetOut(io.Discard)
+		root.SetErr(io.Discard)
+		return root.Execute()
+	}
+
+	if err := run("remote", "set",
+		"--url", "http://192.168.20.132:9123/",
+		"--token-file", tokenPath,
+		"--ssh-target", "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := clientcfg.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Trailing slash normalized away; token path stored absolute.
+	if cfg.Remote.URL != "http://192.168.20.132:9123" {
+		t.Errorf("url = %q", cfg.Remote.URL)
+	}
+	if cfg.Remote.TokenFile != tokenPath {
+		t.Errorf("token_file = %q, want %q", cfg.Remote.TokenFile, tokenPath)
+	}
+	if cfg.Remote.SSHTarget != "claude-code" {
+		t.Errorf("ssh_target = %q", cfg.Remote.SSHTarget)
+	}
+
+	// Partial set merges — url/token survive an ssh-target-only update.
+	if err := run("remote", "set", "--ssh-target", "other-host"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = clientcfg.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Remote.URL == "" || cfg.Remote.TokenFile == "" || cfg.Remote.SSHTarget != "other-host" {
+		t.Fatalf("merge lost fields: %+v", cfg.Remote)
+	}
+
+	// And -r resolution consumes exactly what set wrote.
+	rc, err := resolveRemote(&remoteFlags{remoteEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.baseURL != "http://192.168.20.132:9123" || rc.token != "roundtrip-token" || rc.sshTarget != "other-host" {
+		t.Fatalf("resolve after set = %+v", rc)
+	}
+
+	// No flags at all → usage error, not an empty write.
+	if err := run("remote", "set"); err == nil {
+		t.Fatal("remote set with no flags should error")
+	}
+	// Bad URL rejected before writing.
+	if err := run("remote", "set", "--url", "not a url"); err == nil {
+		t.Fatal("remote set with a bad --url should error")
 	}
 }

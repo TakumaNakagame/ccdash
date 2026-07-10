@@ -117,6 +117,7 @@ spawns a collector — everything goes over HTTP.`,
 	root.AddCommand(installHooksCmd())
 	root.AddCommand(uninstallHooksCmd())
 	root.AddCommand(tuiCmd(rf))
+	root.AddCommand(remoteCmd())
 	root.AddCommand(updateCmd(version))
 	return root
 }
@@ -213,9 +214,142 @@ type remoteConfig struct {
 	sshTarget string
 }
 
-// openStore resolves --remote (if set) into a store.Store; otherwise it
-// opens the local DB and wraps it. closeFn releases whatever resource was
-// acquired (a no-op for remote — there's no local handle to close).
+// remoteCmd is the `ccdash remote` group: set (write/merge the client
+// config) and show (print the effective remote config with sources).
+func remoteCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "remote",
+		Short: "Configure the remote collector used by -r",
+	}
+	c.AddCommand(remoteSetCmd())
+	c.AddCommand(remoteShowCmd())
+	return c
+}
+
+func remoteSetCmd() *cobra.Command {
+	var urlFlag, tokenFile, sshTarget string
+	c := &cobra.Command{
+		Use:   "set",
+		Short: "Write the remote collector config (~/.config/ccdash/config.json)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if urlFlag == "" && tokenFile == "" && sshTarget == "" {
+				return fmt.Errorf("nothing to set: pass at least one of --url / --token-file / --ssh-target")
+			}
+			// Merge over the existing config so `remote set --token-file`
+			// doesn't wipe a previously-set url. A missing file starts from
+			// zero; a malformed file errors instead of being clobbered.
+			cfg, err := clientcfg.Load()
+			if err != nil && !errors.Is(err, clientcfg.ErrNotFound) {
+				return fmt.Errorf("%w — fix or delete it, then re-run remote set", err)
+			}
+			if urlFlag != "" {
+				u, err := url.Parse(urlFlag)
+				if err != nil || u.Scheme == "" || u.Host == "" {
+					return fmt.Errorf("--url must be a full URL like http://192.168.20.132:9123, got %q", urlFlag)
+				}
+				cfg.Remote.URL = strings.TrimRight(urlFlag, "/")
+			}
+			if tokenFile != "" {
+				abs, err := expandUserPath(tokenFile)
+				if err != nil {
+					return err
+				}
+				if _, err := os.Stat(abs); err != nil {
+					// Not fatal — the operator may scp the token afterwards —
+					// but say so now rather than at first -r use.
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: token file %s is not readable yet: %v\n", abs, err)
+				}
+				cfg.Remote.TokenFile = abs
+			}
+			if sshTarget != "" {
+				cfg.Remote.SSHTarget = sshTarget
+			}
+			if err := clientcfg.Save(cfg); err != nil {
+				return err
+			}
+			path, _ := clientcfg.Path()
+			fmt.Printf("remote config written → %s\n", path)
+			return printRemoteConfig(cfg)
+		},
+	}
+	c.Flags().StringVar(&urlFlag, "url", "", "collector origin, e.g. http://192.168.20.132:9123")
+	c.Flags().StringVar(&tokenFile, "token-file", "", "path to a local copy of the collector's token")
+	c.Flags().StringVar(&sshTarget, "ssh-target", "", "user@host for ssh attach (default: URL hostname)")
+	return c
+}
+
+func remoteShowCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show",
+		Short: "Print the effective remote config and where it comes from",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, _ := clientcfg.Path()
+			cfg, err := clientcfg.Load()
+			if errors.Is(err, clientcfg.ErrNotFound) {
+				fmt.Printf("no remote configured (%s missing)\nrun: ccdash remote set --url http://HOST:9123 [--token-file PATH] [--ssh-target user@host]\n", path)
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			fmt.Printf("config file: %s\n", path)
+			return printRemoteConfig(cfg)
+		},
+	}
+}
+
+// printRemoteConfig renders the effective remote settings. It never prints
+// token CONTENTS — only the file path the token would be read from.
+func printRemoteConfig(cfg clientcfg.Config) error {
+	r := cfg.Remote
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	if r.URL != "" {
+		fmt.Fprintf(tw, "url\t%s\t(config)\n", r.URL)
+	} else {
+		fmt.Fprintf(tw, "url\t(not set)\t— -r will error until set\n")
+	}
+	switch {
+	case r.TokenFile != "":
+		fmt.Fprintf(tw, "token_file\t%s\t(config; contents never printed)\n", r.TokenFile)
+	case os.Getenv("CCDASH_TOKEN") != "":
+		fmt.Fprintf(tw, "token\t(from $CCDASH_TOKEN env)\t\n")
+	default:
+		fmt.Fprintf(tw, "token_file\t(not set)\t— will fall back to $CCDASH_TOKEN, else error\n")
+	}
+	switch {
+	case r.SSHTarget != "":
+		fmt.Fprintf(tw, "ssh_target\t%s\t(config)\n", r.SSHTarget)
+	case r.URL != "":
+		if u, err := url.Parse(r.URL); err == nil {
+			fmt.Fprintf(tw, "ssh_target\t%s\t(derived from url hostname)\n", u.Hostname())
+		}
+	default:
+		fmt.Fprintf(tw, "ssh_target\t(not set)\t— derives from url hostname once set\n")
+	}
+	return tw.Flush()
+}
+
+// expandUserPath resolves a leading ~ and relative paths to an absolute
+// path, so the config file always stores something usable from any cwd.
+func expandUserPath(p string) (string, error) {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		if p == "~" {
+			p = home
+		} else {
+			p = filepath.Join(home, p[2:])
+		}
+	}
+	return filepath.Abs(p)
+}
+
+// openStore resolves remote mode (if requested) into a store.Store;
+// otherwise it opens the local DB and wraps it. closeFn releases whatever
+// resource was acquired (a no-op for remote — there's no local handle to
+// close).
 func openStore(rf *remoteFlags) (store.Store, func(), error) {
 	rc, err := resolveRemote(rf)
 	if err != nil {
