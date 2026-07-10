@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +26,8 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/procmap"
 	"github.com/takumanakagame/ccmanage/internal/redact"
 	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/takumanakagame/ccmanage/internal/summarize"
+	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
 type Server struct {
@@ -78,6 +83,13 @@ func New(d *db.DB, addr string) *Server {
 		pending: map[int64]chan approvalDecision{},
 		ptyMap:  map[string]*ptyEntry{},
 	}
+	// The summarize goroutine lives in the collector process; a
+	// summary_status='running' row at startup means a previous run died
+	// mid-flight. Sweep it to 'error' so the list row doesn't show a
+	// spinner forever.
+	if err := d.SweepRunningSummaries(context.Background()); err != nil {
+		log.Printf("summary sweep: %v", err)
+	}
 	s.routes()
 	return s
 }
@@ -109,6 +121,21 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/approvals/", wrap(s.handleApprovalDecide))
 	s.mux.HandleFunc("/pty/", wrap(s.handlePTY))
 	s.mux.HandleFunc("/shutdown", wrap(s.handleShutdown))
+
+	// Remote-mode API — consumed by internal/store.Remote so a TUI can run
+	// on a different host than the collector. Same rate-limit + token
+	// wrapper as the hook routes; nothing here is reachable without the
+	// shared secret.
+	s.mux.HandleFunc("GET /api/sessions", wrap(s.handleAPISessions))
+	s.mux.HandleFunc("GET /api/approvals", wrap(s.handleAPIApprovals))
+	s.mux.HandleFunc("POST /api/sessions/{id}/archive", wrap(s.handleAPIArchive))
+	s.mux.HandleFunc("POST /api/sessions/{id}/favorite", wrap(s.handleAPIFavorite))
+	s.mux.HandleFunc("POST /api/sessions/{id}/title", wrap(s.handleAPITitle))
+	s.mux.HandleFunc("POST /api/sessions/{id}/group", wrap(s.handleAPIGroup))
+	s.mux.HandleFunc("POST /api/sessions/{id}/summarize", wrap(s.handleAPISummarize))
+	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
+	s.mux.HandleFunc("GET /api/settings", wrap(s.handleAPISettingsList))
+	s.mux.HandleFunc("PUT /api/settings/{key}", wrap(s.handleAPISettingSet))
 }
 
 // requireToken wraps a handler so requests without a matching X-Ccdash-Token
@@ -122,7 +149,7 @@ func (s *Server) requireToken(h http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		got := r.Header.Get(auth.HeaderName)
-		if got == "" || got != s.token {
+		if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
 			http.Error(w, "ccdash: bad or missing token", http.StatusUnauthorized)
 			return
 		}
@@ -130,32 +157,94 @@ func (s *Server) requireToken(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// listenAddrs derives the full set of addresses a collector must bind for a
+// requested bind address. Claude Code's installed hooks are hardcoded to
+// 127.0.0.1:<port> (install-hooks writes paths.DefaultHost into
+// settings.json), and store.Local.DecideApproval targets the same loopback
+// address — so a collector bound ONLY to a specific non-loopback IP would
+// silently drop every hook event and approval decision on its own host.
+// Therefore:
+//
+//   - loopback host → just that address
+//   - wildcard host ("", 0.0.0.0, ::) → just that address (a wildcard bind
+//     already accepts loopback connections; adding a second listener on the
+//     same port would only fight it for the bind)
+//   - specific non-loopback IP/name → that address PLUS 127.0.0.1:<port>
+func listenAddrs(addr string) ([]string, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("bad listen address %q: %w", addr, err)
+	}
+	ip := net.ParseIP(host)
+	switch {
+	case host == "" || (ip != nil && ip.IsUnspecified()):
+		return []string{addr}, nil // wildcard covers loopback already
+	case host == "localhost" || (ip != nil && ip.IsLoopback()):
+		return []string{addr}, nil
+	default:
+		return []string{addr, net.JoinHostPort("127.0.0.1", port)}, nil
+	}
+}
+
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	// cancelFn lets POST /shutdown stop the server gracefully; cancelling
+	// this context runs the Shutdown goroutine below, which closes every
+	// listener the server serves.
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancelFn = cancel
 	defer cancel()
 
-	ln, err := net.Listen("tcp", s.addr)
+	addrs, err := listenAddrs(s.addr)
 	if err != nil {
 		return err
+	}
+	lns := make([]net.Listener, 0, len(addrs))
+	for _, a := range addrs {
+		ln, err := net.Listen("tcp", a)
+		if err != nil {
+			for _, prev := range lns {
+				_ = prev.Close()
+			}
+			return err
+		}
+		lns = append(lns, ln)
 	}
 	s.srv = &http.Server{
 		Handler:           s.mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	log.Printf("ccdash server listening on http://%s", ln.Addr())
+	for _, ln := range lns {
+		log.Printf("ccdash server listening on http://%s", ln.Addr())
+	}
+	if len(lns) > 1 {
+		log.Printf("ccdash: loopback listener added alongside %s — Claude Code hooks and the local TUI always talk to 127.0.0.1; remote clients use the --listen address", s.addr)
+	}
 	go func() {
 		<-ctx.Done()
 		shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutCancel()
-		_ = s.srv.Shutdown(shutCtx)
+		_ = s.srv.Shutdown(shutCtx) // closes every listener the server serves
 	}()
 	s.syncInstalledHooks()
 	go s.discoveryLoop(ctx)
-	if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+	errCh := make(chan error, len(lns))
+	for _, ln := range lns {
+		go func(l net.Listener) { errCh <- s.srv.Serve(l) }(ln)
 	}
-	return nil
+	var firstErr error
+	for range lns {
+		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if firstErr == nil {
+				firstErr = err
+			}
+			// A hard error on one listener (not a shutdown) should take the
+			// whole server down rather than limp along half-bound.
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = s.srv.Shutdown(shutCtx)
+			cancel()
+		}
+	}
+	return firstErr
 }
 
 // syncInstalledHooks compares the X-Ccdash-Token currently baked into
@@ -771,4 +860,243 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// --- Remote-mode API (internal/store.Remote's server side) -----------------
+
+func decodeJSONBody(r *http.Request, v any) error {
+	defer r.Body.Close()
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(v); err != nil {
+		return fmt.Errorf("decode request body: %w", err)
+	}
+	return nil
+}
+
+func writeJSONStatus(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if body == nil {
+		_, _ = w.Write([]byte("{}"))
+		return
+	}
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func (s *Server) handleAPISessions(w http.ResponseWriter, r *http.Request) {
+	archived := r.URL.Query().Get("archived") == "1"
+	ss, err := s.db.ListSessions(r.Context(), archived)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, ss)
+}
+
+func (s *Server) handleAPIApprovals(w http.ResponseWriter, r *http.Request) {
+	as, err := s.db.ListPendingApprovals(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, as)
+}
+
+func (s *Server) handleAPIArchive(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Archived bool `json:"archived"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetArchived(r.Context(), id, body.Archived); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+func (s *Server) handleAPIFavorite(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Favorite bool `json:"favorite"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetFavorite(r.Context(), id, body.Favorite); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+func (s *Server) handleAPITitle(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetCustomTitle(r.Context(), id, body.Title); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+func (s *Server) handleAPIGroup(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Group string `json:"group"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetUserGroup(r.Context(), id, body.Group); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+// handleAPISummarize kicks off the same claude -p flow the local TUI runs
+// (summarize.Kickoff — the shared implementation with store.Local), but on
+// the collector host: the server has the claude binary and the transcripts,
+// a remote TUI's host may have neither. The gate lives inside Kickoff — a
+// remote client bypasses the TUI's own "s is disabled" shortcut check, so
+// it has to be enforced where it actually matters. An already-running
+// summary makes Kickoff a no-op, so a double-tap still gets 202 without
+// stacking a second claude -p run.
+func (s *Server) handleAPISummarize(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	err := summarize.Kickoff(r.Context(), s.db, id)
+	switch {
+	case errors.Is(err, summarize.ErrDisabled):
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	case errors.Is(err, summarize.ErrSessionNotFound):
+		http.NotFound(w, r)
+		return
+	case errors.Is(err, summarize.ErrNoTranscript):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSONStatus(w, http.StatusAccepted, nil)
+}
+
+// transcriptEnvelope mirrors store.Remote's decoding side.
+type transcriptEnvelope struct {
+	Mtime string `json:"mtime"`
+	Size  int64  `json:"size"`
+	Data  string `json:"data,omitempty"`
+}
+
+// handleAPITranscript serves tail/full/stat reads of a session's transcript.
+// The path always comes from the DB row keyed by the {id} in the URL — never
+// from a client-supplied path — so there's no way to walk this into an
+// arbitrary file on the collector host.
+func (s *Server) handleAPITranscript(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sess, ok, err := s.db.GetSession(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !ok || sess.TranscriptPath == "" {
+		http.NotFound(w, r)
+		return
+	}
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "tail"
+	}
+	switch mode {
+	case "stat":
+		fi, err := os.Stat(sess.TranscriptPath)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeOK(w, transcriptEnvelope{Mtime: fi.ModTime().UTC().Format(time.RFC3339Nano), Size: fi.Size()})
+	case "full":
+		data, err := os.ReadFile(sess.TranscriptPath)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		mtime, size := statOrZero(sess.TranscriptPath)
+		writeOK(w, transcriptEnvelope{
+			Mtime: mtime.UTC().Format(time.RFC3339Nano),
+			Size:  size,
+			Data:  base64.StdEncoding.EncodeToString(data),
+		})
+	case "tail":
+		budget := int64(256 * 1024)
+		if v := r.URL.Query().Get("bytes"); v != "" {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+				budget = n
+			}
+		}
+		data, mtime, size, err := transcript.TailBytes(sess.TranscriptPath, budget)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeOK(w, transcriptEnvelope{
+			Mtime: mtime.UTC().Format(time.RFC3339Nano),
+			Size:  size,
+			Data:  base64.StdEncoding.EncodeToString(data),
+		})
+	default:
+		http.Error(w, "unknown mode (want tail, full, or stat)", http.StatusBadRequest)
+	}
+}
+
+func statOrZero(path string) (time.Time, int64) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}, 0
+	}
+	return fi.ModTime(), fi.Size()
+}
+
+func (s *Server) handleAPISettingsList(w http.ResponseWriter, r *http.Request) {
+	all, err := s.db.AllSettings(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	// Project onto the known key set: absent keys come back as "" so remote
+	// settings.Load applies its defaults, and internal/legacy rows don't
+	// leak into the payload.
+	out := make(map[string]string, len(settings.AllKeys()))
+	for _, key := range settings.AllKeys() {
+		out[key] = all[key]
+	}
+	writeOK(w, out)
+}
+
+func (s *Server) handleAPISettingSet(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	var body struct {
+		Value string `json:"value"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetSetting(r.Context(), key, body.Value); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
 }

@@ -7,9 +7,24 @@ package settings
 import (
 	"context"
 	"strconv"
-
-	"github.com/takumanakagame/ccmanage/internal/db"
 )
+
+// Store is the minimal capability Load/Set/ActionFunc need: read/write raw
+// string setting values. internal/store.Store (Local and Remote alike)
+// satisfies this automatically since its method set is a superset — this
+// package deliberately does NOT import internal/store so that a bare *db.DB
+// (which also has all three methods) can satisfy it too, without pulling the
+// whole Store seam into the collector.
+//
+// Load goes through AllSettings — one bulk read — rather than per-key
+// GetSetting calls, because in remote mode each GetSetting is a full HTTP
+// round trip to the collector; per-key reads turned TUI startup into ~16
+// sequential requests.
+type Store interface {
+	GetSetting(ctx context.Context, key string) (string, error)
+	SetSetting(ctx context.Context, key, value string) error
+	AllSettings(ctx context.Context) (map[string]string, error)
+}
 
 // Settings is the typed snapshot the TUI takes on startup. Field defaults
 // are applied when the underlying row is missing or unparsable.
@@ -41,40 +56,40 @@ type Settings struct {
 }
 
 const (
-	keyAutoRepoTabs      = "auto_repo_tabs"
-	keyBellOnPending     = "bell_on_pending"
-	keyNewestAtBottom    = "newest_at_bottom"
-	keyLayoutMode        = "layout_mode"
+	keyAutoRepoTabs   = "auto_repo_tabs"
+	keyBellOnPending  = "bell_on_pending"
+	keyNewestAtBottom = "newest_at_bottom"
+	keyLayoutMode     = "layout_mode"
 	// KeyVerticalAutoCols is exported so the TUI can annotate this row
 	// with the live terminal width.
-	KeyVerticalAutoCols  = "vertical_auto_cols"
-	keyVerticalAutoCols  = KeyVerticalAutoCols
-	keyApproveEnabled    = "approve_enabled"
+	KeyVerticalAutoCols = "vertical_auto_cols"
+	keyVerticalAutoCols = KeyVerticalAutoCols
+	keyApproveEnabled   = "approve_enabled"
 
 	// Legacy keys retained only for one-shot migration on Load.
 	legacyKeyLayoutVertical = "layout_vertical"
 	legacyKeyLayoutAuto     = "layout_auto"
-	keySummaryEnabled    = "summary_enabled"
-	keyAttachEnabled     = "attach_enabled"
-	keyAutoInstallSync   = "auto_install_sync"
-	keyPresetSecure      = "preset_secure"
-	keyTailBudgetKB      = "tail_budget_kb"
-	keySummaryTimeoutSec = "summary_timeout_sec"
-	keyRefreshIntervalMs = "refresh_interval_ms"
+	keySummaryEnabled       = "summary_enabled"
+	keyAttachEnabled        = "attach_enabled"
+	keyAutoInstallSync      = "auto_install_sync"
+	keyPresetSecure         = "preset_secure"
+	keyTailBudgetKB         = "tail_budget_kb"
+	keySummaryTimeoutSec    = "summary_timeout_sec"
+	keyRefreshIntervalMs    = "refresh_interval_ms"
 )
 
 // Defaults returns the baseline values used whenever a key is missing.
 func Defaults() Settings {
 	return Settings{
-		AutoRepoTabs:      true,
-		BellOnPending:     true,
-		NewestAtBottom:    false,
-		LayoutMode:        "auto",
-		VerticalAutoCols:  100,
-		ApproveEnabled:    true,
-		SummaryEnabled:    true,
-		AttachEnabled:     true,
-		AutoInstallSync:   true,
+		AutoRepoTabs:     true,
+		BellOnPending:    true,
+		NewestAtBottom:   false,
+		LayoutMode:       "auto",
+		VerticalAutoCols: 100,
+		ApproveEnabled:   true,
+		SummaryEnabled:   true,
+		AttachEnabled:    true,
+		AutoInstallSync:  true,
 
 		TailBudgetKB:      256,
 		SummaryTimeoutSec: 180,
@@ -82,15 +97,19 @@ func Defaults() Settings {
 	}
 }
 
-// Load reads every known key from the DB, falling back to Defaults() for
-// each one that's missing or malformed. Always returns a populated
-// Settings; the error is non-nil only on hard DB failures.
-func Load(ctx context.Context, d *db.DB) (Settings, error) {
-	out := Defaults()
-	pairs := []struct {
-		key string
-		set func(string)
-	}{
+// loadPair binds a storage key to the setter that folds its raw value into
+// a Settings snapshot. loadPairs is the counterpart of AllKeys/AllSpecs on
+// the read path — the settings package test asserts its key set matches
+// AllKeys exactly, so adding a Spec without a load pair (or vice versa)
+// fails the build's test run instead of silently dropping the key from
+// either Load or GET /api/settings.
+type loadPair struct {
+	key string
+	set func(string)
+}
+
+func loadPairs(out *Settings) []loadPair {
+	return []loadPair{
 		{keyAutoRepoTabs, func(v string) { out.AutoRepoTabs = parseBool(v, out.AutoRepoTabs) }},
 		{keyBellOnPending, func(v string) { out.BellOnPending = parseBool(v, out.BellOnPending) }},
 		{keyNewestAtBottom, func(v string) { out.NewestAtBottom = parseBool(v, out.NewestAtBottom) }},
@@ -109,22 +128,33 @@ func Load(ctx context.Context, d *db.DB) (Settings, error) {
 		{keySummaryTimeoutSec, func(v string) { out.SummaryTimeoutSec = parseInt(v, out.SummaryTimeoutSec) }},
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
 	}
-	for _, p := range pairs {
-		v, err := d.GetSetting(ctx, p.key)
-		if err != nil {
-			return out, err
-		}
-		if v != "" {
+}
+
+// Load reads every known key from the store in one AllSettings call,
+// falling back to Defaults() for each one that's missing or malformed.
+// Always returns a populated Settings; the error is non-nil only on hard
+// store failures.
+func Load(ctx context.Context, st Store) (Settings, error) {
+	out := Defaults()
+	all, err := st.AllSettings(ctx)
+	if err != nil {
+		return out, err
+	}
+	for _, p := range loadPairs(&out) {
+		if v := all[p.key]; v != "" {
 			p.set(v)
 		}
 	}
 	// One-shot migration from the previous two-bool layout scheme. If the
 	// new key is missing but the legacy ones are present, fold them into a
 	// single mode so the operator doesn't lose their preference. We don't
-	// delete the old rows so a downgrade still finds them.
-	if cur, _ := d.GetSetting(ctx, keyLayoutMode); cur == "" {
-		auto, _ := d.GetSetting(ctx, legacyKeyLayoutAuto)
-		vert, _ := d.GetSetting(ctx, legacyKeyLayoutVertical)
+	// delete the old rows so a downgrade still finds them. The legacy keys
+	// aren't part of AllKeys, so remote AllSettings maps won't carry them —
+	// the migration then no-ops on remote clients and runs where the DB
+	// actually lives (the collector's own settings.Load calls).
+	if all[keyLayoutMode] == "" {
+		auto, _ := st.GetSetting(ctx, legacyKeyLayoutAuto)
+		vert, _ := st.GetSetting(ctx, legacyKeyLayoutVertical)
 		if auto != "" || vert != "" {
 			mode := "auto"
 			if !parseBool(auto, true) {
@@ -135,30 +165,30 @@ func Load(ctx context.Context, d *db.DB) (Settings, error) {
 				}
 			}
 			out.LayoutMode = mode
-			_ = d.SetSetting(ctx, keyLayoutMode, mode)
+			_ = st.SetSetting(ctx, keyLayoutMode, mode)
 		}
 	}
 	return out, nil
 }
 
-func SetAutoRepoTabs(ctx context.Context, d *db.DB, v bool) error {
-	return d.SetSetting(ctx, keyAutoRepoTabs, formatBool(v))
+func SetAutoRepoTabs(ctx context.Context, st Store, v bool) error {
+	return st.SetSetting(ctx, keyAutoRepoTabs, formatBool(v))
 }
 
-func SetBellOnPending(ctx context.Context, d *db.DB, v bool) error {
-	return d.SetSetting(ctx, keyBellOnPending, formatBool(v))
+func SetBellOnPending(ctx context.Context, st Store, v bool) error {
+	return st.SetSetting(ctx, keyBellOnPending, formatBool(v))
 }
 
-func SetTailBudgetKB(ctx context.Context, d *db.DB, v int) error {
-	return d.SetSetting(ctx, keyTailBudgetKB, strconv.Itoa(v))
+func SetTailBudgetKB(ctx context.Context, st Store, v int) error {
+	return st.SetSetting(ctx, keyTailBudgetKB, strconv.Itoa(v))
 }
 
-func SetSummaryTimeoutSec(ctx context.Context, d *db.DB, v int) error {
-	return d.SetSetting(ctx, keySummaryTimeoutSec, strconv.Itoa(v))
+func SetSummaryTimeoutSec(ctx context.Context, st Store, v int) error {
+	return st.SetSetting(ctx, keySummaryTimeoutSec, strconv.Itoa(v))
 }
 
-func SetRefreshIntervalMs(ctx context.Context, d *db.DB, v int) error {
-	return d.SetSetting(ctx, keyRefreshIntervalMs, strconv.Itoa(v))
+func SetRefreshIntervalMs(ctx context.Context, st Store, v int) error {
+	return st.SetSetting(ctx, keyRefreshIntervalMs, strconv.Itoa(v))
 }
 
 // Spec describes a single setting for UI rendering and validation.
@@ -188,7 +218,25 @@ const (
 )
 
 // Spec.Apply is non-nil only for KindAction rows.
-type ActionFunc func(ctx context.Context, d *db.DB, s Settings) (Settings, error)
+type ActionFunc func(ctx context.Context, st Store, s Settings) (Settings, error)
+
+// AllKeys returns every value-bearing key, derived from AllSpecs (the
+// canonical settings table) minus the KindAction rows, which carry no
+// stored value. Used by the server's GET /api/settings handler and by
+// Local.AllSettings — deriving instead of hand-listing means a new Spec is
+// automatically part of the remote settings payload, so a remote TUI can't
+// silently fall back to defaults for a key the collector actually has.
+func AllKeys() []string {
+	specs := AllSpecs()
+	out := make([]string, 0, len(specs))
+	for _, s := range specs {
+		if s.Kind == KindAction {
+			continue
+		}
+		out = append(out, s.Key)
+	}
+	return out
+}
 
 // AllSpecs returns every setting in display order. The TUI uses this both
 // to render the modal page and to dispatch updates without a giant switch.
@@ -215,9 +263,9 @@ func AllSpecs() []Spec {
 // applySecurePreset turns off every risk-bearing capability in one shot.
 // Convenience for operators who want pure observation without auditing each
 // flag individually.
-func applySecurePreset(ctx context.Context, d *db.DB, s Settings) (Settings, error) {
+func applySecurePreset(ctx context.Context, st Store, s Settings) (Settings, error) {
 	for _, k := range []string{keyApproveEnabled, keySummaryEnabled, keyAttachEnabled, keyAutoInstallSync} {
-		next, err := Set(ctx, d, s, k, false)
+		next, err := Set(ctx, st, s, k, false)
 		if err != nil {
 			return s, err
 		}
@@ -271,7 +319,7 @@ func Get(s Settings, key string) any {
 
 // Set updates the in-memory snapshot AND persists the change. Returns the
 // updated Settings so the caller can replace its copy in one line.
-func Set(ctx context.Context, d *db.DB, s Settings, key string, value any) (Settings, error) {
+func Set(ctx context.Context, st Store, s Settings, key string, value any) (Settings, error) {
 	switch key {
 	case keyAutoRepoTabs:
 		s.AutoRepoTabs = value.(bool)
@@ -308,15 +356,15 @@ func Set(ctx context.Context, d *db.DB, s Settings, key string, value any) (Sett
 	case keyRefreshIntervalMs:
 		s.RefreshIntervalMs = value.(int)
 	}
-	return s, persist(ctx, d, key, value)
+	return s, persist(ctx, st, key, value)
 }
 
-func persist(ctx context.Context, d *db.DB, key string, value any) error {
+func persist(ctx context.Context, st Store, key string, value any) error {
 	switch v := value.(type) {
 	case bool:
-		return d.SetSetting(ctx, key, formatBool(v))
+		return st.SetSetting(ctx, key, formatBool(v))
 	case int:
-		return d.SetSetting(ctx, key, strconv.Itoa(v))
+		return st.SetSetting(ctx, key, strconv.Itoa(v))
 	case string:
 		// For KindEnum we may have done a label→canonical translation
 		// inside Set(); re-translate here too so what hits disk matches
@@ -333,7 +381,7 @@ func persist(ctx context.Context, d *db.DB, key string, value any) error {
 				}
 			}
 		}
-		return d.SetSetting(ctx, key, v)
+		return st.SetSetting(ctx, key, v)
 	}
 	return nil
 }

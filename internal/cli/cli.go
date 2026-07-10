@@ -3,10 +3,13 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -19,19 +22,45 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/takumanakagame/ccmanage/internal/auth"
+	"github.com/takumanakagame/ccmanage/internal/clientcfg"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/hookcfg"
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/selfupdate"
 	"github.com/takumanakagame/ccmanage/internal/server"
+	"github.com/takumanakagame/ccmanage/internal/store"
 	"github.com/takumanakagame/ccmanage/internal/tui"
 	"github.com/takumanakagame/ccmanage/internal/wrapper"
 )
+
+// remoteFlags backs the -r/--remote, --remote-url, --token-file and
+// --ssh-target persistent flags. They're defined once on the root command
+// and shared (by pointer) with every subcommand that can talk to a Store,
+// so cobra fills the same struct regardless of whether the operator ran
+// `ccdash -r` or `ccdash sessions -r` / `ccdash tui --remote-url ...`.
+type remoteFlags struct {
+	// remoteEnabled is -r/--remote: use the remote collector configured in
+	// $XDG_CONFIG_HOME/ccdash/config.json (written by `ccdash remote set`).
+	remoteEnabled bool
+	// remoteURL is --remote-url: an explicit collector origin that both
+	// implies remote mode and overrides the configured url.
+	remoteURL string
+	tokenFile string
+	sshTarget string
+}
+
+// wantsRemote reports whether this invocation asked for remote mode at all
+// — via -r or via an explicit --remote-url.
+func (rf *remoteFlags) wantsRemote() bool {
+	return rf.remoteEnabled || rf.remoteURL != ""
+}
 
 func Root(version string) *cobra.Command {
 	var keepServer bool
 	var showVersion bool
 	var initialGroup string
+	rf := &remoteFlags{}
 	root := &cobra.Command{
 		Use:     "ccdash",
 		Short:   "Local dashboard for Claude Code sessions",
@@ -48,14 +77,19 @@ it down when you quit the TUI — so a single command is enough.
 
 Pass --keep-server (-k) to spawn a detached server that keeps running after
 the TUI exits, so events are captured even while you're not watching. Use
-'ccdash server' for a foreground collector (e.g. as a systemd user unit).`,
+'ccdash server' for a foreground collector (e.g. as a systemd user unit).
+
+Remote mode: configure a collector on another host once with
+'ccdash remote set --url http://host:9123 ...' and then run 'ccdash -r'
+(see README "Remote mode"). In that mode ccdash never opens a local DB or
+spawns a collector — everything goes over HTTP.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if showVersion {
 				fmt.Println(version)
 				return nil
 			}
-			return runTUI(cmd.Context(), keepServer, initialGroup)
+			return runTUI(cmd.Context(), keepServer, initialGroup, rf)
 		},
 	}
 	root.Flags().BoolVarP(&keepServer, "keep-server", "k", false,
@@ -67,16 +101,268 @@ the TUI exits, so events are captured even while you're not watching. Use
 	// existing scripts don't break, but encourage the new name.
 	root.Flags().StringVar(&initialGroup, "tab", "", "deprecated alias for --group")
 	_ = root.Flags().MarkHidden("tab")
+	root.PersistentFlags().BoolVarP(&rf.remoteEnabled, "remote", "r", false,
+		"use the remote collector configured via `ccdash remote set` (~/.config/ccdash/config.json)")
+	root.PersistentFlags().StringVar(&rf.remoteURL, "remote-url", "",
+		"remote collector URL, e.g. http://192.168.20.132:9123 (implies -r; overrides the configured url)")
+	root.PersistentFlags().StringVar(&rf.tokenFile, "token-file", "",
+		"path to the remote collector's token file (overrides config; falls back to $CCDASH_TOKEN)")
+	root.PersistentFlags().StringVar(&rf.sshTarget, "ssh-target", "",
+		"user@host for ssh attach/new-session in remote mode (overrides config; default: URL hostname)")
 	root.AddCommand(serverCmd())
 	root.AddCommand(claudeCmd())
-	root.AddCommand(sessionsCmd())
-	root.AddCommand(eventsCmd())
-	root.AddCommand(approvalsCmd())
+	root.AddCommand(sessionsCmd(rf))
+	root.AddCommand(eventsCmd(rf))
+	root.AddCommand(approvalsCmd(rf))
 	root.AddCommand(installHooksCmd())
 	root.AddCommand(uninstallHooksCmd())
-	root.AddCommand(tuiCmd())
+	root.AddCommand(tuiCmd(rf))
+	root.AddCommand(remoteCmd())
 	root.AddCommand(updateCmd(version))
 	return root
+}
+
+// resolveRemote combines the -r/--remote-url/--token-file/--ssh-target
+// flags with the client config file (clientcfg) into a remoteConfig, or
+// (nil, nil) when remote mode wasn't requested at all — the signal for
+// "stay in local mode".
+//
+// Precedence for every field: explicit flag > config file > (for the token
+// only) $CCDASH_TOKEN env > error. The config file is optional as long as
+// the flags cover the URL; a MALFORMED config file is always an error, even
+// with overriding flags, so a broken file never gets silently ignored.
+func resolveRemote(rf *remoteFlags) (*remoteConfig, error) {
+	if !rf.wantsRemote() {
+		return nil, nil
+	}
+	var fileCfg clientcfg.Remote
+	cfg, err := clientcfg.Load()
+	switch {
+	case err == nil:
+		fileCfg = cfg.Remote
+	case errors.Is(err, clientcfg.ErrNotFound):
+		// Not configured — fine if the flags carry everything we need.
+	default:
+		return nil, err
+	}
+
+	rawURL := rf.remoteURL
+	if rawURL == "" {
+		rawURL = fileCfg.URL
+	}
+	if rawURL == "" {
+		cfgPath, _ := clientcfg.Path()
+		return nil, fmt.Errorf(`remote mode requested but no remote is configured — run:
+  ccdash remote set --url http://HOST:9123 [--token-file PATH] [--ssh-target user@host]
+first (writes %s), or pass --remote-url explicitly`, cfgPath)
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("remote URL must be a full URL like http://192.168.20.132:9123, got %q", rawURL)
+	}
+	token, err := resolveToken(rf, fileCfg, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	sshTarget := rf.sshTarget
+	if sshTarget == "" {
+		sshTarget = fileCfg.SSHTarget
+	}
+	if sshTarget == "" {
+		sshTarget = u.Hostname()
+	}
+	return &remoteConfig{
+		baseURL:   strings.TrimRight(rawURL, "/"),
+		token:     token,
+		sshTarget: sshTarget,
+	}, nil
+}
+
+// resolveToken implements the documented resolution order: --token-file
+// flag, then the config file's token_file, then $CCDASH_TOKEN, then a
+// helpful error pointing at scp-ing the server's token file (it never
+// invents or fetches one on its own — the operator must have the
+// collector's actual secret).
+func resolveToken(rf *remoteFlags, fileCfg clientcfg.Remote, remoteURL string) (string, error) {
+	readTokenFile := func(path, source string) (string, error) {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("%s %s: %w", source, path, err)
+		}
+		if tok := strings.TrimSpace(string(b)); tok != "" {
+			return tok, nil
+		}
+		return "", fmt.Errorf("%s %s is empty", source, path)
+	}
+	switch {
+	case rf.tokenFile != "":
+		return readTokenFile(rf.tokenFile, "--token-file")
+	case fileCfg.TokenFile != "":
+		return readTokenFile(fileCfg.TokenFile, "configured token_file")
+	case os.Getenv("CCDASH_TOKEN") != "":
+		return strings.TrimSpace(os.Getenv("CCDASH_TOKEN")), nil
+	default:
+		return "", fmt.Errorf(`remote mode needs the collector's token: run `+"`ccdash remote set --token-file <path>`"+`, pass --token-file, or set $CCDASH_TOKEN — copying it over first, e.g.:
+  scp <server-host>:~/.local/state/ccdash/token ~/.config/ccdash/collector.token
+  ccdash remote set --url %s --token-file ~/.config/ccdash/collector.token`, remoteURL)
+	}
+}
+
+type remoteConfig struct {
+	baseURL   string
+	token     string
+	sshTarget string
+}
+
+// remoteCmd is the `ccdash remote` group: set (write/merge the client
+// config) and show (print the effective remote config with sources).
+func remoteCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "remote",
+		Short: "Configure the remote collector used by -r",
+	}
+	c.AddCommand(remoteSetCmd())
+	c.AddCommand(remoteShowCmd())
+	return c
+}
+
+func remoteSetCmd() *cobra.Command {
+	var urlFlag, tokenFile, sshTarget string
+	c := &cobra.Command{
+		Use:   "set",
+		Short: "Write the remote collector config (~/.config/ccdash/config.json)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if urlFlag == "" && tokenFile == "" && sshTarget == "" {
+				return fmt.Errorf("nothing to set: pass at least one of --url / --token-file / --ssh-target")
+			}
+			// Merge over the existing config so `remote set --token-file`
+			// doesn't wipe a previously-set url. A missing file starts from
+			// zero; a malformed file errors instead of being clobbered.
+			cfg, err := clientcfg.Load()
+			if err != nil && !errors.Is(err, clientcfg.ErrNotFound) {
+				return fmt.Errorf("%w — fix or delete it, then re-run remote set", err)
+			}
+			if urlFlag != "" {
+				u, err := url.Parse(urlFlag)
+				if err != nil || u.Scheme == "" || u.Host == "" {
+					return fmt.Errorf("--url must be a full URL like http://192.168.20.132:9123, got %q", urlFlag)
+				}
+				cfg.Remote.URL = strings.TrimRight(urlFlag, "/")
+			}
+			if tokenFile != "" {
+				abs, err := expandUserPath(tokenFile)
+				if err != nil {
+					return err
+				}
+				if _, err := os.Stat(abs); err != nil {
+					// Not fatal — the operator may scp the token afterwards —
+					// but say so now rather than at first -r use.
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: token file %s is not readable yet: %v\n", abs, err)
+				}
+				cfg.Remote.TokenFile = abs
+			}
+			if sshTarget != "" {
+				cfg.Remote.SSHTarget = sshTarget
+			}
+			if err := clientcfg.Save(cfg); err != nil {
+				return err
+			}
+			path, _ := clientcfg.Path()
+			fmt.Printf("remote config written → %s\n", path)
+			return printRemoteConfig(cfg)
+		},
+	}
+	c.Flags().StringVar(&urlFlag, "url", "", "collector origin, e.g. http://192.168.20.132:9123")
+	c.Flags().StringVar(&tokenFile, "token-file", "", "path to a local copy of the collector's token")
+	c.Flags().StringVar(&sshTarget, "ssh-target", "", "user@host for ssh attach (default: URL hostname)")
+	return c
+}
+
+func remoteShowCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show",
+		Short: "Print the effective remote config and where it comes from",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, _ := clientcfg.Path()
+			cfg, err := clientcfg.Load()
+			if errors.Is(err, clientcfg.ErrNotFound) {
+				fmt.Printf("no remote configured (%s missing)\nrun: ccdash remote set --url http://HOST:9123 [--token-file PATH] [--ssh-target user@host]\n", path)
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			fmt.Printf("config file: %s\n", path)
+			return printRemoteConfig(cfg)
+		},
+	}
+}
+
+// printRemoteConfig renders the effective remote settings. It never prints
+// token CONTENTS — only the file path the token would be read from.
+func printRemoteConfig(cfg clientcfg.Config) error {
+	r := cfg.Remote
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	if r.URL != "" {
+		fmt.Fprintf(tw, "url\t%s\t(config)\n", r.URL)
+	} else {
+		fmt.Fprintf(tw, "url\t(not set)\t— -r will error until set\n")
+	}
+	switch {
+	case r.TokenFile != "":
+		fmt.Fprintf(tw, "token_file\t%s\t(config; contents never printed)\n", r.TokenFile)
+	case os.Getenv("CCDASH_TOKEN") != "":
+		fmt.Fprintf(tw, "token\t(from $CCDASH_TOKEN env)\t\n")
+	default:
+		fmt.Fprintf(tw, "token_file\t(not set)\t— will fall back to $CCDASH_TOKEN, else error\n")
+	}
+	switch {
+	case r.SSHTarget != "":
+		fmt.Fprintf(tw, "ssh_target\t%s\t(config)\n", r.SSHTarget)
+	case r.URL != "":
+		if u, err := url.Parse(r.URL); err == nil {
+			fmt.Fprintf(tw, "ssh_target\t%s\t(derived from url hostname)\n", u.Hostname())
+		}
+	default:
+		fmt.Fprintf(tw, "ssh_target\t(not set)\t— derives from url hostname once set\n")
+	}
+	return tw.Flush()
+}
+
+// expandUserPath resolves a leading ~ and relative paths to an absolute
+// path, so the config file always stores something usable from any cwd.
+func expandUserPath(p string) (string, error) {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		if p == "~" {
+			p = home
+		} else {
+			p = filepath.Join(home, p[2:])
+		}
+	}
+	return filepath.Abs(p)
+}
+
+// openStore resolves remote mode (if requested) into a store.Store;
+// otherwise it opens the local DB and wraps it. closeFn releases whatever
+// resource was acquired (a no-op for remote — there's no local handle to
+// close).
+func openStore(rf *remoteFlags) (store.Store, func(), error) {
+	rc, err := resolveRemote(rf)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rc != nil {
+		return store.NewRemote(rc.baseURL, rc.token), func() {}, nil
+	}
+	d, err := openDB()
+	if err != nil {
+		return nil, nil, err
+	}
+	return store.NewLocal(d), func() { _ = d.Close() }, nil
 }
 
 func updateCmd(currentVersion string) *cobra.Command {
@@ -124,10 +410,27 @@ can be installed before they're promoted to stable.`,
 
 func serverCmd() *cobra.Command {
 	var addr string
+	var listen string
 	c := &cobra.Command{
 		Use:   "server",
 		Short: "Run the HTTP hook collector",
+		Long: `Run the HTTP hook collector in the foreground.
+
+By default it binds to 127.0.0.1 only — see --listen to opt into remote
+mode by binding a LAN/Tailscale address so a TUI on another host can reach
+it with 'ccdash --remote http://<this-host>:9123'.
+
+With a non-loopback --listen the collector ALSO keeps a listener on
+127.0.0.1:<port>: Claude Code's installed hooks and the local TUI always
+talk to loopback, remote clients use the --listen address.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			bindAddr := addr
+			if listen != "" {
+				bindAddr = listen
+			}
+			if err := checkBindSafety(bindAddr); err != nil {
+				return err
+			}
 			d, err := openDB()
 			if err != nil {
 				return err
@@ -135,11 +438,19 @@ func serverCmd() *cobra.Command {
 			defer d.Close()
 			ctx, cancel := signalContext(cmd.Context())
 			defer cancel()
-			s := server.New(d, addr)
+			s := server.New(d, bindAddr)
 			return s.ListenAndServe(ctx)
 		},
 	}
 	c.Flags().StringVar(&addr, "addr", fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort), "bind address")
+	// --addr predates --listen and names the same bind; keep it working for
+	// existing scripts but steer everyone to --listen (MarkDeprecated also
+	// hides it from --help and prints a notice when used).
+	_ = c.Flags().MarkDeprecated("addr", "use --listen instead")
+	c.Flags().StringVar(&listen, "listen", "",
+		"bind a non-default address for remote mode, e.g. 0.0.0.0:9123 or 192.168.20.132:9123 "+
+			"(opt-in; overrides --addr; non-loopback also keeps a 127.0.0.1 listener for hooks; "+
+			"see README Remote mode / Threat model)")
 	c.AddCommand(serverStopCmd())
 	return c
 }
@@ -171,6 +482,59 @@ func serverStopCmd() *cobra.Command {
 	}
 }
 
+// checkBindSafety refuses to bind a non-loopback address unless a real auth
+// token already exists on disk, and always logs a loud warning first. The
+// embedded/managed collector never reaches this path — it's always
+// paths.DefaultHost — this only guards the explicit `ccdash server --listen`
+// opt-in.
+func checkBindSafety(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("bad bind address %q: %w", addr, err)
+	}
+	if isLoopbackHost(host) {
+		return nil
+	}
+	log.Printf("ccdash: WARNING binding to non-loopback address %s. Any host that can reach "+
+		"this address AND knows the auth token can read every session's prompts/tool calls and "+
+		"approve/deny tool calls on your behalf. Intended for a trusted LAN or Tailscale/VPN only — "+
+		"there is no TLS in v1. See README Threat model before exposing this further (e.g. on the "+
+		"open internet or a shared/untrusted network).", addr)
+	if _, err := auth.Load(); err != nil {
+		tp := "$XDG_STATE_HOME/ccdash/token"
+		if dir, derr := paths.StateDir(); derr == nil {
+			tp = filepath.Join(dir, "token")
+		}
+		return fmt.Errorf("refusing to bind non-loopback %s: no auth token found yet (%s): "+
+			"run `ccdash server` locally once (or `ccdash install-hooks`) to create it, then retry --listen", addr, tp)
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		// ":9123" is a wildcard bind (0.0.0.0) — it accepts traffic from
+		// every interface, so it must go through the same warning + token
+		// guard as an explicit non-loopback address.
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// A non-IP, non-"localhost" hostname: be conservative and treat it
+		// as non-loopback rather than risk silently trusting something like
+		// a LAN-resolvable name.
+		return false
+	}
+	if ip.IsUnspecified() {
+		// "0.0.0.0" / "::" — wildcard, same reasoning as the empty host.
+		return false
+	}
+	return ip.IsLoopback()
+}
+
 func claudeCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "claude [-- args...]",
@@ -186,17 +550,17 @@ ccdash to also record tmux pane / session and the wrapper PID.`,
 	return c
 }
 
-func sessionsCmd() *cobra.Command {
+func sessionsCmd(rf *remoteFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "sessions",
 		Short: "List sessions",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			d, err := openDB()
+			st, closeFn, err := openStore(rf)
 			if err != nil {
 				return err
 			}
-			defer d.Close()
-			ss, err := d.ListSessions(cmd.Context(), false)
+			defer closeFn()
+			ss, err := st.ListSessions(cmd.Context(), false)
 			if err != nil {
 				return err
 			}
@@ -221,13 +585,19 @@ func sessionsCmd() *cobra.Command {
 	}
 }
 
-func eventsCmd() *cobra.Command {
+func eventsCmd(rf *remoteFlags) *cobra.Command {
 	var limit int
 	c := &cobra.Command{
 		Use:   "events <session_id>",
 		Short: "List events for a session",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if rf.wantsRemote() {
+				// Without this guard the command would open (and create!)
+				// the LOCAL empty DB and print nothing — which reads like
+				// the remote collector lost the data.
+				return fmt.Errorf("events does not support remote mode (-r) yet; run it on the collector host")
+			}
 			d, err := openDB()
 			if err != nil {
 				return err
@@ -254,17 +624,17 @@ func eventsCmd() *cobra.Command {
 	return c
 }
 
-func approvalsCmd() *cobra.Command {
+func approvalsCmd(rf *remoteFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "approvals",
 		Short: "List pending permission requests",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			d, err := openDB()
+			st, closeFn, err := openStore(rf)
 			if err != nil {
 				return err
 			}
-			defer d.Close()
-			as, err := d.ListPendingApprovals(cmd.Context())
+			defer closeFn()
+			as, err := st.ListPendingApprovals(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -351,14 +721,14 @@ func uninstallHooksCmd() *cobra.Command {
 	return c
 }
 
-func tuiCmd() *cobra.Command {
+func tuiCmd(rf *remoteFlags) *cobra.Command {
 	var keepServer bool
 	var initialGroup string
 	c := &cobra.Command{
 		Use:   "tui",
 		Short: "Open the dashboard TUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI(cmd.Context(), keepServer, initialGroup)
+			return runTUI(cmd.Context(), keepServer, initialGroup, rf)
 		},
 	}
 	c.Flags().BoolVarP(&keepServer, "keep-server", "k", false,
@@ -370,13 +740,26 @@ func tuiCmd() *cobra.Command {
 	return c
 }
 
-func runTUI(ctx context.Context, _ bool, lockGroup string) error {
-	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
+func runTUI(ctx context.Context, _ bool, lockGroup string, rf *remoteFlags) error {
+	rc, err := resolveRemote(rf)
+	if err != nil {
+		return err
+	}
 
 	// Redirect log output before the TUI takes the screen. Stray stderr
 	// writes during Bubble Tea's alt-screen corrupt the visible buffer.
 	restoreLog, _ := redirectLog()
 	defer restoreLog()
+
+	if rc != nil {
+		// Remote mode: no local DB, no collector to probe, kill, or spawn —
+		// every read/write goes over HTTP to the collector at rc.baseURL.
+		st := store.NewRemote(rc.baseURL, rc.token)
+		return tui.Run(ctx, st, lockGroup, tui.ServerModeRemote,
+			tui.RemoteInfo{Enabled: true, SSHTarget: rc.sshTarget})
+	}
+
+	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
 
 	srvMode := tui.ServerModeExisting
 	alive, hasPTY := serverCapabilities(addr)
@@ -408,7 +791,7 @@ func runTUI(ctx context.Context, _ bool, lockGroup string) error {
 	}
 	defer d.Close()
 
-	return tui.Run(ctx, d, lockGroup, srvMode)
+	return tui.Run(ctx, store.NewLocal(d), lockGroup, srvMode, tui.RemoteInfo{})
 }
 
 // spawnDetachedServer launches `ccdash server` as a session-leader child that
