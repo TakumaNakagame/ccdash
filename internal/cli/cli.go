@@ -96,7 +96,7 @@ never opens a local DB or spawns a collector — everything goes over HTTP.`,
 	root.AddCommand(serverCmd())
 	root.AddCommand(claudeCmd())
 	root.AddCommand(sessionsCmd(rf))
-	root.AddCommand(eventsCmd())
+	root.AddCommand(eventsCmd(rf))
 	root.AddCommand(approvalsCmd(rf))
 	root.AddCommand(installHooksCmd())
 	root.AddCommand(uninstallHooksCmd())
@@ -232,7 +232,11 @@ func serverCmd() *cobra.Command {
 
 By default it binds to 127.0.0.1 only — see --listen to opt into remote
 mode by binding a LAN/Tailscale address so a TUI on another host can reach
-it with 'ccdash --remote http://<this-host>:9123'.`,
+it with 'ccdash --remote http://<this-host>:9123'.
+
+With a non-loopback --listen the collector ALSO keeps a listener on
+127.0.0.1:<port>: Claude Code's installed hooks and the local TUI always
+talk to loopback, remote clients use the --listen address.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			bindAddr := addr
 			if listen != "" {
@@ -253,9 +257,14 @@ it with 'ccdash --remote http://<this-host>:9123'.`,
 		},
 	}
 	c.Flags().StringVar(&addr, "addr", fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort), "bind address")
+	// --addr predates --listen and names the same bind; keep it working for
+	// existing scripts but steer everyone to --listen (MarkDeprecated also
+	// hides it from --help and prints a notice when used).
+	_ = c.Flags().MarkDeprecated("addr", "use --listen instead")
 	c.Flags().StringVar(&listen, "listen", "",
 		"bind a non-default address for remote mode, e.g. 0.0.0.0:9123 or 192.168.20.132:9123 "+
-			"(opt-in; overrides --addr; see README Remote mode / Threat model)")
+			"(opt-in; overrides --addr; non-loopback also keeps a 127.0.0.1 listener for hooks; "+
+			"see README Remote mode / Threat model)")
 	c.AddCommand(serverStopCmd())
 	return c
 }
@@ -317,7 +326,13 @@ func checkBindSafety(addr string) error {
 }
 
 func isLoopbackHost(host string) bool {
-	if host == "" || host == "localhost" {
+	if host == "" {
+		// ":9123" is a wildcard bind (0.0.0.0) — it accepts traffic from
+		// every interface, so it must go through the same warning + token
+		// guard as an explicit non-loopback address.
+		return false
+	}
+	if host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(host)
@@ -325,6 +340,10 @@ func isLoopbackHost(host string) bool {
 		// A non-IP, non-"localhost" hostname: be conservative and treat it
 		// as non-loopback rather than risk silently trusting something like
 		// a LAN-resolvable name.
+		return false
+	}
+	if ip.IsUnspecified() {
+		// "0.0.0.0" / "::" — wildcard, same reasoning as the empty host.
 		return false
 	}
 	return ip.IsLoopback()
@@ -380,13 +399,19 @@ func sessionsCmd(rf *remoteFlags) *cobra.Command {
 	}
 }
 
-func eventsCmd() *cobra.Command {
+func eventsCmd(rf *remoteFlags) *cobra.Command {
 	var limit int
 	c := &cobra.Command{
 		Use:   "events <session_id>",
 		Short: "List events for a session",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if rf.remoteURL != "" {
+				// Without this guard the command would open (and create!)
+				// the LOCAL empty DB and print nothing — which reads like
+				// the remote collector lost the data.
+				return fmt.Errorf("events does not support --remote yet; run it on the collector host")
+			}
 			d, err := openDB()
 			if err != nil {
 				return err

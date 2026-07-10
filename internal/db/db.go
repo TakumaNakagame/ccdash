@@ -426,6 +426,27 @@ func (d *DB) SetSetting(ctx context.Context, key, value string) error {
 	return err
 }
 
+// AllSettings returns every row of the settings table as a key→value map.
+// Missing keys are simply absent (callers treat that the same as ""). This
+// is the bulk-read primitive behind settings.Load and GET /api/settings —
+// one query instead of one round trip per key.
+func (d *DB) AllSettings(ctx context.Context) (map[string]string, error) {
+	rows, err := d.sql.QueryContext(ctx, `SELECT key, value FROM settings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}
+
 // SetUserGroup assigns a session to an operator-named group (rendered as
 // a tab in the strip). Empty clears the assignment so the session falls
 // back to its repo-based grouping.
@@ -449,6 +470,19 @@ func (d *DB) SetSummary(ctx context.Context, sessionID, summary, status string) 
 		UPDATE sessions SET summary = ?, summary_status = ?, summary_at = ?
 		WHERE session_id = ?
 	`, summary, status, time.Now().UTC().Unix(), sessionID)
+	return err
+}
+
+// SweepRunningSummaries flips any summary_status='running' row to 'error'.
+// Run on collector startup: the summarize goroutine lives in the collector
+// process, so a 'running' row at boot means a previous run died mid-flight
+// — without the sweep the list row would show a spinner forever.
+func (d *DB) SweepRunningSummaries(ctx context.Context) error {
+	_, err := d.sql.ExecContext(ctx, `
+		UPDATE sessions
+		SET summary = 'summarize interrupted (collector restarted)', summary_status = 'error', summary_at = ?
+		WHERE summary_status = 'running'
+	`, time.Now().UTC().Unix())
 	return err
 }
 

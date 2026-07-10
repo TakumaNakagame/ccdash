@@ -47,6 +47,10 @@ type Store interface {
 
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
+	// AllSettings returns every known setting in one call. settings.Load
+	// goes through this instead of per-key GetSetting so remote-mode TUI
+	// startup costs one HTTP round trip, not one per key.
+	AllSettings(ctx context.Context) (map[string]string, error)
 
 	// Summarize kicks off the claude -p summary flow for sessionID and
 	// returns as soon as the "running" status is recorded — it does not

@@ -216,6 +216,14 @@ func TestAPISummarizeGatingAndNotFound(t *testing.T) {
 	if rec.status != http.StatusAccepted {
 		t.Fatalf("summarize: status = %d body=%s", rec.status, rec.body)
 	}
+
+	// The row is now summary_status='running' — a second POST must be a
+	// deduplicated no-op that still answers 202 (summarize.Kickoff skips
+	// the spawn when a run is already in flight).
+	rec = do(t, s, http.MethodPost, "/api/sessions/sess-2/summarize", tok, nil)
+	if rec.status != http.StatusAccepted {
+		t.Fatalf("duplicate summarize: status = %d body=%s, want 202 no-op", rec.status, rec.body)
+	}
 }
 
 func TestAPITranscript(t *testing.T) {
@@ -289,5 +297,49 @@ func TestAPITranscript(t *testing.T) {
 	}
 	if len(tailData) >= len(strings.Repeat(line, 3)) {
 		t.Fatalf("expected a tail read to be smaller than the full file, got %d bytes", len(tailData))
+	}
+}
+
+func TestListenAddrs(t *testing.T) {
+	cases := []struct {
+		addr string
+		want []string
+	}{
+		// Loopback: single listener.
+		{"127.0.0.1:9123", []string{"127.0.0.1:9123"}},
+		{"localhost:9123", []string{"localhost:9123"}},
+		{"[::1]:9123", []string{"[::1]:9123"}},
+		// Wildcard: single listener (already covers loopback).
+		{":9123", []string{":9123"}},
+		{"0.0.0.0:9123", []string{"0.0.0.0:9123"}},
+		{"[::]:9123", []string{"[::]:9123"}},
+		// Specific non-loopback IP: MUST add a loopback listener on the
+		// same port, or the host's own Claude Code hooks (hardcoded to
+		// 127.0.0.1) get connection-refused.
+		{"192.168.20.132:9123", []string{"192.168.20.132:9123", "127.0.0.1:9123"}},
+		{"10.0.0.5:8080", []string{"10.0.0.5:8080", "127.0.0.1:8080"}},
+		// Non-IP hostname: conservative, add loopback too.
+		{"devbox:9123", []string{"devbox:9123", "127.0.0.1:9123"}},
+	}
+	for _, c := range cases {
+		got, err := listenAddrs(c.addr)
+		if err != nil {
+			t.Errorf("listenAddrs(%q): %v", c.addr, err)
+			continue
+		}
+		if len(got) != len(c.want) {
+			t.Errorf("listenAddrs(%q) = %v, want %v", c.addr, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("listenAddrs(%q) = %v, want %v", c.addr, got, c.want)
+				break
+			}
+		}
+	}
+
+	if _, err := listenAddrs("no-port"); err == nil {
+		t.Error("listenAddrs without a port should error")
 	}
 }

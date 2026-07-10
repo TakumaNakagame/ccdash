@@ -168,6 +168,14 @@ type model struct {
 	// (ServerModeExisting) or was spawned by this TUI launch (ServerModeSpawned).
 	serverMode ServerMode
 
+	// summaryWatch holds session ids whose summarize THIS TUI kicked off
+	// and whose completion hasn't been flashed yet. The sessionsMsg
+	// handler (watchSummaries) flashes the footer on the running→done /
+	// running→error transition even when the row isn't selected —
+	// restoring the completion feedback the pre-Store summaryDoneMsg flow
+	// used to give.
+	summaryWatch map[string]struct{}
+
 	// animTick advances on every animTickMsg (~150 ms). Drives the spinner
 	// frame for active rows so the operator can tell at a glance which
 	// sessions are doing work right now. Wraps naturally — we mod into the
@@ -207,6 +215,7 @@ func newModel(ctx context.Context, st store.Store, remote RemoteInfo) *model {
 		remote:         remote,
 		settings:       settings.Defaults(),
 		pendingPTYKeys: map[int]string{},
+		summaryWatch:   map[string]struct{}{},
 	}
 }
 
@@ -618,6 +627,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// freshly-spawned PTY so the server can alias the ptyKey to the
 		// real sessionID, enabling reattach by sessionID on next Enter.
 		m.promotePTYKeys()
+		// Flash the footer when a summarize this TUI kicked off completes.
+		m.watchSummaries()
 		// If the tab the operator was looking at vanished (its last
 		// session got archived, removed, or moved to a different tab),
 		// step onto the next available tab so the body isn't blank.
@@ -748,6 +759,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash = msg.msg
 		}
 		return m, tea.Batch(tea.ClearScreen, m.refresh())
+	case summaryKickedMsg:
+		// The store flipped summary_status to "running" before this fired,
+		// so registering the watch now can't mistake a stale done/error for
+		// the new result.
+		m.summaryWatch[msg.sessionID] = struct{}{}
+		m.flash = "summarizing…"
+		return m, m.refresh()
 	case transcriptLoadedMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -1356,6 +1374,12 @@ func (m *model) tailHalfPage() int {
 	return step
 }
 
+// summaryKickedMsg fires when the store acknowledged a summarize kickoff.
+// The Update handler flashes the footer and registers the session in
+// summaryWatch so the regular sessions poll can flash again on the
+// running→done/error transition (see the sessionsMsg handler).
+type summaryKickedMsg struct{ sessionID string }
+
 // summarizeCurrent kicks off the store's `claude -p` summary flow for the
 // selected session and returns as soon as that kick is acknowledged — the
 // store (Local or Remote) flips summary_status to "running" synchronously
@@ -1377,7 +1401,39 @@ func (m *model) summarizeCurrent() tea.Cmd {
 		if err := m.store.Summarize(ctx, sid); err != nil {
 			return attachDoneMsg{err: fmt.Errorf("summarize: %w", err)}
 		}
-		return attachDoneMsg{msg: "summarizing…"}
+		return summaryKickedMsg{sessionID: sid}
+	}
+}
+
+// watchSummaries scans freshly-polled session rows for the completion of
+// any summarize this TUI kicked off (summaryWatch) and surfaces the result
+// in the footer flash — even when the session isn't the selected row. The
+// kickoff set summary_status to "running" before summaryKickedMsg was
+// emitted, so any done/error we observe afterwards is the new result, not
+// a stale one from a previous run.
+func (m *model) watchSummaries() {
+	if len(m.summaryWatch) == 0 {
+		return
+	}
+	for sid := range m.summaryWatch {
+		for _, s := range m.allSessions {
+			if s.SessionID != sid {
+				continue
+			}
+			switch s.SummaryStatus {
+			case "done":
+				m.flash = "summary updated (" + shortID(sid) + ")"
+				delete(m.summaryWatch, sid)
+			case "error":
+				detail := strings.TrimSpace(s.Summary)
+				if detail == "" {
+					detail = "(no detail)"
+				}
+				m.flash = "summary failed: " + shorten(detail, 80)
+				delete(m.summaryWatch, sid)
+			}
+			break
+		}
 	}
 }
 
@@ -1912,7 +1968,7 @@ func (m *model) attachRemote(s mdl.Session) tea.Cmd {
 		}
 		script = remoteCD(s.Cwd) + " && exec claude --resume " + shellQuote(s.SessionID)
 	}
-	c := exec.Command("ssh", "-t", target, script)
+	c := sshCommand(target, script)
 	sid := s.SessionID
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		if err != nil {
@@ -1933,7 +1989,7 @@ func (m *model) spawnNewSessionRemote(dir string) tea.Cmd {
 		return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("no ssh target configured (--ssh-target)")} }
 	}
 	script := remoteCD(dir) + " && exec claude"
-	c := exec.Command("ssh", "-t", target, script)
+	c := sshCommand(target, script)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		if err != nil {
 			return attachDoneMsg{err: err}
@@ -1946,6 +2002,23 @@ func (m *model) spawnNewSessionRemote(dir string) tea.Cmd {
 // so operator-typed values can be embedded safely in an ssh script.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// sshCommand builds the `ssh -t <target> bash -lc '<script>'` invocation
+// remote attach / new-session use. The script runs under `bash -l` — a
+// LOGIN shell — because ssh's plain remote-command path is non-interactive
+// and skips rc files, so a claude installed via PATH additions in
+// ~/.profile / ~/.bash_profile (e.g. ~/.local/bin) would be "command not
+// found". The script is single-quoted (via shellQuote) so the remote
+// user's own login shell passes it to bash verbatim regardless of what
+// that shell is.
+func sshCommand(target, script string) *exec.Cmd {
+	return exec.Command("ssh", sshArgs(target, script)...)
+}
+
+// sshArgs is the testable core of sshCommand.
+func sshArgs(target, script string) []string {
+	return []string{"-t", target, "bash -lc " + shellQuote(script)}
 }
 
 // remoteCD builds a `cd <dir>` shell fragment for an ssh script. A leading

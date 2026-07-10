@@ -40,6 +40,13 @@ func NewRemote(baseURL, token string) *Remote {
 	}
 }
 
+// mutationTimeout caps small write requests (archive/favorite/title/group/
+// settings). Some of these run synchronously inside Bubble Tea's Update
+// (the settings page mutates via settings.Set inline), so a dead collector
+// must not freeze the UI longer than this. Reads and the summarize kick
+// keep their own longer budgets.
+const mutationTimeout = 3 * time.Second
+
 // transcriptEnvelope is the wire shape for GET
 // /api/sessions/{id}/transcript — see internal/server's handler for the
 // producing side.
@@ -118,22 +125,22 @@ func (r *Remote) ListPendingApprovals(ctx context.Context) ([]model.Approval, er
 }
 
 func (r *Remote) SetArchived(ctx context.Context, sessionID string, v bool) error {
-	return r.doJSON(ctx, 5*time.Second, http.MethodPost, sessionPath(sessionID, "archive"), nil,
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "archive"), nil,
 		map[string]any{"archived": v}, nil)
 }
 
 func (r *Remote) SetFavorite(ctx context.Context, sessionID string, v bool) error {
-	return r.doJSON(ctx, 5*time.Second, http.MethodPost, sessionPath(sessionID, "favorite"), nil,
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "favorite"), nil,
 		map[string]any{"favorite": v}, nil)
 }
 
 func (r *Remote) SetCustomTitle(ctx context.Context, sessionID, title string) error {
-	return r.doJSON(ctx, 5*time.Second, http.MethodPost, sessionPath(sessionID, "title"), nil,
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "title"), nil,
 		map[string]any{"title": title}, nil)
 }
 
 func (r *Remote) SetUserGroup(ctx context.Context, sessionID, group string) error {
-	return r.doJSON(ctx, 5*time.Second, http.MethodPost, sessionPath(sessionID, "group"), nil,
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "group"), nil,
 		map[string]any{"group": group}, nil)
 }
 
@@ -148,16 +155,29 @@ func (r *Remote) DecideApproval(ctx context.Context, id int64, behavior, reason 
 }
 
 func (r *Remote) GetSetting(ctx context.Context, key string) (string, error) {
-	var all map[string]string
-	if err := r.doJSON(ctx, 5*time.Second, http.MethodGet, "/api/settings", nil, nil, &all); err != nil {
+	all, err := r.AllSettings(ctx)
+	if err != nil {
 		return "", err
 	}
 	return all[key], nil
 }
 
+// SetSetting runs synchronously inside Bubble Tea's Update on the settings
+// page, so it uses the shorter mutation timeout — see mutationTimeout.
 func (r *Remote) SetSetting(ctx context.Context, key, value string) error {
 	path := "/api/settings/" + url.PathEscape(key)
-	return r.doJSON(ctx, 5*time.Second, http.MethodPut, path, nil, map[string]string{"value": value}, nil)
+	return r.doJSON(ctx, mutationTimeout, http.MethodPut, path, nil, map[string]string{"value": value}, nil)
+}
+
+// AllSettings fetches the collector's whole settings map in one GET —
+// settings.Load calls this once at startup instead of one GetSetting round
+// trip per key.
+func (r *Remote) AllSettings(ctx context.Context) (map[string]string, error) {
+	var all map[string]string
+	if err := r.doJSON(ctx, 5*time.Second, http.MethodGet, "/api/settings", nil, nil, &all); err != nil {
+		return nil, err
+	}
+	return all, nil
 }
 
 // Summarize only kicks off the server-side flow; the 10s budget covers the

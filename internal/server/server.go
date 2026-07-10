@@ -83,6 +83,13 @@ func New(d *db.DB, addr string) *Server {
 		pending: map[int64]chan approvalDecision{},
 		ptyMap:  map[string]*ptyEntry{},
 	}
+	// The summarize goroutine lives in the collector process; a
+	// summary_status='running' row at startup means a previous run died
+	// mid-flight. Sweep it to 'error' so the list row doesn't show a
+	// spinner forever.
+	if err := d.SweepRunningSummaries(context.Background()); err != nil {
+		log.Printf("summary sweep: %v", err)
+	}
 	s.routes()
 	return s
 }
@@ -150,32 +157,94 @@ func (s *Server) requireToken(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// listenAddrs derives the full set of addresses a collector must bind for a
+// requested bind address. Claude Code's installed hooks are hardcoded to
+// 127.0.0.1:<port> (install-hooks writes paths.DefaultHost into
+// settings.json), and store.Local.DecideApproval targets the same loopback
+// address — so a collector bound ONLY to a specific non-loopback IP would
+// silently drop every hook event and approval decision on its own host.
+// Therefore:
+//
+//   - loopback host → just that address
+//   - wildcard host ("", 0.0.0.0, ::) → just that address (a wildcard bind
+//     already accepts loopback connections; adding a second listener on the
+//     same port would only fight it for the bind)
+//   - specific non-loopback IP/name → that address PLUS 127.0.0.1:<port>
+func listenAddrs(addr string) ([]string, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("bad listen address %q: %w", addr, err)
+	}
+	ip := net.ParseIP(host)
+	switch {
+	case host == "" || (ip != nil && ip.IsUnspecified()):
+		return []string{addr}, nil // wildcard covers loopback already
+	case host == "localhost" || (ip != nil && ip.IsLoopback()):
+		return []string{addr}, nil
+	default:
+		return []string{addr, net.JoinHostPort("127.0.0.1", port)}, nil
+	}
+}
+
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	// cancelFn lets POST /shutdown stop the server gracefully; cancelling
+	// this context runs the Shutdown goroutine below, which closes every
+	// listener the server serves.
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancelFn = cancel
 	defer cancel()
 
-	ln, err := net.Listen("tcp", s.addr)
+	addrs, err := listenAddrs(s.addr)
 	if err != nil {
 		return err
+	}
+	lns := make([]net.Listener, 0, len(addrs))
+	for _, a := range addrs {
+		ln, err := net.Listen("tcp", a)
+		if err != nil {
+			for _, prev := range lns {
+				_ = prev.Close()
+			}
+			return err
+		}
+		lns = append(lns, ln)
 	}
 	s.srv = &http.Server{
 		Handler:           s.mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	log.Printf("ccdash server listening on http://%s", ln.Addr())
+	for _, ln := range lns {
+		log.Printf("ccdash server listening on http://%s", ln.Addr())
+	}
+	if len(lns) > 1 {
+		log.Printf("ccdash: loopback listener added alongside %s — Claude Code hooks and the local TUI always talk to 127.0.0.1; remote clients use the --listen address", s.addr)
+	}
 	go func() {
 		<-ctx.Done()
 		shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutCancel()
-		_ = s.srv.Shutdown(shutCtx)
+		_ = s.srv.Shutdown(shutCtx) // closes every listener the server serves
 	}()
 	s.syncInstalledHooks()
 	go s.discoveryLoop(ctx)
-	if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+	errCh := make(chan error, len(lns))
+	for _, ln := range lns {
+		go func(l net.Listener) { errCh <- s.srv.Serve(l) }(ln)
 	}
-	return nil
+	var firstErr error
+	for range lns {
+		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if firstErr == nil {
+				firstErr = err
+			}
+			// A hard error on one listener (not a shutdown) should take the
+			// whole server down rather than limp along half-bound.
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = s.srv.Shutdown(shutCtx)
+			cancel()
+		}
+	}
+	return firstErr
 }
 
 // syncInstalledHooks compares the X-Ccdash-Token currently baked into
@@ -193,7 +262,7 @@ func (s *Server) syncInstalledHooks() {
 	if s.token == "" {
 		return
 	}
-	cfg, err := settings.Load(context.Background(), localSettingsStore{s.db})
+	cfg, err := settings.Load(context.Background(), s.db)
 	if err == nil && !cfg.AutoInstallSync {
 		return
 	}
@@ -566,7 +635,7 @@ func (s *Server) handlePermissionRequest(w http.ResponseWriter, r *http.Request)
 	// it would without ccdash. The pending row stays in the DB so the
 	// dashboard still surfaces it for visibility, but the discovery loop
 	// will sweep it to 'timeout' shortly.
-	cfg, _ := settings.Load(r.Context(), localSettingsStore{s.db})
+	cfg, _ := settings.Load(r.Context(), s.db)
 	if !cfg.ApproveEnabled {
 		writeOK(w, nil)
 		return
@@ -896,55 +965,31 @@ func (s *Server) handleAPIGroup(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, nil)
 }
 
-// handleAPISummarize kicks off the same claude -p flow the TUI used to run
-// itself (internal/summarize), but on the collector host — the server has
-// the claude binary and the transcripts, a remote TUI's host may have
-// neither. Gated on summary_enabled: a remote client bypasses the TUI's own
-// "s is disabled" shortcut check, so the server has to enforce the gate
-// itself where it actually matters.
+// handleAPISummarize kicks off the same claude -p flow the local TUI runs
+// (summarize.Kickoff — the shared implementation with store.Local), but on
+// the collector host: the server has the claude binary and the transcripts,
+// a remote TUI's host may have neither. The gate lives inside Kickoff — a
+// remote client bypasses the TUI's own "s is disabled" shortcut check, so
+// it has to be enforced where it actually matters. An already-running
+// summary makes Kickoff a no-op, so a double-tap still gets 202 without
+// stacking a second claude -p run.
 func (s *Server) handleAPISummarize(w http.ResponseWriter, r *http.Request) {
-	cfg, err := settings.Load(r.Context(), localSettingsStore{s.db})
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if !cfg.SummaryEnabled {
-		http.Error(w, "summarize is disabled (summary_enabled=off)", http.StatusForbidden)
-		return
-	}
 	id := r.PathValue("id")
-	sess, ok, err := s.db.GetSession(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+	err := summarize.Kickoff(r.Context(), s.db, id)
+	switch {
+	case errors.Is(err, summarize.ErrDisabled):
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
-	}
-	if !ok {
+	case errors.Is(err, summarize.ErrSessionNotFound):
 		http.NotFound(w, r)
 		return
-	}
-	if sess.TranscriptPath == "" {
-		http.Error(w, "no transcript path recorded for this session", http.StatusUnprocessableEntity)
+	case errors.Is(err, summarize.ErrNoTranscript):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
-	}
-	if err := s.db.SetSummaryStatus(r.Context(), id, "running"); err != nil {
+	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	timeoutSec := cfg.SummaryTimeoutSec
-	if timeoutSec <= 0 {
-		timeoutSec = 180
-	}
-	path := sess.TranscriptPath
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
-		defer cancel()
-		summary, err := summarize.Run(ctx, path)
-		if err != nil {
-			_ = s.db.SetSummary(context.Background(), id, err.Error(), "error")
-			return
-		}
-		_ = s.db.SetSummary(context.Background(), id, summary, "done")
-	}()
 	writeJSONStatus(w, http.StatusAccepted, nil)
 }
 
@@ -1025,14 +1070,17 @@ func statOrZero(path string) (time.Time, int64) {
 }
 
 func (s *Server) handleAPISettingsList(w http.ResponseWriter, r *http.Request) {
+	all, err := s.db.AllSettings(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	// Project onto the known key set: absent keys come back as "" so remote
+	// settings.Load applies its defaults, and internal/legacy rows don't
+	// leak into the payload.
 	out := make(map[string]string, len(settings.AllKeys()))
 	for _, key := range settings.AllKeys() {
-		v, err := s.db.GetSetting(r.Context(), key)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-		out[key] = v
+		out[key] = all[key]
 	}
 	writeOK(w, out)
 }
@@ -1051,18 +1099,4 @@ func (s *Server) handleAPISettingSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeOK(w, nil)
-}
-
-// localSettingsStore adapts *db.DB to the two methods settings.Load actually
-// needs, without pulling internal/store into internal/server (which would
-// otherwise be the only reason this package imports it — server stays a
-// *db.DB shop internally; only the TUI/CLI go through the Store seam).
-type localSettingsStore struct{ db *db.DB }
-
-func (l localSettingsStore) GetSetting(ctx context.Context, key string) (string, error) {
-	return l.db.GetSetting(ctx, key)
-}
-
-func (l localSettingsStore) SetSetting(ctx context.Context, key, value string) error {
-	return l.db.SetSetting(ctx, key, value)
 }

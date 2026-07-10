@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/takumanakagame/ccmanage/internal/settings"
 )
 
 const testToken = "test-token-abc123"
@@ -284,5 +286,55 @@ func TestRemoteNon2xxIncludesBody(t *testing.T) {
 	}
 	if got := err.Error(); !strings.Contains(got, "kaboom") {
 		t.Fatalf("error %q does not surface the server's response body", got)
+	}
+}
+
+func TestRemoteAllSettings(t *testing.T) {
+	srv := newTestAPI(t)
+	defer srv.Close()
+	r := NewRemote(srv.URL, testToken)
+
+	all, err := r.AllSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all["approve_enabled"] != "1" || all["summary_enabled"] != "0" {
+		t.Fatalf("AllSettings = %+v", all)
+	}
+}
+
+// TestRemoteSettingsLoadIsOneRoundTrip pins the startup cost of remote
+// mode's settings read: settings.Load must issue exactly ONE HTTP request
+// (GET /api/settings via AllSettings) — the per-key GetSetting pattern it
+// replaced cost ~16 sequential round trips.
+func TestRemoteSettingsLoadIsOneRoundTrip(t *testing.T) {
+	var calls int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		// layout_mode present → the legacy-layout migration branch (extra
+		// GetSetting reads) stays dormant.
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"layout_mode":     "auto",
+			"approve_enabled": "0",
+			"tail_budget_kb":  "512",
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	r := NewRemote(srv.URL, testToken)
+	s, err := settings.Load(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ApproveEnabled {
+		t.Error("ApproveEnabled should be false")
+	}
+	if s.TailBudgetKB != 512 {
+		t.Errorf("TailBudgetKB = %d, want 512", s.TailBudgetKB)
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Fatalf("settings.Load made %d requests, want exactly 1", n)
 	}
 }

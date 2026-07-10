@@ -191,11 +191,19 @@ ccdash server --listen 0.0.0.0:9123
 ccdash server --listen 192.168.20.132:9123
 ```
 
-`--listen` is opt-in and separate from the default `--addr` (which stays
-`127.0.0.1:9123`). Binding non-loopback logs a clear warning, and ccdash
-refuses to start if no auth token exists yet — run `ccdash server` (or
-`ccdash install-hooks`) locally once first so `$XDG_STATE_HOME/ccdash/token`
-gets created, *then* add `--listen`.
+`--listen` is opt-in (without it the collector stays `127.0.0.1:9123`; the
+older `--addr` flag still works but is deprecated in favor of `--listen`).
+Binding non-loopback logs a clear warning, and ccdash refuses to start if
+no auth token exists yet — run `ccdash server` (or `ccdash install-hooks`)
+locally once first so `$XDG_STATE_HOME/ccdash/token` gets created, *then*
+add `--listen`.
+
+When `--listen` names a specific non-loopback IP, the collector **also**
+keeps a listener on `127.0.0.1:<port>`: Claude Code's installed hooks are
+wired to `127.0.0.1` and always arrive via loopback, and a local TUI on the
+same host keeps working too — remote clients are the only ones using the
+`--listen` address. (A wildcard bind like `0.0.0.0:9123` already accepts
+loopback connections, so it stays a single listener.)
 
 For a persistent setup, run it as a systemd user unit:
 
@@ -239,17 +247,27 @@ session list, approval decision, and transcript read goes over HTTP to
 **Attach and new-session in remote mode** go through `ssh -t` instead of a
 local PTY (`internal/attach` only manages a claude process on the machine
 running ccdash, which in remote mode isn't `dev-box`): pressing `enter` on
-a running session with a tmux pane runs `ssh -t <target> tmux attach -t
-<pane>`; on a stopped session it runs `cd <cwd> && exec claude --resume
-<id>` over ssh. `n` (new session) works the same way with an
-operator-typed directory — there's no local filesystem to check or
-tab-complete against, so the path is passed through as-is and a typo just
-fails inside the ssh session. The ssh target defaults to the hostname in
-`--remote`; override it with `--ssh-target user@host` when it differs
-(e.g. a different SSH alias or username).
+a running session with a tmux pane runs `tmux attach -t <pane>` over ssh;
+on a stopped session it runs `cd <cwd> && exec claude --resume <id>`. The
+remote command is executed under `bash -lc` — a **login** shell — so PATH
+additions from `~/.profile` / `~/.bash_profile` (e.g. `~/.local/bin`, where
+claude usually lives) apply even though ssh's remote-command path skips rc
+files. `n` (new session) works the same way with an operator-typed
+directory — there's no local filesystem to check or tab-complete against,
+so the path is passed through as-is and a typo just fails inside the ssh
+session. The ssh target defaults to the hostname in `--remote`; override it
+with `--ssh-target user@host` when it differs (e.g. a different SSH alias
+or username).
 
 `sessions` and `approvals` (the plain-text CLI subcommands) also accept
-`--remote` / `--token-file` / `--ssh-target`; `events` stays local-only.
+`--remote` / `--token-file` / `--ssh-target`; `events` stays local-only and
+says so if you pass `--remote`.
+
+**Known limitation (v1):** toggling a value on the settings page (`,`) in
+remote mode performs a synchronous HTTP write; if the collector just went
+unreachable, the UI can stall for up to the 3-second mutation timeout on
+that keypress. Reads (session list, transcript tail) are asynchronous and
+don't block the UI.
 
 ## Threat model
 
@@ -353,8 +371,10 @@ install.sh                      curl-installable shell installer
 - Token: `$XDG_STATE_HOME/ccdash/token`, `0600`
 - Server bind: `127.0.0.1:9123` by default (loopback only). `ccdash server
   --listen <addr>` opts a standalone collector into a non-default bind for
-  remote mode — see "Remote mode" above. The embedded/managed collector
-  (plain `ccdash`, `-k`) always stays loopback-only.
+  remote mode — a non-loopback `--listen` keeps a second listener on
+  `127.0.0.1:<port>` so hooks (always wired to loopback) keep landing; see
+  "Remote mode" above. The embedded/managed collector (plain `ccdash`,
+  `-k`) always stays loopback-only.
 - ccdash hook entries are tagged with the `X-Ccdash-Managed: true`
   header so install / uninstall are idempotent and don't collide with
   user hooks

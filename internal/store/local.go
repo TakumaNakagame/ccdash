@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -19,11 +18,6 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/summarize"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
-
-// defaultSummaryTimeoutSec mirrors settings.Defaults().SummaryTimeoutSec —
-// duplicated here (rather than importing internal/settings) to avoid a
-// store↔settings import cycle: internal/settings.Load/Set take a Store.
-const defaultSummaryTimeoutSec = 180
 
 // Local implements Store directly against the embedded/managed collector's
 // SQLite DB and the on-disk transcript files. This is ccdash's original
@@ -72,6 +66,10 @@ func (l *Local) SetSetting(ctx context.Context, key, value string) error {
 	return l.db.SetSetting(ctx, key, value)
 }
 
+func (l *Local) AllSettings(ctx context.Context) (map[string]string, error) {
+	return l.db.AllSettings(ctx)
+}
+
 // DecideApproval POSTs to the collector's own /approvals/{id}/decide route,
 // exactly like the TUI did directly before Store existed. It cannot write
 // approvals.status straight into SQLite because the thing actually blocked
@@ -105,41 +103,14 @@ func (l *Local) DecideApproval(ctx context.Context, id int64, behavior, reason s
 	return nil
 }
 
-// Summarize flips summary_status to "running" synchronously (so the very
-// next ListSessions poll shows progress) and runs `claude -p` in a
-// background goroutine; the result lands via SetSummary when it completes.
+// Summarize delegates to summarize.Kickoff — the single shared kickoff
+// implementation with the server's POST /api/sessions/{id}/summarize
+// handler. It enforces the summary_enabled gate, flips summary_status to
+// "running" synchronously (so the very next ListSessions poll shows
+// progress), no-ops when a summary is already running, and runs `claude -p`
+// in a background goroutine whose result lands via SetSummary.
 func (l *Local) Summarize(ctx context.Context, sessionID string) error {
-	sess, ok, err := l.db.GetSession(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("session %s not found", sessionID)
-	}
-	if sess.TranscriptPath == "" {
-		return fmt.Errorf("no transcript path recorded for this session")
-	}
-	if err := l.db.SetSummaryStatus(ctx, sessionID, "running"); err != nil {
-		return err
-	}
-	timeoutSec := defaultSummaryTimeoutSec
-	if v, err := l.db.GetSetting(ctx, "summary_timeout_sec"); err == nil && v != "" {
-		if n, cerr := strconv.Atoi(v); cerr == nil && n > 0 {
-			timeoutSec = n
-		}
-	}
-	path := sess.TranscriptPath
-	go func() {
-		bg, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
-		defer cancel()
-		summary, err := summarize.Run(bg, path)
-		if err != nil {
-			_ = l.db.SetSummary(context.Background(), sessionID, err.Error(), "error")
-			return
-		}
-		_ = l.db.SetSummary(context.Background(), sessionID, summary, "done")
-	}()
-	return nil
+	return summarize.Kickoff(ctx, l.db, sessionID)
 }
 
 func (l *Local) TranscriptStat(ctx context.Context, s model.Session) (time.Time, int64, error) {

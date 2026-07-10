@@ -9,15 +9,21 @@ import (
 	"strconv"
 )
 
-// Store is the minimal capability Load/Set/ActionFunc need: get/set a raw
-// string setting value. internal/store.Store (Local and Remote alike)
+// Store is the minimal capability Load/Set/ActionFunc need: read/write raw
+// string setting values. internal/store.Store (Local and Remote alike)
 // satisfies this automatically since its method set is a superset — this
-// package deliberately does NOT import internal/store so that a bare
-// *db.DB-backed adapter (see internal/server's localSettingsStore) can
-// satisfy it too, without pulling the whole Store seam into the collector.
+// package deliberately does NOT import internal/store so that a bare *db.DB
+// (which also has all three methods) can satisfy it too, without pulling the
+// whole Store seam into the collector.
+//
+// Load goes through AllSettings — one bulk read — rather than per-key
+// GetSetting calls, because in remote mode each GetSetting is a full HTTP
+// round trip to the collector; per-key reads turned TUI startup into ~16
+// sequential requests.
 type Store interface {
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
+	AllSettings(ctx context.Context) (map[string]string, error)
 }
 
 // Settings is the typed snapshot the TUI takes on startup. Field defaults
@@ -91,15 +97,19 @@ func Defaults() Settings {
 	}
 }
 
-// Load reads every known key from the DB, falling back to Defaults() for
-// each one that's missing or malformed. Always returns a populated
-// Settings; the error is non-nil only on hard DB failures.
-func Load(ctx context.Context, st Store) (Settings, error) {
-	out := Defaults()
-	pairs := []struct {
-		key string
-		set func(string)
-	}{
+// loadPair binds a storage key to the setter that folds its raw value into
+// a Settings snapshot. loadPairs is the counterpart of AllKeys/AllSpecs on
+// the read path — the settings package test asserts its key set matches
+// AllKeys exactly, so adding a Spec without a load pair (or vice versa)
+// fails the build's test run instead of silently dropping the key from
+// either Load or GET /api/settings.
+type loadPair struct {
+	key string
+	set func(string)
+}
+
+func loadPairs(out *Settings) []loadPair {
+	return []loadPair{
 		{keyAutoRepoTabs, func(v string) { out.AutoRepoTabs = parseBool(v, out.AutoRepoTabs) }},
 		{keyBellOnPending, func(v string) { out.BellOnPending = parseBool(v, out.BellOnPending) }},
 		{keyNewestAtBottom, func(v string) { out.NewestAtBottom = parseBool(v, out.NewestAtBottom) }},
@@ -118,20 +128,31 @@ func Load(ctx context.Context, st Store) (Settings, error) {
 		{keySummaryTimeoutSec, func(v string) { out.SummaryTimeoutSec = parseInt(v, out.SummaryTimeoutSec) }},
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
 	}
-	for _, p := range pairs {
-		v, err := st.GetSetting(ctx, p.key)
-		if err != nil {
-			return out, err
-		}
-		if v != "" {
+}
+
+// Load reads every known key from the store in one AllSettings call,
+// falling back to Defaults() for each one that's missing or malformed.
+// Always returns a populated Settings; the error is non-nil only on hard
+// store failures.
+func Load(ctx context.Context, st Store) (Settings, error) {
+	out := Defaults()
+	all, err := st.AllSettings(ctx)
+	if err != nil {
+		return out, err
+	}
+	for _, p := range loadPairs(&out) {
+		if v := all[p.key]; v != "" {
 			p.set(v)
 		}
 	}
 	// One-shot migration from the previous two-bool layout scheme. If the
 	// new key is missing but the legacy ones are present, fold them into a
 	// single mode so the operator doesn't lose their preference. We don't
-	// delete the old rows so a downgrade still finds them.
-	if cur, _ := st.GetSetting(ctx, keyLayoutMode); cur == "" {
+	// delete the old rows so a downgrade still finds them. The legacy keys
+	// aren't part of AllKeys, so remote AllSettings maps won't carry them —
+	// the migration then no-ops on remote clients and runs where the DB
+	// actually lives (the collector's own settings.Load calls).
+	if all[keyLayoutMode] == "" {
 		auto, _ := st.GetSetting(ctx, legacyKeyLayoutAuto)
 		vert, _ := st.GetSetting(ctx, legacyKeyLayoutVertical)
 		if auto != "" || vert != "" {
@@ -199,17 +220,22 @@ const (
 // Spec.Apply is non-nil only for KindAction rows.
 type ActionFunc func(ctx context.Context, st Store, s Settings) (Settings, error)
 
-// AllKeys returns every key Load/Set know about — a superset of AllSpecs'
-// keys (it also includes keyNewestAtBottom, which isn't yet surfaced as a
-// settings-page row). Used by the server's GET /api/settings handler, which
-// needs the full persisted key set rather than just the UI-rendered subset.
+// AllKeys returns every value-bearing key, derived from AllSpecs (the
+// canonical settings table) minus the KindAction rows, which carry no
+// stored value. Used by the server's GET /api/settings handler and by
+// Local.AllSettings — deriving instead of hand-listing means a new Spec is
+// automatically part of the remote settings payload, so a remote TUI can't
+// silently fall back to defaults for a key the collector actually has.
 func AllKeys() []string {
-	return []string{
-		keyAutoRepoTabs, keyBellOnPending, keyNewestAtBottom, keyLayoutMode,
-		keyVerticalAutoCols, keyApproveEnabled, keySummaryEnabled,
-		keyAttachEnabled, keyAutoInstallSync, keyTailBudgetKB,
-		keySummaryTimeoutSec, keyRefreshIntervalMs,
+	specs := AllSpecs()
+	out := make([]string, 0, len(specs))
+	for _, s := range specs {
+		if s.Kind == KindAction {
+			continue
+		}
+		out = append(out, s.Key)
 	}
+	return out
 }
 
 // AllSpecs returns every setting in display order. The TUI uses this both
