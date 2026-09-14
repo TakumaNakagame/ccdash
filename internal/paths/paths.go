@@ -41,3 +41,11 @@ func ClaudeUserSettingsPath() (string, error) {
 	}
 	return filepath.Join(home, ".claude", "settings.json"), nil
 }
+
+func AccountsConfigPath() (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "accounts.json"), nil
+}

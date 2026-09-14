@@ -30,6 +30,7 @@ type Session struct {
 	Title          string        `json:"title,omitempty"`        // auto-derived from transcript
 	CustomTitle    string        `json:"custom_title,omitempty"` // operator override; takes precedence
 	UserGroup      string        `json:"user_group,omitempty"`   // operator-named group; overrides repo-based grouping. Rendered as a tab in the strip.
+	Account        string        `json:"account,omitempty"`      // account name from accounts.json (e.g. "personal", "enterprise")
 	Archived       bool          `json:"archived,omitempty"`
 	Favorite       bool          `json:"favorite,omitempty"`
 	Summary        string        `json:"summary,omitempty"`

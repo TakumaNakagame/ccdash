@@ -28,13 +28,17 @@ type Entry struct {
 }
 
 // Snapshot returns a map of session_id → Entry by reading
-// ~/.claude/sessions/<pid>.json for every running claude process.
-func Snapshot(ctx context.Context) (map[string]Entry, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
+// <claudeDir>/sessions/<pid>.json for every running claude process.
+// Pass claudeDir="" to use the default ~/.claude directory.
+func Snapshot(ctx context.Context, claudeDir string) (map[string]Entry, error) {
+	if claudeDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		claudeDir = filepath.Join(home, ".claude")
 	}
-	sessDir := filepath.Join(home, ".claude", "sessions")
+	sessDir := filepath.Join(claudeDir, "sessions")
 	entries, err := os.ReadDir(sessDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

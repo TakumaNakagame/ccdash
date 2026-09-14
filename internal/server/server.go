@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/takumanakagame/ccmanage/internal/accounts"
 	"github.com/takumanakagame/ccmanage/internal/auth"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/discovery"
@@ -48,8 +49,8 @@ type Server struct {
 	// ptyMu guards ptyMap. Long-lived PTY sessions are keyed by a ptyKey
 	// (UUID assigned at start time) which is later aliased to the real
 	// sessionID once discovery picks it up.
-	ptyMu    sync.Mutex
-	ptyMap   map[string]*ptyEntry
+	ptyMu  sync.Mutex
+	ptyMap map[string]*ptyEntry
 
 	// cancelFn stops the server's context (graceful shutdown).
 	cancelFn context.CancelFunc
@@ -320,47 +321,63 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 	if err := s.db.MarkStalePendingTimeout(ctx, 45*time.Second); err != nil {
 		log.Printf("approval sweep: %v", err)
 	}
-	discovered, err := discovery.Scan(ctx, "")
+
+	accs, err := accounts.Load()
 	if err != nil {
-		return err
+		log.Printf("discovery: accounts load: %v", err)
+		// Fall back to a single default account so discovery doesn't stop entirely.
+		accs = []accounts.Account{{Name: "default", Dir: ""}}
 	}
-	procs, _ := procmap.Snapshot(ctx)
 	now := time.Now()
 
-	for _, d := range discovered {
-		sess := &model.Session{
-			SessionID:      d.SessionID,
-			Cwd:            d.Cwd,
-			Branch:         d.GitBranch,
-			Title:          d.Title,
-			TranscriptPath: d.TranscriptPath,
-			LastSeen:       d.LastModified,
-			Status:         classifyStatus(d.LastModified, now, ""),
+	for _, acc := range accs {
+		projectsBase := ""
+		if acc.Dir != "" {
+			projectsBase = acc.Dir + "/projects"
 		}
-		if entry, ok := procs[d.SessionID]; ok {
-			sess.ProcPID = entry.PID
-			sess.Pane = entry.Pane
-			if entry.TmuxSession != "" {
-				sess.TmuxSession = entry.TmuxSession
-			}
-			sess.Status = classifyStatus(d.LastModified, now, entry.ClaudeStatus)
+		discovered, err := discovery.Scan(ctx, projectsBase)
+		if err != nil {
+			log.Printf("discovery[%s]: %v", acc.Name, err)
+			continue
 		}
-		// Derive git info from cwd when discovery's gitBranch was unhelpful
-		// (transcripts often record "HEAD" rather than the actual branch).
-		if (sess.Branch == "" || sess.Branch == "HEAD") && sess.Cwd != "" {
-			g := gitinfo.Lookup(ctx, sess.Cwd)
-			if g.Branch != "" {
-				sess.Branch = g.Branch
+		procs, _ := procmap.Snapshot(ctx, acc.Dir)
+
+		for _, d := range discovered {
+			sess := &model.Session{
+				SessionID:      d.SessionID,
+				Cwd:            d.Cwd,
+				Branch:         d.GitBranch,
+				Title:          d.Title,
+				TranscriptPath: d.TranscriptPath,
+				LastSeen:       d.LastModified,
+				Status:         classifyStatus(d.LastModified, now, ""),
+				Account:        acc.Name,
 			}
-			if sess.Repo == "" {
-				sess.Repo = g.Repo
+			if entry, ok := procs[d.SessionID]; ok {
+				sess.ProcPID = entry.PID
+				sess.Pane = entry.Pane
+				if entry.TmuxSession != "" {
+					sess.TmuxSession = entry.TmuxSession
+				}
+				sess.Status = classifyStatus(d.LastModified, now, entry.ClaudeStatus)
 			}
-			if sess.Commit == "" {
-				sess.Commit = g.Commit
+			// Derive git info from cwd when discovery's gitBranch was unhelpful
+			// (transcripts often record "HEAD" rather than the actual branch).
+			if (sess.Branch == "" || sess.Branch == "HEAD") && sess.Cwd != "" {
+				g := gitinfo.Lookup(ctx, sess.Cwd)
+				if g.Branch != "" {
+					sess.Branch = g.Branch
+				}
+				if sess.Repo == "" {
+					sess.Repo = g.Repo
+				}
+				if sess.Commit == "" {
+					sess.Commit = g.Commit
+				}
 			}
-		}
-		if err := s.db.UpsertSession(ctx, sess); err != nil {
-			log.Printf("discovery upsert %s: %v", d.SessionID, err)
+			if err := s.db.UpsertSession(ctx, sess); err != nil {
+				log.Printf("discovery upsert %s: %v", d.SessionID, err)
+			}
 		}
 	}
 	return nil

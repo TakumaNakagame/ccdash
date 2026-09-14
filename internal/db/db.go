@@ -113,6 +113,7 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN user_tab TEXT`,
 		`ALTER TABLE sessions ADD COLUMN user_group TEXT`,
 		`ALTER TABLE approvals ADD COLUMN tool_use_id TEXT`,
+		`ALTER TABLE sessions ADD COLUMN account TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -151,8 +152,8 @@ func (d *DB) UpsertSession(ctx context.Context, s *model.Session) error {
 		INSERT INTO sessions (session_id, cwd, repo, branch, commit_hash,
 		                     wrapper_pid, proc_pid, pane,
 		                     tmux_pane, tmux_session, transcript_path, model, title,
-		                     first_seen, last_seen, status)
-		VALUES (?, ?, ?, ?, ?,  ?, ?, ?,  ?, ?, ?, ?, ?,  ?, ?, ?)
+		                     first_seen, last_seen, status, account)
+		VALUES (?, ?, ?, ?, ?,  ?, ?, ?,  ?, ?, ?, ?, ?,  ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			cwd = COALESCE(NULLIF(excluded.cwd,''), sessions.cwd),
 			repo = COALESCE(NULLIF(excluded.repo,''), sessions.repo),
@@ -167,12 +168,13 @@ func (d *DB) UpsertSession(ctx context.Context, s *model.Session) error {
 			model = COALESCE(NULLIF(excluded.model,''), sessions.model),
 			title = COALESCE(NULLIF(excluded.title,''), sessions.title),
 			last_seen = MAX(excluded.last_seen, sessions.last_seen),
-			status = excluded.status
+			status = excluded.status,
+			account = COALESCE(NULLIF(excluded.account,''), sessions.account)
 	`,
 		s.SessionID, s.Cwd, s.Repo, s.Branch, s.Commit,
 		s.WrapperPID, s.ProcPID, s.Pane,
 		s.TmuxPane, s.TmuxSession, s.TranscriptPath, s.Model, s.Title,
-		s.FirstSeen.Unix(), s.LastSeen.Unix(), string(s.Status),
+		s.FirstSeen.Unix(), s.LastSeen.Unix(), string(s.Status), s.Account,
 	)
 	return err
 }
@@ -292,7 +294,8 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
 		       COALESCE(s.summary,''), COALESCE(s.summary_status,''), COALESCE(s.summary_at,0),
 		       s.first_seen, s.last_seen, s.status,
-		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending
+		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
+		       COALESCE(s.account,'')
 		FROM sessions s
 		WHERE COALESCE(s.archived,0) = ?
 		ORDER BY COALESCE(s.favorite,0) DESC, s.last_seen DESC
@@ -314,7 +317,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.Title, &s.CustomTitle, &s.UserGroup,
 			&arch, &fav,
 			&s.Summary, &s.SummaryStatus, &sumAt,
-			&first, &last, &status, &s.PendingCount); err != nil {
+			&first, &last, &status, &s.PendingCount, &s.Account); err != nil {
 			return nil, err
 		}
 		s.FirstSeen = time.Unix(first, 0).UTC()
