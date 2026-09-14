@@ -239,19 +239,36 @@ The `claude -p` spawn is isolated with `--setting-sources project` and
 cwd `/tmp` so it doesn't inherit ccdash's hooks (otherwise the spawn
 would create another session in the dashboard).
 
-## 8. Attach (`enter`)
+## 8. Attach (`enter`) and the live right pane
 
-Pressing `enter` on a session attempts to switch focus to it:
+Pressing `enter` on a session attempts to bring it to you:
 
 | Session state | Action |
 | --- | --- |
 | Running, in a tmux pane | `tmux switch-client -t <pane>` |
-| Running, no tmux pane detected | flash with PID + TTY so you can switch terminal apps manually |
-| Stopped | `claude --resume <session_id>` from the session's cwd |
+| Running, hosted by the ccdash server | focus the live pane (keys go to claude) |
+| Stopped | `claude --resume <session_id>` from the session's cwd, hosted by the server, shown live in the right pane |
 
-Tmux integration is automatic when the session's pane is detected via
-`tmux list-panes`. No extra setup needed — install tmux, run `claude`
-inside a tmux pane, and `enter` becomes a single-keystroke pane switch.
+Sessions the ccdash server hosts (anything you started with `n`, or
+resumed with `enter`) render as a **real terminal** in the right pane:
+the server runs a terminal emulator on the PTY, the TUI mirrors its
+screen, and the pane header reads `⬡ live`.
+
+| Key | Action |
+| --- | --- |
+| `enter` / `ctrl+]` / click the pane | Give claude the keyboard. The terminal cursor moves into the pane so your IME composes in place. |
+| `ctrl+]` / `ctrl+d` / click elsewhere | Back to the dashboard (claude keeps running) |
+| `F` | Fullscreen: hand the whole terminal to the same session; `ctrl+d` returns |
+| mouse wheel over the pane | Scrolls claude, not the transcript |
+
+While the pane has focus every other key goes to claude, including `q`.
+The emulator lives in the server, so the screen survives TUI restarts
+and is already drawn when you come back.
+
+Sessions started elsewhere (another terminal, tmux) cannot be mirrored;
+they keep the transcript tail, and `enter` switches tmux when a pane is
+known. Once a stopped session is resumed through ccdash it becomes
+hosted and goes live.
 
 ## 9. Search (`/`)
 
@@ -292,7 +309,7 @@ These let you scale ccdash's reach down to "observation only":
 - **Summarize via claude -p** — when off, `s` is disabled and no digest
   leaves the host.
 - **Attach (enter)** — when off, `enter` only shows session info, never
-  spawns subprocesses.
+  spawns subprocesses, and the live right pane stays disconnected.
 - **Auto-rewrite settings.json** — when off, server start does not
   silently update `~/.claude/settings.json` even after a token rotation.
 

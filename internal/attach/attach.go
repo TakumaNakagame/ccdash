@@ -54,6 +54,12 @@ type Result struct {
 type Session struct {
 	cmd *exec.Cmd
 
+	// InitialSize, when non-nil, is applied to the PTY at spawn time so the
+	// child's first render already matches the viewer (the server-side
+	// emulator sets this to the right-pane geometry). Nil means "whatever
+	// the kernel defaults to" — callers then Setsize afterwards.
+	InitialSize *pty.Winsize
+
 	// spawnOnce + spawnErr ensure pty.Start is called exactly once even if
 	// Attach is invoked before the previous Attach has returned (which
 	// shouldn't happen, but defending against it is cheap).
@@ -337,7 +343,7 @@ func (s *Session) Attach() (Result, error) {
 // goroutine and the PTY reader pump. Called exactly once per Session via
 // spawnOnce.
 func (s *Session) spawn() error {
-	f, err := pty.Start(s.cmd)
+	f, err := pty.StartWithSize(s.cmd, s.InitialSize)
 	if err != nil {
 		return fmt.Errorf("attach: pty.Start: %w", err)
 	}
@@ -390,6 +396,20 @@ func (s *Session) Pty() *os.File { return s.pty }
 // waited on. Reading childErr (via Process/Wait result) is only safe after
 // this channel closes.
 func (s *Session) ChildExit() <-chan struct{} { return s.childExit }
+
+// ExitErr returns the child's Wait result. Only meaningful once ChildExit
+// has closed; nil before that.
+func (s *Session) ExitErr() error {
+	if s == nil || s.childExit == nil {
+		return nil
+	}
+	select {
+	case <-s.childExit:
+		return s.childErr
+	default:
+		return nil
+	}
+}
 
 // Process returns the child's os.Process, or nil before Start has been called.
 func (s *Session) Process() *os.Process {

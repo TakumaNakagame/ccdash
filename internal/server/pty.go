@@ -8,35 +8,33 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 
-	"github.com/creack/pty"
 	"github.com/takumanakagame/ccmanage/internal/attach"
 )
 
-// ptyEntry is one long-lived PTY session managed by the server. It survives
-// TUI restarts; the TUI is just a thin relay while connected.
-type ptyEntry struct {
-	sess    *attach.Session
-	ptyKey  string // always set — UUID at creation, then also registered under sessionID
-	mu      sync.Mutex
-	connected atomic.Bool // true while a TUI stream is active
-}
+// newPTYCommand builds the child for POST /pty/start. A variable so tests
+// can substitute a shell instead of the real claude binary.
+var newPTYCommand = attach.ViaShell
 
 // handlePTY is the single mux entry for all /pty/* routes. It dispatches on
 // method and path suffix so we can share the requireToken middleware wrapper.
 func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 	// Path patterns under /pty/:
+	//   GET    /pty/                 → handlePTYList
 	//   POST   /pty/start            → handlePTYStart
-	//   GET    /pty/{id}/stream      → handlePTYStream
+	//   GET    /pty/{id}/stream      → handlePTYStream  (raw relay, fullscreen attach)
+	//   GET    /pty/{id}/screen      → handlePTYScreen  (emulated frames, right pane)
 	//   POST   /pty/{id}/resize      → handlePTYResize
 	//   POST   /pty/{id}/register    → handlePTYRegister
 	//   DELETE /pty/{id}             → handlePTYClose
 	path := strings.TrimPrefix(r.URL.Path, "/pty/")
 	path = strings.TrimSuffix(path, "/")
 
+	if path == "" && r.Method == http.MethodGet {
+		s.handlePTYList(w, r)
+		return
+	}
 	if path == "start" && r.Method == http.MethodPost {
 		s.handlePTYStart(w, r)
 		return
@@ -57,6 +55,8 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case action == "stream" && r.Method == http.MethodGet:
 		s.handlePTYStream(w, r, id)
+	case action == "screen" && r.Method == http.MethodGet:
+		s.handlePTYScreen(w, r, id)
 	case action == "resize" && r.Method == http.MethodPost:
 		s.handlePTYResize(w, r, id)
 	case action == "register" && r.Method == http.MethodPost:
@@ -69,14 +69,18 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePTYStart creates a new PTY session or returns an existing alive one.
-// Body: {"sessionId":"...", "cwd":"...", "resumeId":"..."}
-// If resumeId is empty a bare `claude` is spawned (new session).
+// Body: {"sessionId":"...", "cwd":"...", "resumeId":"...", "cols":N, "rows":N}
+// If resumeId is empty a bare `claude` is spawned (new session). cols/rows
+// size the PTY + emulator up front so the child's first render already fits
+// the viewer; zero falls back to 80x24.
 // Returns: {"ptyKey":"..."} — the key the TUI uses for subsequent calls.
 func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SessionID string `json:"sessionId"`
 		ResumeID  string `json:"resumeId"`
 		Cwd       string `json:"cwd"`
+		Cols      int    `json:"cols"`
+		Rows      int    `json:"rows"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
@@ -100,25 +104,28 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 	if req.ResumeID != "" {
 		args = append(args, "--resume", req.ResumeID)
 	}
-	c := attach.ViaShell(args...)
+	c := newPTYCommand(args...)
 	if req.Cwd != "" {
 		c.Dir = req.Cwd
 	}
 	c.Env = attach.SafeEnv()
 
 	sess := attach.New(c)
+	// The key is finalized after Start (we need the PID), but the entry
+	// must exist before Start so the sink is wired for the first bytes.
+	entry := newPTYEntry(sess, "", req.Cols, req.Rows)
 	if err := sess.Start(); err != nil {
 		http.Error(w, fmt.Sprintf("pty start: %v", err), http.StatusInternalServerError)
 		return
 	}
+	entry.startPumps()
 
 	// Use PID as the initial ptyKey (unique, known immediately).
 	ptyKey := fmt.Sprintf("pid-%d", sess.PID())
 	if req.SessionID != "" {
 		ptyKey = req.SessionID
 	}
-
-	entry := &ptyEntry{sess: sess, ptyKey: ptyKey}
+	entry.ptyKey = ptyKey
 
 	s.ptyMu.Lock()
 	s.ptyMap[ptyKey] = entry
@@ -128,10 +135,12 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		<-sess.ChildExit()
 		s.ptyMu.Lock()
-		// Only delete if the entry is still ours (register may have added a
-		// second alias; we leave the sessionID alias for the TUI to inspect).
-		if e, ok := s.ptyMap[ptyKey]; ok && e == entry {
-			delete(s.ptyMap, ptyKey)
+		// Drop every alias that points at this entry (pid key + sessionID
+		// alias) so GET /pty stops advertising it.
+		for k, e := range s.ptyMap {
+			if e == entry {
+				delete(s.ptyMap, k)
+			}
 		}
 		s.ptyMu.Unlock()
 		log.Printf("pty: session %s exited", ptyKey)
@@ -142,7 +151,9 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePTYStream upgrades the HTTP connection to a raw bidirectional PTY
-// relay. Only one TUI can stream per entry at a time (409 if already taken).
+// relay (fullscreen attach). Only one client can stream per entry at a
+// time (409 if already taken). Screen viewers keep receiving frames while
+// a raw client is attached; the emulator just stops answering queries.
 func (s *Server) handlePTYStream(w http.ResponseWriter, r *http.Request, id string) {
 	entry := s.lookupPTY(id)
 	if entry == nil {
@@ -177,9 +188,9 @@ func (s *Server) handlePTYStream(w http.ResponseWriter, r *http.Request, id stri
 
 	// Route PTY output to the client connection BEFORE resizing.
 	// Setsize triggers SIGWINCH → claude full redraw; the sink must already
-	// point at conn or the redraw bytes go to io.Discard.
-	entry.sess.SetSink(conn)
-	defer entry.sess.SetSink(io.Discard)
+	// point at conn or the redraw bytes never reach the operator.
+	entry.setRaw(conn)
+	defer entry.setRaw(nil)
 
 	// Read JSON handshake: {"rows":N,"cols":N}
 	var hs struct {
@@ -187,14 +198,18 @@ func (s *Server) handlePTYStream(w http.ResponseWriter, r *http.Request, id stri
 		Cols uint16 `json:"cols"`
 	}
 	if err := json.NewDecoder(brw).Decode(&hs); err == nil && hs.Rows > 0 && hs.Cols > 0 {
-		if f := entry.sess.Pty(); f != nil {
-			_ = pty.Setsize(f, &pty.Winsize{Rows: hs.Rows, Cols: hs.Cols})
-		}
+		entry.resize(int(hs.Cols), int(hs.Rows))
 	}
 	// Explicit SIGWINCH: Setsize may not always deliver SIGWINCH (e.g. when
 	// the size hasn't changed). Sending it directly guarantees a full redraw.
 	if p := entry.sess.Process(); p != nil {
 		_ = p.Signal(syscall.SIGWINCH)
+	}
+	// The emulator already holds the current screen but the operator's
+	// terminal is blank — ask the child to repaint (Ctrl+L) so they don't
+	// stare at nothing until the next output.
+	if f := entry.sess.Pty(); f != nil {
+		_, _ = f.Write([]byte{0x0c})
 	}
 
 	// client → PTY: copy until conn closes or PTY dies.
@@ -210,7 +225,7 @@ func (s *Server) handlePTYStream(w http.ResponseWriter, r *http.Request, id stri
 	}
 }
 
-// handlePTYResize updates the PTY window size.
+// handlePTYResize updates the PTY + emulator window size.
 // Body: {"rows":N,"cols":N}
 func (s *Server) handlePTYResize(w http.ResponseWriter, r *http.Request, id string) {
 	entry := s.lookupPTY(id)
@@ -226,9 +241,7 @@ func (s *Server) handlePTYResize(w http.ResponseWriter, r *http.Request, id stri
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	if f := entry.sess.Pty(); f != nil {
-		_ = pty.Setsize(f, &pty.Winsize{Rows: req.Rows, Cols: req.Cols})
-	}
+	entry.resize(int(req.Cols), int(req.Rows))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -264,7 +277,11 @@ func (s *Server) handlePTYClose(w http.ResponseWriter, r *http.Request, id strin
 	s.ptyMu.Lock()
 	entry, ok := s.ptyMap[id]
 	if ok {
-		delete(s.ptyMap, id)
+		for k, e := range s.ptyMap {
+			if e == entry {
+				delete(s.ptyMap, k)
+			}
+		}
 	}
 	s.ptyMu.Unlock()
 

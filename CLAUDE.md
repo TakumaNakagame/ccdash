@@ -35,7 +35,7 @@ ccdash is a single Go binary that plays three roles depending on how it's invoke
 
 1. **Collector** — an HTTP server bound to `127.0.0.1:9123` that receives Claude Code's hook events, writes them to SQLite, and (optionally) blocks PermissionRequest hooks waiting for an operator decision.
 2. **Discoverer** — a goroutine that polls `~/.claude/sessions/<pid>.json` and `~/.claude/projects/*/<id>.jsonl` every ~10 s to surface idle/stopped sessions even when no hook has fired.
-3. **TUI** — a Bubble Tea application that reads the SQLite store, tails transcripts on disk, and dispatches per-session actions (attach, approve, summarize).
+3. **TUI** — a Bubble Tea v2 application that reads the SQLite store, tails transcripts on disk, mirrors server-hosted claude sessions live in the right pane, and dispatches per-session actions (attach, approve, summarize).
 
 The TUI auto-spawns the collector when none is listening, and tears it down on quit. `-k` and `ccdash server` cover persistent-collector setups.
 
@@ -44,7 +44,7 @@ The TUI auto-spawns the collector when none is listening, and tears it down on q
 ```
 cmd/ccdash/main.go              entry; main.Version is injected via -ldflags at release time
 internal/cli/                   cobra command tree (run, server, install-hooks, update, ...)
-internal/server/                HTTP collector + rate limiter + auth middleware + discovery loop
+internal/server/                HTTP collector + rate limiter + auth middleware + discovery loop; pty.go / screen.go = hosted PTYs + per-session vt emulator
 internal/db/                    SQLite layer (sessions / events / approvals / settings)
 internal/store/                 Store seam between TUI/CLI and data: Local (*db.DB + files + summarize) / Remote (HTTP client for -r remote mode)
 internal/clientcfg/             client-side remote config (~/.config/ccdash/config.json) read by -r, written by `ccdash remote set`
@@ -57,7 +57,8 @@ internal/auth/                  loopback shared-token loader (32 B hex at $XDG_S
 internal/hookcfg/               install-hooks merge logic for ~/.claude/settings.json
 internal/settings/              persisted preferences (settings table) + KindBool/KindInt/KindEnum/KindAction spec
 internal/selfupdate/            `ccdash update` self-replace via os.Rename onto the running path
-internal/tui/                   Bubble Tea UI — keys, layout, transcript pane, settings page
+internal/tui/                   Bubble Tea v2 UI — keys, layout, transcript pane, settings page; live.go = live right pane
+internal/screen/                wire protocol + client for the /pty/{key}/screen stream (server emulator → TUI)
 internal/wrapper/               optional `ccdash claude` exec wrapper that adds tmux pane / pid metadata
 internal/attach/                pty-based fullscreen `claude --resume` runner with Ctrl+D mid-session detach
 internal/paths/                 state dir / db / settings paths (XDG-aware)
@@ -102,8 +103,11 @@ The TUI render layer dispatches on `Spec.Kind` automatically; you don't normally
 - **Secure-mode toggles are explicit.** `approve_enabled`, `summary_enabled`, `attach_enabled`, `auto_install_sync` each turn off one risk-bearing capability; the "Apply secure preset" action flips all four. The TUI keys for these features check the flag and flash "<feature> is OFF" when disabled — don't bypass.
 - **Mouse wheel zoning is layout-aware.** `mouseInRightPane` re-derives geometry per-event because vertical layout splits Y instead of X. Auto-vertical decides via `m.width < settings.VerticalAutoCols`.
 - **`groupLocked` (from `--group`) hides the strip and disables h/l/Tab/Shift+Tab.** It also keeps `archiveCurrentGroup` from auto-advancing past the locked group. The deprecated `--tab` alias is still accepted (hidden) so existing scripts don't break.
-- **Inline attach uses `internal/attach`, not `tea.ExecProcess`.** For stopped sessions, `attachCurrent` builds an `attach.AttachCmd` wrapping the persistent `attach.Session` and hands it to `tea.Exec`. Bubble Tea releases the alt-screen and calls `Run`, which puts the operator's terminal in raw mode, opens a PTY for `claude --resume <id>`, and relays I/O. `Ctrl+D` (`attach.EscapeByte`, ASCII EOT) is intercepted in the stdin pump — on hit we don't kill the child, just unwind back to the dashboard with `Result{Detached: true}` so the operator can re-attach (Enter on the row) to the same backgrounded process. tmux-pane attach (running session) is unchanged and still uses `tea.ExecProcess` with `tmux switch-client`.
-- **Attach is fullscreen-only by design.** A windowed (right-pane) attach mode shipped briefly in v0.3.0 — claude rendered into ccdash's right pane via a vt10x emulator while Bubble Tea stayed up — but the TUI-in-TUI structure was incompatible with both CJK width tracking (vt10x doesn't carry display width per glyph) and OS-level IME composition (ccdash's re-render races the IME's overlay). It was retired in v0.3.7. See `docs/decisions/0001-no-windowed-attach.md` if you're tempted to add it back.
+- **The right pane is a live terminal for server-hosted sessions.** Every PTY the server spawns (`POST /pty/start`) is wrapped in a `charmbracelet/x/vt` emulator (`internal/server/screen.go`) that consumes the child's output whether or not anyone is watching. The TUI subscribes via `GET /pty/{key}/screen` (HTTP upgrade → newline-delimited JSON, types in `internal/screen`) and splices the rendered rows into the right pane (`internal/tui/live.go`). `syncLive` runs after every `Update` and owns connect / resize / teardown; don't dial the stream anywhere else. `desiredLiveKey` decides which sessions qualify: sessionID (registered alias) or `pid-<N>` (fresh `n` spawn) present in the `GET /pty` list. Sessions started outside ccdash cannot be mirrored and keep the transcript tail.
+- **The real terminal cursor is the IME anchor.** `View()` returns `tea.View` (Bubble Tea v2) and sets `Cursor` to the emulator cursor only while the live pane has focus (`liveCursor`). Never draw a fake cursor cell instead — that's what broke IME composition in v0.3.x (see `docs/decisions/0002-live-right-pane.md`). Everything that computes pane geometry (`rightPaneGeom`, `liveScreenGeom`, `mouseInRightPane`) must go through `bodyLayout` so the cursor lands on the cell the renderer drew.
+- **Fullscreen attach (`F`) rides the same PTY.** `attach.StreamClient` + `tea.Exec` relays raw bytes via `/pty/{key}/stream`. While a raw client is connected the emulator keeps consuming output but `responsePump` drops its DSR/DA replies so the operator's terminal is the only responder. On return, `attachDoneMsg` zeroes `sentCols/sentRows` so `syncLive` pushes the pane geometry back. `Ctrl+D` (`attach.EscapeByte`) detaches without killing the child; in the live pane `Ctrl+]` / `Ctrl+D` do the same hand-back.
+- **Bubble Tea v2 conventions.** Imports are `charm.land/bubbletea/v2`; key handlers take `tea.KeyPressMsg` and test `msg.Code` / `msg.Text` / `msg.String()` (space is `"space"`, not `" "`); mouse handlers take `tea.MouseWheelMsg` / `tea.MouseClickMsg`. Alt-screen and mouse mode are declared on the `tea.View`, not `NewProgram`. The approval bell is written to stdout by `ringBellCmd` because the cell renderer strips control characters from view content.
+- **`x/vt` is pinned to a commit** (pre-v1, untagged). Bumping it is a deliberate change: re-run the manual IME check in `docs/decisions/0002-live-right-pane.md` afterwards. `cmd/vtspike` is the standalone harness for that check.
 
 ### Common gotchas
 

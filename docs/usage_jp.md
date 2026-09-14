@@ -197,17 +197,36 @@ tool 呼び出しと結果は視覚的に結合 (空行無し、結果はイン�
 
 `claude -p` は `--setting-sources project` + cwd `/tmp` で起動するので、ccdash 自身の hook を継承しません (継承するとサマリ実行が新セッションを生んでループ)。
 
-## 8. アタッチ (`enter`)
+## 8. アタッチ (`enter`) と右ペインのライブ表示
 
 `enter` でセッションへの移動を試みます。
 
 | セッション状態 | 動作 |
 | --- | --- |
 | 起動中・tmux pane に居る | `tmux switch-client -t <pane>` |
-| 起動中・tmux pane 検出不可 | flash で PID + TTY を表示 (手動切替案内) |
-| 停止済み | cwd で `claude --resume <session_id>` |
+| 起動中・ccdash サーバー配下 | ライブペインにフォーカス (キー入力が claude へ届く) |
+| 停止済み | cwd で `claude --resume <session_id>` をサーバー配下で起動し、右ペインにライブ表示 |
 
-tmux 連携は自動 (`tmux list-panes` で発見)。tmux 内で `claude` を起動していれば 1 ストロークで pane 切替可能になります。
+ccdash サーバーが起動したセッション (`n` で新規作成したもの、`enter` で
+resume したもの) は右ペインに**本物の端末画面**として表示されます。
+サーバー側が PTY に端末エミュレータを当て、TUI はその画面をミラーします。
+ペインのヘッダは `⬡ live` になります。
+
+| キー | 動作 |
+| --- | --- |
+| `enter` / `ctrl+]` / ペインをクリック | claude にキーボードを渡す。端末の実カーソルがペイン内に移動するので IME の変換はその場で行われる |
+| `ctrl+]` / `ctrl+d` / ペイン外をクリック | ダッシュボードに戻る (claude は動き続ける) |
+| `F` | フルスクリーン: 同じセッションに端末全体を渡す。`ctrl+d` で戻る |
+| ペイン上でマウスホイール | transcript ではなく claude 側をスクロール |
+
+フォーカス中は `q` を含む他のキーもすべて claude に届きます。
+エミュレータはサーバー側にあるため、TUI を再起動しても画面は保持され、
+戻ってきた時点で描画済みです。
+
+他の端末や tmux で起動したセッションはミラーできません (PTY が別プロセスの
+所有)。それらは従来どおり transcript の末尾表示で、pane が分かれば `enter` で
+tmux 切替になります。停止済みセッションを ccdash 経由で resume すると以後は
+サーバー配下になりライブ表示されます。
 
 ## 9. 検索 (`/`)
 
@@ -241,7 +260,7 @@ ccdash の介入度合いを「観察のみ」まで下げられます。
 
 - **Approval blocking** — OFF で PermissionRequest ブロックを停止。Claude は標準プロンプトを表示、`a`/`A`/`d` は無効化
 - **Summarize via claude -p** — OFF で `s` 無効化、ダイジェストの外部送信ゼロ
-- **Attach (enter)** — OFF で `enter` はセッション情報表示のみ、サブプロセス起動無し
+- **Attach (enter)** — OFF で `enter` はセッション情報表示のみ、サブプロセス起動無し。右ペインのライブ表示も接続しない
 - **Auto-rewrite settings.json** — OFF でサーバ起動時の `~/.claude/settings.json` 自動書き換えを停止 (token rotate 時も)
 
 **Apply secure preset** アクションで上 4 つを一括 OFF にして「観察のみ」モードへ。

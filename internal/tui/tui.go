@@ -15,10 +15,11 @@ import (
 	"time"
 	"unicode"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/takumanakagame/ccmanage/internal/accounts"
 	"github.com/takumanakagame/ccmanage/internal/attach"
 	"github.com/takumanakagame/ccmanage/internal/auth"
 	"github.com/takumanakagame/ccmanage/internal/buildinfo"
@@ -65,7 +66,7 @@ func Run(ctx context.Context, st store.Store, lockGroup string, srvMode ServerMo
 		m.groupFilter = lockGroup
 		m.groupLocked = true
 	}
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(m)
 	_, err := p.Run()
 	return err
 }
@@ -100,7 +101,6 @@ type model struct {
 	// pending-approval alert state
 	lastPendingTotal int
 	bellPrimed       bool // skip bell on the very first refresh
-	pendingBell      bool // set on transition; flushed once via View()
 
 	// inline transcript tail for the right pane
 	tailMessages []transcript.Message
@@ -119,6 +119,7 @@ type model struct {
 	groupCandIdx  int    // index into filteredGroupCandidates(); -1 == "no pick yet"
 	groupFilter   string // "" = All; otherwise repo / cwd basename
 	searchQuery   string // "" = no filter; case-insensitive substring search
+	accountFilter string // "" = all accounts; otherwise account name (from accounts.json)
 
 	settings settings.Settings
 
@@ -206,6 +207,17 @@ type model struct {
 	// buffer prefix; cycled by repeated Tab presses.
 	newSessionCompletions []string
 	newSessionCompIdx     int
+
+	// Live right pane (see live.go). live is the active screen stream for
+	// the selected session; nil when that session isn't hosted by the
+	// ccdash server. liveFocus routes keystrokes to claude instead of the
+	// dashboard.
+	live             *liveScreen
+	liveFocus        bool
+	liveConnecting   string          // ptyKey whose dial is in flight
+	liveFocusPending string          // focus the pane as soon as this key connects
+	ptyAlive         map[string]bool // ptyKey → child alive, from GET /pty
+	ptyListWarned    bool            // flashed once about a server without /pty
 }
 
 func newModel(ctx context.Context, st store.Store, remote RemoteInfo) *model {
@@ -216,10 +228,12 @@ func newModel(ctx context.Context, st store.Store, remote RemoteInfo) *model {
 		settings:       settings.Defaults(),
 		pendingPTYKeys: map[int]string{},
 		summaryWatch:   map[string]struct{}{},
+		ptyAlive:       map[string]bool{},
 	}
 }
 
 func (m *model) quit() tea.Cmd {
+	m.closeLive()
 	return tea.Quit
 }
 
@@ -317,7 +331,7 @@ func (m *model) spawnNewSession(expanded string, created bool) tea.Cmd {
 		createdNote = " (created)"
 	}
 	return func() tea.Msg {
-		ptyKey, err := postPTYStart("", "", cwd)
+		ptyKey, err := postPTYStart("", "", cwd, 0, 0)
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}
@@ -517,6 +531,9 @@ func (m *model) refresh() tea.Cmd {
 	if cmd := m.loadTailCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
+	if !m.remote.Enabled {
+		cmds = append(cmds, fetchPTYListCmd())
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -578,7 +595,18 @@ func (m *model) currentSessionID() string {
 	return m.sessions[m.selSess].SessionID
 }
 
+// Update is a thin wrapper around update that reconciles the live right
+// pane after every message: selection moves, resizes, and PTY-list polls
+// all end up needing the same connect / resize / teardown decisions.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	mm, cmd := m.update(msg)
+	if sync := m.syncLive(); sync != nil {
+		cmd = tea.Batch(cmd, sync)
+	}
+	return mm, cmd
+}
+
+func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -710,15 +738,44 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// through Bubble Tea's writer rather than competing with the alt
 		// screen via stderr.
 		total := len(m.approvals)
-		if m.settings.BellOnPending && m.bellPrimed && m.lastPendingTotal == 0 && total > 0 {
-			m.pendingBell = true
-		}
+		ring := m.settings.BellOnPending && m.bellPrimed && m.lastPendingTotal == 0 && total > 0
 		m.lastPendingTotal = total
 		m.bellPrimed = true
+		if ring {
+			return m, ringBellCmd()
+		}
 	case errMsg:
 		m.err = msg.err
-	case tea.MouseMsg:
+	case ptyListMsg:
+		if msg.err == nil {
+			m.ptyAlive = msg.alive
+			m.ptyListWarned = false
+		} else if !m.ptyListWarned {
+			// Usually an older ccdash server (no /pty list route) still
+			// holding the port — e.g. a previous TUI build left running.
+			m.ptyListWarned = true
+			m.flash = "live pane unavailable: " + msg.err.Error() + " (older ccdash still running?)"
+		}
+	case liveConnectedMsg:
+		return m, m.handleLiveConnected(msg)
+	case liveFramesMsg:
+		return m, m.handleLiveFrames(msg)
+	case tea.MouseWheelMsg:
 		return m.handleMouse(msg)
+	case tea.MouseClickMsg:
+		// Clicking the emulator area focuses it; clicking anywhere else
+		// gives the keyboard back to the dashboard.
+		if msg.Button == tea.MouseLeft {
+			mm := msg.Mouse()
+			if m.mouseInLiveScreen(mm) && m.liveForCurrent() != nil {
+				m.setLiveFocus(true)
+			} else {
+				m.setLiveFocus(false)
+			}
+		}
+		return m, nil
+	case tea.PasteMsg:
+		return m.handlePaste(msg.Content)
 	case ptyStartedMsg:
 		// Track PID-based ptyKeys for new sessions so promotePTYKeys can
 		// register the alias once discovery resolves the sessionID.
@@ -727,6 +784,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if pid := parsePIDFromPTYKey(msg.ptyKey); pid > 0 {
 				m.pendingPTYKeys[pid] = msg.ptyKey
 			}
+		}
+		m.ptyAlive[msg.ptyKey] = true
+		if msg.live {
+			// Resume path: the server now hosts the session; syncLive (run
+			// after this Update) dials the screen stream and we focus it
+			// as soon as the first frame lands.
+			m.liveFocusPending = msg.ptyKey
+			m.flash = "claude running in the right pane — ctrl+] returns to the dashboard"
+			return m, nil
 		}
 		tok, _ := auth.Load()
 		addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
@@ -758,6 +824,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.flash = msg.msg
 		}
+		if m.live != nil {
+			// A fullscreen attach resized the PTY to the whole terminal;
+			// force syncLive to push the pane geometry back.
+			m.live.sentCols, m.live.sentRows = 0, 0
+		}
 		return m, tea.Batch(tea.ClearScreen, m.refresh())
 	case summaryKickedMsg:
 		// The store flipped summary_status to "running" before this fired,
@@ -777,8 +848,37 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.transcriptScroll = m.maxTranscriptScroll(m.transcriptVisibleHeight())
 		m.pane = paneTranscript
 		m.err = nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	}
+	return m, nil
+}
+
+// handlePaste routes bracketed-paste text: into the focused live session,
+// or into whichever inline editor is open. Newlines are flattened for the
+// single-line editors.
+func (m *model) handlePaste(content string) (tea.Model, tea.Cmd) {
+	if m.pane == paneSessions && m.liveFocus {
+		if live := m.liveForCurrent(); live != nil {
+			m.handleLivePaste(content, live)
+			return m, nil
+		}
+	}
+	flat := strings.ReplaceAll(strings.ReplaceAll(content, "\r", ""), "\n", " ")
+	switch {
+	case m.editingSearch, m.editingTitle, m.editingGroup:
+		m.titleBuffer += flat
+		m.groupCandIdx = -1
+	case m.editingNewSession:
+		m.newSessionBuffer += flat
+		m.newSessionCompletions = nil
+		m.newSessionCompIdx = -1
+	case m.pane == paneSettings && m.settingsEdit:
+		for _, r := range flat {
+			if r >= '0' && r <= '9' {
+				m.settingsBuffer += string(r)
+			}
+		}
 	}
 	return m, nil
 }
@@ -787,10 +887,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // always moves through that buffer. In the sessions view, the wheel zone
 // is decided by Y in vertical layout (top = sessions, bottom = transcript)
 // or by X in horizontal layout (left = sessions, right = transcript).
-func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleMouse(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 	const wheelStep = 3
 	if m.pane == paneTranscript {
-		switch msg.Type {
+		switch msg.Button {
 		case tea.MouseWheelUp:
 			bodyHeight := m.transcriptVisibleHeight()
 			m.transcriptScroll = clamp(m.transcriptScroll-wheelStep, 0, m.maxTranscriptScroll(bodyHeight))
@@ -800,8 +900,12 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	inRight := m.mouseInRightPane(msg)
-	switch msg.Type {
+	mm := msg.Mouse()
+	if m.forwardLiveWheel(mm) {
+		return m, nil
+	}
+	inRight := m.mouseInRightPane(mm)
+	switch msg.Button {
 	case tea.MouseWheelUp:
 		if inRight {
 			m.tailScroll += wheelStep
@@ -821,7 +925,13 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.pane == paneSessions && m.liveFocus {
+		if live := m.liveForCurrent(); live != nil {
+			return m.handleLiveKey(msg, live)
+		}
+		m.liveFocus = false
+	}
 	if m.pane == paneTranscript {
 		return m.handleKeyTranscript(msg)
 	}
@@ -914,6 +1024,19 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.attachCurrent()
+	case "ctrl+]":
+		if live := m.liveForCurrent(); live != nil && !live.exited {
+			m.setLiveFocus(true)
+			return m, nil
+		}
+		m.flash = "no live screen for this session — enter starts one"
+		return m, nil
+	case "F":
+		if !m.settings.AttachEnabled {
+			m.flash = "attach is OFF (settings ',')"
+			return m, nil
+		}
+		return m, m.attachFullscreen()
 	case "o":
 		return m, m.openTranscript()
 	case "a":
@@ -1014,6 +1137,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.settingsSel = 0
 		m.settingsEdit = false
 		return m, nil
+	case "@":
+		m.cycleAccountFilter()
+		m.applyGroupFilter()
+		m.selSess = 0
+		return m, nil
 	case "/":
 		m.editingSearch = true
 		m.titleBuffer = m.searchQuery
@@ -1054,11 +1182,19 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editingNewSession = true
 		return m, nil
 	case "esc":
+		cleared := false
 		if m.searchQuery != "" {
 			m.searchQuery = ""
+			cleared = true
+		}
+		if m.accountFilter != "" {
+			m.accountFilter = ""
+			cleared = true
+		}
+		if cleared {
 			m.applyGroupFilter()
 			m.selSess = 0
-			m.flash = "search cleared"
+			m.flash = "filters cleared"
 		}
 		return m, nil
 	}
@@ -1066,10 +1202,19 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // applyGroupFilter recomputes m.sessions from m.allSessions using the
-// current groupFilter and searchQuery. The two filters compose by
+// current groupFilter, accountFilter, and searchQuery. Filters compose by
 // intersection.
 func (m *model) applyGroupFilter() {
 	src := m.allSessions
+	if m.accountFilter != "" {
+		out := make([]mdl.Session, 0, len(src))
+		for _, s := range src {
+			if s.Account == m.accountFilter {
+				out = append(out, s)
+			}
+		}
+		src = out
+	}
 	if m.groupFilter != "" {
 		out := make([]mdl.Session, 0, len(src))
 		for _, s := range src {
@@ -1114,10 +1259,40 @@ func sessionMatchesQuery(s mdl.Session, q string) bool {
 	return false
 }
 
+// cycleAccountFilter advances m.accountFilter through ["", account1, account2, ...]
+// and updates m.flash to show the active filter.
+func (m *model) cycleAccountFilter() {
+	accs, err := accounts.Load()
+	if err != nil || len(accs) == 0 {
+		m.flash = "no accounts configured"
+		return
+	}
+	// Build ordered list: "" (All) followed by each account name.
+	names := make([]string, 0, len(accs)+1)
+	names = append(names, "")
+	for _, a := range accs {
+		names = append(names, a.Name)
+	}
+	// Find current position and advance.
+	next := names[0]
+	for i, n := range names {
+		if n == m.accountFilter {
+			next = names[(i+1)%len(names)]
+			break
+		}
+	}
+	m.accountFilter = next
+	if next == "" {
+		m.flash = "account filter: all"
+	} else {
+		m.flash = "account filter: " + next
+	}
+}
+
 // handleKeySearchEdit processes keys while the / search input is active.
-func (m *model) handleKeySearchEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEnter:
+func (m *model) handleKeySearchEdit(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Code == tea.KeyEnter:
 		m.searchQuery = strings.TrimSpace(m.titleBuffer)
 		m.editingSearch = false
 		m.titleBuffer = ""
@@ -1125,18 +1300,16 @@ func (m *model) handleKeySearchEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selSess = 0
 		m.sessScroll = 0
 		return m, m.loadTailCmd()
-	case tea.KeyEsc, tea.KeyCtrlC:
+	case msg.Code == tea.KeyEscape || msg.String() == "ctrl+c":
 		m.editingSearch = false
 		m.titleBuffer = ""
 		return m, nil
-	case tea.KeyBackspace:
+	case msg.Code == tea.KeyBackspace:
 		if r := []rune(m.titleBuffer); len(r) > 0 {
 			m.titleBuffer = string(r[:len(r)-1])
 		}
-	case tea.KeySpace:
-		m.titleBuffer += " "
-	case tea.KeyRunes:
-		m.titleBuffer += string(msg.Runes)
+	case msg.Text != "":
+		m.titleBuffer += msg.Text
 	}
 	return m, nil
 }
@@ -1151,7 +1324,7 @@ func (m *model) handleKeySearchEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 //   - Enter        : with no highlight, starts a `claude` session in the
 //     buffer path (creates the dir if missing).
 //   - Esc          : cancel.
-func (m *model) handleKeyNewSessionEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleKeyNewSessionEdit(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	hasHighlight := m.newSessionCompIdx >= 0 && m.newSessionCompIdx < len(m.newSessionCompletions)
 
 	commitHighlight := func() {
@@ -1160,8 +1333,8 @@ func (m *model) handleKeyNewSessionEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.newSessionCompIdx = -1
 	}
 
-	switch msg.Type {
-	case tea.KeyEnter:
+	switch key := msg.String(); {
+	case msg.Code == tea.KeyEnter:
 		if hasHighlight {
 			commitHighlight()
 			return m, nil
@@ -1172,13 +1345,13 @@ func (m *model) handleKeyNewSessionEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.newSessionCompletions = nil
 		m.newSessionCompIdx = -1
 		return m, m.startNewSession(dir)
-	case tea.KeyEsc, tea.KeyCtrlC:
+	case msg.Code == tea.KeyEscape || key == "ctrl+c":
 		m.editingNewSession = false
 		m.newSessionBuffer = ""
 		m.newSessionCompletions = nil
 		m.newSessionCompIdx = -1
 		return m, nil
-	case tea.KeyTab:
+	case key == "tab":
 		// Tab is preview only — recompute against the current buffer and
 		// advance the highlight index. The buffer is untouched until the
 		// operator commits with `/` or Enter. There's no local filesystem
@@ -1194,7 +1367,7 @@ func (m *model) handleKeyNewSessionEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.newSessionCompIdx = (m.newSessionCompIdx + 1) % len(m.newSessionCompletions)
 		return m, nil
-	case tea.KeyShiftTab:
+	case key == "shift+tab":
 		if m.remote.Enabled {
 			return m, nil
 		}
@@ -1210,25 +1383,21 @@ func (m *model) handleKeyNewSessionEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.newSessionCompIdx--
 		}
 		return m, nil
-	case tea.KeyBackspace:
+	case msg.Code == tea.KeyBackspace:
 		if r := []rune(m.newSessionBuffer); len(r) > 0 {
 			m.newSessionBuffer = string(r[:len(r)-1])
 		}
 		m.newSessionCompletions = nil
 		m.newSessionCompIdx = -1
-	case tea.KeySpace:
-		m.newSessionBuffer += " "
-		m.newSessionCompletions = nil
-		m.newSessionCompIdx = -1
-	case tea.KeyRunes:
+	case msg.Text != "":
 		// "/" is overloaded: when a candidate is highlighted it commits
 		// (just like Enter on a highlight). Otherwise it's just another
 		// path-separator character.
-		if string(msg.Runes) == "/" && hasHighlight {
+		if msg.Text == "/" && hasHighlight {
 			commitHighlight()
 			return m, nil
 		}
-		m.newSessionBuffer += string(msg.Runes)
+		m.newSessionBuffer += msg.Text
 		m.newSessionCompletions = nil
 		m.newSessionCompIdx = -1
 	}
@@ -1337,28 +1506,18 @@ func (m *model) defaultSelectionIdx() int {
 // pane (vs the session list) based on the active layout. We recompute the
 // pane geometry on demand instead of caching it because View runs every
 // frame and the terminal can resize between events.
-func (m *model) mouseInRightPane(msg tea.MouseMsg) bool {
-	headerH := countLines(m.renderHeader())
-	tabH := 0
-	if m.renderTabBar() != "" {
-		tabH = 2
-	}
-	footerH := countLines(m.renderFooter()) + 1 // +1 for the spacer above the footer
-	bodyHeight := m.height - headerH - tabH - footerH
-	if bodyHeight < 5 {
-		bodyHeight = 5
-	}
-	bodyTop := headerH + tabH
+func (m *model) mouseInRightPane(mm tea.Mouse) bool {
+	bodyTop, bodyHeight := m.bodyLayout()
 	if m.useVerticalLayout() {
 		listH, _ := m.verticalSplit(bodyHeight)
 		// +1 for the separator row between the list and the transcript.
-		return msg.Y >= bodyTop+listH+1
+		return mm.Y >= bodyTop+listH+1
 	}
 	leftW := m.width / 2
 	if leftW < 30 {
 		leftW = 30
 	}
-	return msg.X >= leftW+3 // 3-col vertical separator
+	return mm.X >= leftW+3 // 3-col vertical separator
 }
 
 // tailHalfPage approximates half the right pane's visible height. We don't
@@ -1440,9 +1599,9 @@ func (m *model) watchSummaries() {
 // handleKeyTitleEdit consumes keystrokes while the rename input is active.
 // We avoid the larger key map here so typed letters land in the buffer
 // rather than triggering global shortcuts.
-func (m *model) handleKeyTitleEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEnter:
+func (m *model) handleKeyTitleEdit(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Code == tea.KeyEnter:
 		var cmd tea.Cmd
 		if m.editingGroup {
 			cmd = m.commitGroupEdit()
@@ -1453,32 +1612,29 @@ func (m *model) handleKeyTitleEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.titleBuffer = ""
 		return m, cmd
-	case tea.KeyEsc, tea.KeyCtrlC:
+	case msg.Code == tea.KeyEscape || msg.String() == "ctrl+c":
 		m.editingTitle = false
 		m.editingGroup = false
 		m.titleBuffer = ""
 		return m, nil
-	case tea.KeyUp:
+	case msg.Code == tea.KeyUp:
 		if m.editingGroup {
 			m.pickTabCandidate(-1)
 			return m, nil
 		}
-	case tea.KeyDown:
+	case msg.Code == tea.KeyDown:
 		if m.editingGroup {
 			m.pickTabCandidate(1)
 			return m, nil
 		}
-	case tea.KeyBackspace:
+	case msg.Code == tea.KeyBackspace:
 		runes := []rune(m.titleBuffer)
 		if len(runes) > 0 {
 			m.titleBuffer = string(runes[:len(runes)-1])
 		}
 		m.groupCandIdx = -1 // typing breaks the picker selection
-	case tea.KeySpace:
-		m.titleBuffer += " "
-		m.groupCandIdx = -1
-	case tea.KeyRunes:
-		m.titleBuffer += string(msg.Runes)
+	case msg.Text != "":
+		m.titleBuffer += msg.Text
 		m.groupCandIdx = -1
 	}
 	return m, nil
@@ -1737,7 +1893,7 @@ func (m *model) decideApproval(behavior string, keep bool) tea.Cmd {
 
 // handleKeyReleaseNotes drives paneReleaseNotes: scroll the changelog,
 // 'y' to install, esc / q to back out.
-func (m *model) handleKeyReleaseNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleKeyReleaseNotes(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	body := m.releaseNotesVisibleHeight()
 	max := m.maxReleaseNotesScroll(body)
 	switch msg.String() {
@@ -1758,7 +1914,7 @@ func (m *model) handleKeyReleaseNotes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.updateNotesScroll = clamp(m.updateNotesScroll+1, 0, max)
 	case "k", "up":
 		m.updateNotesScroll = clamp(m.updateNotesScroll-1, 0, max)
-	case "ctrl+d", "pgdown", " ":
+	case "ctrl+d", "pgdown", "space":
 		m.updateNotesScroll = clamp(m.updateNotesScroll+body/2, 0, max)
 	case "ctrl+u", "pgup":
 		m.updateNotesScroll = clamp(m.updateNotesScroll-body/2, 0, max)
@@ -1793,7 +1949,7 @@ func (m *model) maxReleaseNotesScroll(visible int) int {
 	return max
 }
 
-func (m *model) handleKeyTranscript(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleKeyTranscript(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	bodyHeight := m.transcriptVisibleHeight()
 	switch msg.String() {
 	case "ctrl+c":
@@ -1805,7 +1961,7 @@ func (m *model) handleKeyTranscript(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.transcriptScroll = clamp(m.transcriptScroll+1, 0, m.maxTranscriptScroll(bodyHeight))
 	case "k", "up":
 		m.transcriptScroll = clamp(m.transcriptScroll-1, 0, m.maxTranscriptScroll(bodyHeight))
-	case "ctrl+d", "pgdown", " ":
+	case "ctrl+d", "pgdown", "space":
 		m.transcriptScroll = clamp(m.transcriptScroll+bodyHeight/2, 0, m.maxTranscriptScroll(bodyHeight))
 	case "ctrl+u", "pgup":
 		m.transcriptScroll = clamp(m.transcriptScroll-bodyHeight/2, 0, m.maxTranscriptScroll(bodyHeight))
@@ -1877,20 +2033,25 @@ type attachDoneMsg struct {
 // Update handler receives it, optionally stores the PID→ptyKey mapping for
 // promotion, then launches a StreamClient via tea.Exec.
 type ptyStartedMsg struct {
-	ptyKey    string
-	sessionID string // empty for new sessions (no id yet)
-	cwd       string
+	ptyKey      string
+	sessionID   string // empty for new sessions (no id yet)
+	cwd         string
 	createdNote string
+	// live is true when the caller wants the session in the right pane
+	// (resume via Enter) instead of a fullscreen attach.
+	live bool
 }
 
 // postPTYStart calls POST /pty/start on the local server and returns the ptyKey.
 // sessionId and resumeId may be empty for brand-new sessions.
-func postPTYStart(sessionID, resumeID, cwd string) (string, error) {
+func postPTYStart(sessionID, resumeID, cwd string, cols, rows int) (string, error) {
 	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
-	body, _ := json.Marshal(map[string]string{
+	body, _ := json.Marshal(map[string]any{
 		"sessionId": sessionID,
 		"resumeId":  resumeID,
 		"cwd":       cwd,
+		"cols":      cols,
+		"rows":      rows,
 	})
 	req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/pty/start", bytes.NewReader(body))
 	if err != nil {
@@ -1936,14 +2097,24 @@ func (m *model) attachCurrent() tea.Cmd {
 			return attachDoneMsg{err: err, msg: "switched to " + s.Pane}
 		})
 	}
+	// Already hosted here: just hand the keyboard over.
+	if live := m.liveForCurrent(); live != nil && !live.exited {
+		m.setLiveFocus(true)
+		return nil
+	}
 	sid := s.SessionID
 	cwd := s.Cwd
+	cols, rows := 0, 0
+	if g, ok := m.liveScreenGeom(); ok {
+		cols, rows = g.w, g.h
+	}
+	m.flash = "starting claude --resume " + shortID(sid) + "…"
 	return func() tea.Msg {
-		ptyKey, err := postPTYStart(sid, sid, cwd)
+		ptyKey, err := postPTYStart(sid, sid, cwd, cols, rows)
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}
-		return ptyStartedMsg{ptyKey: ptyKey, sessionID: sid}
+		return ptyStartedMsg{ptyKey: ptyKey, sessionID: sid, live: true}
 	}
 }
 
@@ -2038,6 +2209,34 @@ func remoteCD(dir string) string {
 	}
 }
 
+// attachFullscreen hands the whole terminal to the live session (raw PTY
+// relay via tea.Exec) until Ctrl+D. The right-pane stream stays connected
+// underneath; syncLive pushes the pane geometry back afterwards.
+func (m *model) attachFullscreen() tea.Cmd {
+	live := m.liveForCurrent()
+	if live == nil || live.exited {
+		m.flash = "no live screen for this session — enter starts one"
+		return nil
+	}
+	tok, _ := auth.Load()
+	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
+	sc := &attach.StreamClient{
+		SessionID: live.key,
+		Addr:      addr,
+		Token:     tok,
+	}
+	m.setLiveFocus(false)
+	return tea.Exec(sc, func(err error) tea.Msg {
+		if err != nil {
+			return attachDoneMsg{err: err}
+		}
+		if sc.Result.Detached {
+			return attachDoneMsg{msg: "back from fullscreen — claude keeps running in the right pane"}
+		}
+		return attachDoneMsg{msg: "claude session ended"}
+	})
+}
+
 // move shifts the selection. Returns a Cmd that refreshes the right pane
 // (transcript tail) immediately for the new session, instead of waiting for
 // the next tick.
@@ -2070,9 +2269,13 @@ func (m *model) jumpTo(idx int) tea.Cmd {
 	return m.loadTailCmd()
 }
 
-func (m *model) View() string {
+func (m *model) View() tea.View {
+	v := tea.NewView("")
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	if m.width == 0 {
-		return "loading..."
+		v.SetContent("loading...")
+		return v
 	}
 	header := m.renderHeader()
 	tabBar := m.renderTabBar()
@@ -2102,14 +2305,11 @@ func (m *model) View() string {
 	// Final safety net: never emit more lines than the terminal can show, or
 	// the alt-screen scrolls and the title bar disappears off the top.
 	out = clampLines(out, m.height)
-	if m.pendingBell {
-		// Emit BEL inline so Bubble Tea writes it on the same channel as the
-		// rest of the frame. Some terminals turn this into a visual flash;
-		// most beep. We clear the flag so each transition rings only once.
-		out = "\a" + out
-		m.pendingBell = false
-	}
-	return out
+	v.SetContent(out)
+	// Place the terminal's real cursor inside the live pane while it has
+	// focus — that's what lets an OS-level IME anchor its pre-edit text.
+	v.Cursor = m.liveCursor()
+	return v
 }
 
 // countLines returns the number of '\n'-separated lines in s, treating an
@@ -2222,13 +2422,16 @@ func (m *model) renderHeader() string {
 	if m.groupFilter != "" {
 		leftLabel += " " + subtitleStyle.Render("· "+m.groupFilter)
 	}
+	if m.accountFilter != "" {
+		leftLabel += " " + subtitleStyle.Render("[@"+m.accountFilter+"]")
+	}
 	if m.searchQuery != "" {
 		leftLabel += " " + pendingStyle.Render("🔍 "+shorten(m.searchQuery, 30))
 	}
 	if m.groupLocked {
 		leftLabel += " " + subtitleStyle.Render("(locked)")
 	}
-	if m.showArchived || m.groupFilter != "" || m.searchQuery != "" {
+	if m.showArchived || m.groupFilter != "" || m.accountFilter != "" || m.searchQuery != "" {
 		left = leftLabel
 		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap < 1 {
@@ -2327,6 +2530,15 @@ func (m *model) renderFooter() string {
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
 	keys := "↑/↓ sel  h/l tabs  / search  n new  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/group  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
+	if m.pane == paneSessions {
+		if live := m.liveForCurrent(); live != nil && !live.exited {
+			if m.liveFocus {
+				keys = "keys → claude  ctrl+] / ctrl+d back to dashboard  (mouse wheel scrolls claude)"
+			} else {
+				keys = "↑/↓ sel  enter / ctrl+] type into claude  F fullscreen  a/A/d allow/keep/deny  o trans  , settings  q quit"
+			}
+		}
+	}
 	if m.pane == paneSettings {
 		keys = "↑/↓ select · space toggle · enter edit · esc back"
 	}
@@ -2483,11 +2695,11 @@ func (m *model) renderReleaseNotesBody(height int) string {
 	return title + "\n" + body
 }
 
-func (m *model) handleKeySettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	specs := settings.AllSpecs()
 	if m.settingsEdit {
-		switch msg.Type {
-		case tea.KeyEnter:
+		switch {
+		case msg.Code == tea.KeyEnter:
 			cur := specs[m.settingsSel]
 			n, err := strconv.Atoi(m.settingsBuffer)
 			if err == nil {
@@ -2507,16 +2719,16 @@ func (m *model) handleKeySettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.settingsEdit = false
 			m.settingsBuffer = ""
 			return m, nil
-		case tea.KeyEsc, tea.KeyCtrlC:
+		case msg.Code == tea.KeyEscape || msg.String() == "ctrl+c":
 			m.settingsEdit = false
 			m.settingsBuffer = ""
 			return m, nil
-		case tea.KeyBackspace:
+		case msg.Code == tea.KeyBackspace:
 			if r := []rune(m.settingsBuffer); len(r) > 0 {
 				m.settingsBuffer = string(r[:len(r)-1])
 			}
-		case tea.KeyRunes:
-			for _, r := range msg.Runes {
+		case msg.Text != "":
+			for _, r := range msg.Text {
 				if r >= '0' && r <= '9' {
 					m.settingsBuffer += string(r)
 				}
@@ -2544,7 +2756,7 @@ func (m *model) handleKeySettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "G", "end":
 		m.settingsSel = len(specs) - 1
 		return m, nil
-	case " ", "enter":
+	case "space", "enter":
 		cur := specs[m.settingsSel]
 		switch cur.Kind {
 		case settings.KindBool:
@@ -2967,20 +3179,13 @@ func (m *model) renderEventsList(width, height int) string {
 		return ""
 	}
 
+	if live := m.liveForCurrent(); live != nil {
+		return m.renderLivePane(live, width, height)
+	}
+
 	header := subtitleStyle.Render(fmt.Sprintf("transcript  (%s)", shortID(m.currentSessionID())))
 
-	approvals := m.approvalsForSelected()
-	approvalSection := ""
-	approvalH := 0
-	if len(approvals) > 0 {
-		approvalSection = m.renderApprovalSection(approvals, width)
-		approvalH = strings.Count(approvalSection, "\n") + 1
-		// Cap at half the pane so the transcript stays readable.
-		if approvalH > height/2 {
-			approvalH = height / 2
-			approvalSection = clampLines(approvalSection, approvalH)
-		}
-	}
+	approvalSection, approvalH := m.approvalBlock(width, height)
 
 	transcriptH := height - 1 // header
 	if approvalH > 0 {
@@ -2996,6 +3201,23 @@ func (m *model) renderEventsList(width, height int) string {
 		out += "\n" + approvalSection
 	}
 	return lipgloss.NewStyle().Width(width).Height(height).Render(out)
+}
+
+// approvalBlock renders the pinned approval section for the selected
+// session, capped at half the pane so the transcript / live screen stays
+// readable. Returns "" and 0 when nothing is pending.
+func (m *model) approvalBlock(width, height int) (section string, lines int) {
+	approvals := m.approvalsForSelected()
+	if len(approvals) == 0 {
+		return "", 0
+	}
+	section = m.renderApprovalSection(approvals, width)
+	lines = strings.Count(section, "\n") + 1
+	if lines > height/2 {
+		lines = height / 2
+		section = clampLines(section, lines)
+	}
+	return section, lines
 }
 
 // renderSummaryBlock renders the summary as a transcript-flavored block:
