@@ -221,7 +221,11 @@ type model struct {
 	liveConnecting   string          // ptyKey whose dial is in flight
 	liveFocusPending string          // focus the pane as soon as this key connects
 	ptyAlive         map[string]bool // ptyKey → child alive, from GET /pty
-	ptyListWarned    bool            // flashed once about a server without /pty
+	// liveCache keeps the last screen of each stream we closed so that
+	// moving the selection back shows it at once while the new stream
+	// dials, instead of flashing the transcript view.
+	liveCache     map[string]*liveScreen
+	ptyListWarned bool // flashed once about a server without /pty
 }
 
 func newModel(ctx context.Context, st store.Store, remote RemoteInfo) *model {
@@ -233,6 +237,7 @@ func newModel(ctx context.Context, st store.Store, remote RemoteInfo) *model {
 		pendingPTYKeys: map[int]string{},
 		summaryWatch:   map[string]struct{}{},
 		ptyAlive:       map[string]bool{},
+		liveCache:      map[string]*liveScreen{},
 	}
 }
 
@@ -3239,6 +3244,12 @@ func (m *model) renderEventsList(width, height int) string {
 
 	if live := m.liveForCurrent(); live != nil {
 		return m.renderLivePane(live, width, height)
+	}
+	if key := m.liveWantKey(); key != "" {
+		// The stream for this session is still dialing / hasn't sent its
+		// first frame: keep the live layout (with the cached screen if we
+		// have one) rather than flashing the transcript for a frame.
+		return m.renderLivePane(m.livePlaceholder(key), width, height)
 	}
 
 	header := subtitleStyle.Render(fmt.Sprintf("transcript  (%s)", shortID(m.currentSessionID())))

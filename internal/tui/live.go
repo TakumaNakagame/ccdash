@@ -42,6 +42,8 @@ type liveScreen struct {
 	sentCols, sentRows int
 	// focusSent mirrors what the child was last told about focus.
 	focusSent bool
+	// connecting marks a placeholder rendered while the stream dials.
+	connecting bool
 }
 
 type liveConnectedMsg struct {
@@ -179,6 +181,30 @@ func (m *model) desiredLiveKey() string {
 	return ""
 }
 
+// liveWantKey is the ptyKey the right pane should be streaming right now,
+// or "" when it should show the transcript instead.
+func (m *model) liveWantKey() string {
+	// Remote mode talks to a collector on another host; its PTYs (if any)
+	// would need the remote address + token plumbed through the Store,
+	// which isn't wired yet. Keep the pane on the transcript there.
+	if m.pane == paneSessions && m.settings.AttachEnabled && !m.remote.Enabled {
+		return m.desiredLiveKey()
+	}
+	return ""
+}
+
+// livePlaceholder is what the right pane shows for key before its stream
+// delivers a frame: the last screen we saw for it, or a blank one.
+func (m *model) livePlaceholder(key string) *liveScreen {
+	if c, ok := m.liveCache[key]; ok {
+		p := *c
+		p.client = nil
+		p.connecting = true
+		return &p
+	}
+	return &liveScreen{key: key, connecting: true}
+}
+
 // liveForCurrent returns the live screen if it belongs to the selected
 // session, else nil.
 func (m *model) liveForCurrent() *liveScreen {
@@ -192,13 +218,7 @@ func (m *model) liveForCurrent() *liveScreen {
 // geometry. Called after every Update so selection changes, resizes, and
 // PTY list refreshes all funnel through one place.
 func (m *model) syncLive() tea.Cmd {
-	want := ""
-	// Remote mode talks to a collector on another host; its PTYs (if any)
-	// would need the remote address + token plumbed through the Store,
-	// which isn't wired yet. Keep the pane on the transcript there.
-	if m.pane == paneSessions && m.settings.AttachEnabled && !m.remote.Enabled {
-		want = m.desiredLiveKey()
-	}
+	want := m.liveWantKey()
 	if m.live != nil && m.live.key != want {
 		m.closeLive()
 	}
@@ -292,6 +312,12 @@ func (m *model) handleLiveConnected(msg liveConnectedMsg) tea.Cmd {
 		sentCols: g.w,
 		sentRows: g.h,
 	}
+	// Show the last known screen until the server's first (full) frame
+	// replaces it, so the pane never goes blank in between.
+	if c, ok := m.liveCache[msg.key]; ok {
+		m.live.rows = append([]string(nil), c.rows...)
+		m.live.w, m.live.h, m.live.cur = c.w, c.h, c.cur
+	}
 	if m.liveFocusPending == msg.key {
 		m.liveFocus = true
 	}
@@ -362,6 +388,11 @@ func (m *model) closeLive() {
 	}
 	if m.live.client != nil {
 		m.live.client.Close()
+	}
+	if len(m.live.rows) > 0 && !m.live.exited {
+		c := *m.live
+		c.client = nil
+		m.liveCache[c.key] = &c
 	}
 	m.live = nil
 	m.liveFocus = false
@@ -483,6 +514,8 @@ func (m *model) liveCursor() *tea.Cursor {
 func (m *model) renderLivePane(live *liveScreen, width, height int) string {
 	var hdr string
 	switch {
+	case live.connecting:
+		hdr = statusIdle.Render("⬡ live") + "  " + subtitleStyle.Render(shortID(m.currentSessionID())+" · connecting…")
 	case live.exited:
 		hdr = statusStop.Render("⬡ ended") + "  " + subtitleStyle.Render(shortID(m.currentSessionID())+" · screen frozen until the server drops it")
 	case m.liveFocus:

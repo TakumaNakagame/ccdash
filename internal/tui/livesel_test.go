@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+
+	mdl "github.com/takumanakagame/ccmanage/internal/model"
 )
 
 func TestSelectionText(t *testing.T) {
@@ -40,5 +44,29 @@ func TestHighlightRowKeepsWidth(t *testing.T) {
 	}
 	if plain := ansi.Strip(got); plain != "ab日本cd  " {
 		t.Fatalf("text changed: %q", plain)
+	}
+}
+
+// TestLivePlaceholderWhileDialing: moving onto a hosted session must keep
+// the live layout (cached screen if any) until its stream connects,
+// never flash the transcript view.
+func TestLivePlaceholderWhileDialing(t *testing.T) {
+	m := newModel(context.Background(), nil, RemoteInfo{})
+	m.settings.AttachEnabled = true
+	m.width, m.height = 160, 40
+	m.sessions = []mdl.Session{{SessionID: "aaa"}, {SessionID: "bbb"}}
+	m.ptyAlive = map[string]bool{"aaa": true, "bbb": true}
+
+	m.selSess = 1
+	out := ansi.Strip(m.renderEventsList(80, 20))
+	if !strings.Contains(out, "connecting") || strings.Contains(out, "transcript") {
+		t.Fatalf("uncached: want connecting placeholder, got:\n%s", out)
+	}
+
+	m.liveCache["aaa"] = &liveScreen{key: "aaa", rows: []string{"cached screen"}, w: 13, h: 1}
+	m.selSess = 0
+	out = ansi.Strip(m.renderEventsList(80, 20))
+	if !strings.Contains(out, "cached screen") {
+		t.Fatalf("cached: want cached rows, got:\n%s", out)
 	}
 }
