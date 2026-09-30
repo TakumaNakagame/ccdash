@@ -381,3 +381,41 @@ func TestResumeDoesNotBumpLastSeen(t *testing.T) {
 		t.Fatalf("after a fresh start last_seen = %v, want bumped", got)
 	}
 }
+
+// TestOnlyPromptsBumpLastSeen: tool traffic keeps a session's time; a
+// prompt moves it.
+func TestOnlyPromptsBumpLastSeen(t *testing.T) {
+	s, d, tok := newTestServer(t)
+	old := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+	if err := d.UpsertSession(context.Background(), &model.Session{
+		SessionID: "s2", Cwd: "/tmp/proj", Status: model.StatusIdle, LastSeen: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	get := func() time.Time {
+		t.Helper()
+		sess, ok, err := d.GetSession(context.Background(), "s2")
+		if err != nil || !ok {
+			t.Fatalf("GetSession: %v %v", ok, err)
+		}
+		return sess.LastSeen
+	}
+	do(t, s, http.MethodPost, "/hooks/pre-tool", tok, []byte(`{"session_id":"s2","cwd":"/tmp/proj","tool_name":"Bash","tool_input":{}}`))
+	do(t, s, http.MethodPost, "/hooks/notification", tok, []byte(`{"session_id":"s2","cwd":"/tmp/proj","message":"hi"}`))
+	if got := get(); !got.Equal(old) {
+		t.Fatalf("tool/notification moved last_seen to %v", got)
+	}
+	do(t, s, http.MethodPost, "/hooks/user-prompt", tok, []byte(`{"session_id":"s2","cwd":"/tmp/proj","prompt":"go"}`))
+	if got := get(); !got.After(old) {
+		t.Fatalf("prompt did not move last_seen (%v)", got)
+	}
+	// Discovery's value is authoritative, even when older.
+	if err := d.UpsertDiscoveredSession(context.Background(), &model.Session{
+		SessionID: "s2", Cwd: "/tmp/proj", Status: model.StatusIdle, LastSeen: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(); !got.Equal(old) {
+		t.Fatalf("discovery upsert did not set last_seen: %v", got)
+	}
+}

@@ -140,7 +140,36 @@ func (d *DB) migrate() error {
 	return nil
 }
 
+// UpsertSession inserts or merges a session row. last_seen only moves
+// forward (MAX), so a late or stale writer can't rewind it.
 func (d *DB) UpsertSession(ctx context.Context, s *model.Session) error {
+	return d.upsertSession(ctx, s, lastSeenMax)
+}
+
+// UpsertSessionKeepLastSeen merges metadata without touching an existing
+// row's last_seen (a new row still gets s.LastSeen, or now).
+func (d *DB) UpsertSessionKeepLastSeen(ctx context.Context, s *model.Session) error {
+	return d.upsertSession(ctx, s, lastSeenKeep)
+}
+
+// UpsertDiscoveredSession is UpsertSession for the discovery loop, whose
+// last_seen (the transcript's last prompt time) is authoritative: it
+// overwrites instead of taking the MAX, so a timestamp bumped by some
+// earlier, looser rule converges back to the real prompt time.
+func (d *DB) UpsertDiscoveredSession(ctx context.Context, s *model.Session) error {
+	return d.upsertSession(ctx, s, lastSeenSet)
+}
+
+// lastSeenMode picks how an upsert treats an existing row's last_seen.
+type lastSeenMode int
+
+const (
+	lastSeenMax  lastSeenMode = iota // only move forward
+	lastSeenSet                      // overwrite
+	lastSeenKeep                     // leave as is
+)
+
+func (d *DB) upsertSession(ctx context.Context, s *model.Session, mode lastSeenMode) error {
 	now := time.Now().UTC()
 	if s.FirstSeen.IsZero() {
 		s.FirstSeen = now
@@ -167,7 +196,7 @@ func (d *DB) UpsertSession(ctx context.Context, s *model.Session) error {
 			transcript_path = COALESCE(NULLIF(excluded.transcript_path,''), sessions.transcript_path),
 			model = COALESCE(NULLIF(excluded.model,''), sessions.model),
 			title = COALESCE(NULLIF(excluded.title,''), sessions.title),
-			last_seen = MAX(excluded.last_seen, sessions.last_seen),
+			last_seen = CASE ? WHEN 1 THEN excluded.last_seen WHEN 2 THEN sessions.last_seen ELSE MAX(excluded.last_seen, sessions.last_seen) END,
 			status = excluded.status,
 			account = COALESCE(NULLIF(excluded.account,''), sessions.account)
 	`,
@@ -175,6 +204,7 @@ func (d *DB) UpsertSession(ctx context.Context, s *model.Session) error {
 		s.WrapperPID, s.ProcPID, s.Pane,
 		s.TmuxPane, s.TmuxSession, s.TranscriptPath, s.Model, s.Title,
 		s.FirstSeen.Unix(), s.LastSeen.Unix(), string(s.Status), s.Account,
+		int(mode),
 	)
 	return err
 }

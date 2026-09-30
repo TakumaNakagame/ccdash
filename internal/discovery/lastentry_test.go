@@ -72,3 +72,32 @@ func TestTitleSkipsInjectedText(t *testing.T) {
 		t.Fatalf("title = %q", ds[0].Title)
 	}
 }
+
+// TestLastPromptSkipsNonPrompts: tool results, meta/sidechain turns and
+// injected boilerplate after the last typed prompt don't count.
+func TestLastPromptSkipsNonPrompts(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "proj")
+	_ = os.MkdirAll(dir, 0o755)
+	content := `{"type":"user","sessionId":"s3","timestamp":"2026-09-01T10:00:00Z","message":{"role":"user","content":"first"}}` + "\n" +
+		`{"type":"user","sessionId":"s3","timestamp":"2026-09-02T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"typed prompt"}]}}` + "\n" +
+		`{"type":"assistant","sessionId":"s3","timestamp":"2026-09-02T10:01:00Z"}` + "\n" +
+		`{"type":"user","sessionId":"s3","timestamp":"2026-09-02T10:02:00Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"ok"}]}}` + "\n" +
+		`{"type":"user","sessionId":"s3","isMeta":true,"timestamp":"2026-09-02T10:03:00Z","message":{"role":"user","content":"meta"}}` + "\n" +
+		`{"type":"user","sessionId":"s3","isSidechain":true,"timestamp":"2026-09-02T10:04:00Z","message":{"role":"user","content":"subagent"}}` + "\n" +
+		`{"type":"user","sessionId":"s3","timestamp":"2026-09-02T10:05:00Z","message":{"role":"user","content":"<local-command-stdout>x</local-command-stdout>"}}` + "\n" +
+		`{"type":"assistant","sessionId":"s3","timestamp":"2026-09-02T10:06:00Z"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "s3.jsonl"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ds, err := Scan(context.Background(), base)
+	if err != nil || len(ds) != 1 {
+		t.Fatalf("Scan = %v, %v", ds, err)
+	}
+	if want := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC); !ds[0].LastPrompt.Equal(want) {
+		t.Fatalf("LastPrompt = %v, want %v", ds[0].LastPrompt, want)
+	}
+	if want := time.Date(2026, 9, 2, 10, 6, 0, 0, time.UTC); !ds[0].LastModified.Equal(want) {
+		t.Fatalf("LastModified = %v, want %v", ds[0].LastModified, want)
+	}
+}

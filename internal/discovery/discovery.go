@@ -30,8 +30,12 @@ type Discovered struct {
 	// LastModified is when the session last did something: the newest
 	// entry timestamp in the transcript, falling back to the file mtime.
 	// Not the mtime itself — `claude --resume` touches the file without
-	// adding entries, so merely opening a session would bump it.
+	// adding entries, so merely opening a session would bump it. Drives
+	// the active/idle status.
 	LastModified time.Time
+	// LastPrompt is when the operator last typed a prompt (falls back to
+	// LastModified). This is the session's time in the list.
+	LastPrompt time.Time
 }
 
 // Scan walks ~/.claude/projects looking for transcript files. The base
@@ -92,7 +96,7 @@ func readTranscript(path string) (Discovered, error) {
 	if err != nil {
 		return d, err
 	}
-	d.LastModified = lastEntryTime(path, info)
+	d.LastModified, d.LastPrompt = tailTimes(path, info)
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -128,7 +132,7 @@ func readTranscript(path string) (Discovered, error) {
 	return d, nil
 }
 
-// tailCache memoizes lastEntryTime per transcript: discovery rescans
+// tailCache memoizes the tail scan per transcript: discovery rescans
 // every ~10 s and most files haven't changed since the last pass.
 var (
 	tailMu    sync.Mutex
@@ -136,37 +140,43 @@ var (
 )
 
 type tailEntry struct {
-	size  int64
-	mtime time.Time
-	ts    time.Time
+	size       int64
+	mtime      time.Time
+	lastEntry  time.Time
+	lastPrompt time.Time
 }
 
-// lastEntryTime returns the newest top-level "timestamp" in the
-// transcript, reading only the tail of the file (transcripts can be tens
-// of MB). Falls back to the mtime when no timestamp is found.
-func lastEntryTime(path string, info os.FileInfo) time.Time {
+// tailTimes returns the newest entry timestamp and the newest real user
+// prompt timestamp in the transcript, reading only its tail (transcripts
+// can be tens of MB). lastEntry falls back to the mtime, lastPrompt to
+// lastEntry, when not found.
+func tailTimes(path string, info os.FileInfo) (lastEntry, lastPrompt time.Time) {
 	tailMu.Lock()
 	c, ok := tailCache[path]
 	tailMu.Unlock()
 	if ok && c.size == info.Size() && c.mtime.Equal(info.ModTime()) {
-		return c.ts
+		return c.lastEntry, c.lastPrompt
 	}
-	ts := scanTailTimestamp(path, info.Size())
-	if ts.IsZero() {
-		ts = info.ModTime()
+	lastEntry, lastPrompt = scanTail(path, info.Size())
+	if lastEntry.IsZero() {
+		lastEntry = info.ModTime()
+	}
+	if lastPrompt.IsZero() {
+		lastPrompt = lastEntry
 	}
 	tailMu.Lock()
-	tailCache[path] = tailEntry{size: info.Size(), mtime: info.ModTime(), ts: ts}
+	tailCache[path] = tailEntry{size: info.Size(), mtime: info.ModTime(), lastEntry: lastEntry, lastPrompt: lastPrompt}
 	tailMu.Unlock()
-	return ts
+	return lastEntry, lastPrompt
 }
 
-// scanTailTimestamp reads growing windows from the end of the file until
-// a line with a timestamp turns up (a trailing tool result can be large).
-func scanTailTimestamp(path string, size int64) time.Time {
+// scanTail reads growing windows from the end of the file until it has
+// seen both an entry timestamp and a real prompt (a long tool run after
+// the last prompt can be megabytes). Capped at 16 MiB.
+func scanTail(path string, size int64) (lastEntry, lastPrompt time.Time) {
 	f, err := os.Open(path)
 	if err != nil {
-		return time.Time{}
+		return
 	}
 	defer f.Close()
 	for win := int64(64 << 10); ; win *= 4 {
@@ -176,24 +186,73 @@ func scanTailTimestamp(path string, size int64) time.Time {
 		}
 		buf := make([]byte, size-off)
 		if _, err := f.ReadAt(buf, off); err != nil && !errors.Is(err, io.EOF) {
-			return time.Time{}
+			return
 		}
 		lines := strings.Split(string(buf), "\n")
 		if off > 0 {
 			lines = lines[1:] // first line is likely cut mid-way
 		}
-		for i := len(lines) - 1; i >= 0; i-- {
-			var e struct {
-				Timestamp time.Time `json:"timestamp"`
+		for i := len(lines) - 1; i >= 0 && lastPrompt.IsZero(); i-- {
+			ts, prompt := lineTimes([]byte(lines[i]))
+			if ts.IsZero() {
+				continue
 			}
-			if json.Unmarshal([]byte(lines[i]), &e) == nil && !e.Timestamp.IsZero() {
-				return e.Timestamp
+			if lastEntry.IsZero() {
+				lastEntry = ts
+			}
+			if prompt {
+				lastPrompt = ts
 			}
 		}
-		if off == 0 || win >= 16<<20 {
-			return time.Time{}
+		if !lastPrompt.IsZero() || off == 0 || win >= 16<<20 {
+			return
 		}
 	}
+}
+
+// lineTimes parses one transcript line: its timestamp, and whether it is
+// a prompt the operator actually typed — a main-thread user turn with
+// text that isn't Claude Code boilerplate (tool results, meta entries,
+// local-command output and sidechain turns don't count).
+func lineTimes(line []byte) (time.Time, bool) {
+	var e struct {
+		Type        string    `json:"type"`
+		Timestamp   time.Time `json:"timestamp"`
+		IsMeta      bool      `json:"isMeta"`
+		IsSidechain bool      `json:"isSidechain"`
+		Message     struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(line, &e) != nil || e.Timestamp.IsZero() {
+		return time.Time{}, false
+	}
+	if e.Type != "user" || e.IsMeta || e.IsSidechain || len(e.Message.Content) == 0 {
+		return e.Timestamp, false
+	}
+	return e.Timestamp, hasTypedText(e.Message.Content)
+}
+
+// hasTypedText reports whether a user message content (a string, or an
+// array of blocks) carries operator-typed text.
+func hasTypedText(content json.RawMessage) bool {
+	if content[0] == '"' {
+		var s string
+		return json.Unmarshal(content, &s) == nil && strings.TrimSpace(s) != "" && !transcript.IsNoise(s)
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(content, &blocks) != nil {
+		return false
+	}
+	for _, b := range blocks {
+		if b.Type == "text" && strings.TrimSpace(b.Text) != "" && !transcript.IsNoise(b.Text) {
+			return true
+		}
+	}
+	return false
 }
 
 // applyLine pulls metadata or a title out of a single transcript line.

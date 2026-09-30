@@ -352,9 +352,10 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 				Branch:         d.GitBranch,
 				Title:          d.Title,
 				TranscriptPath: d.TranscriptPath,
-				LastSeen:       d.LastModified,
-				Status:         classifyStatus(d.LastModified, now, ""),
-				Account:        acc.Name,
+				// The list shows when the operator last prompted.
+				LastSeen: d.LastPrompt,
+				Status:   classifyStatus(d.LastModified, now, ""),
+				Account:  acc.Name,
 			}
 			if entry, ok := procs[d.SessionID]; ok {
 				sess.ProcPID = entry.PID
@@ -378,7 +379,7 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 					sess.Commit = g.Commit
 				}
 			}
-			if err := s.db.UpsertSession(ctx, sess); err != nil {
+			if err := s.db.UpsertDiscoveredSession(ctx, sess); err != nil {
 				log.Printf("discovery upsert %s: %v", d.SessionID, err)
 			}
 		}
@@ -492,14 +493,17 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 // already-running Claude sessions (which started before `ccdash install-hooks`
 // and therefore never emit a SessionStart event) still appear in the dashboard
 // once they fire any other hook.
+// ensureSession never moves last_seen: a session's time in the list is
+// its last prompt (handleUserPrompt, and discovery from the transcript),
+// not tool traffic or notifications.
 func (s *Server) ensureSession(r *http.Request, p *hookPayload, status model.SessionStatus) error {
-	return s.ensureSessionAt(r, p, status, true)
+	return s.ensureSessionAt(r, p, status, false)
 }
 
-// ensureSessionAt is ensureSession with control over last_seen: bump=false
-// leaves an existing row's timestamp alone (upsert keeps MAX(last_seen));
-// a brand-new row gets a placeholder that discovery corrects from the
-// transcript within one pass.
+// ensureSessionAt is ensureSession with control over last_seen: bump=true
+// moves it to now; bump=false leaves an existing row's timestamp alone (a
+// brand-new row starts at now, and discovery then sets it to the
+// transcript's last prompt time).
 func (s *Server) ensureSessionAt(r *http.Request, p *hookPayload, status model.SessionStatus, bump bool) error {
 	if p.SessionID == "" {
 		return nil
@@ -524,14 +528,15 @@ func (s *Server) ensureSessionAt(r *http.Request, p *hookPayload, status model.S
 		Model:          p.Model,
 		Status:         status,
 	}
-	if !bump {
-		sess.LastSeen = time.Unix(1, 0)
-	}
+
 	if sess.Repo == "" && sess.Branch == "" && sess.Commit == "" && sess.Cwd != "" {
 		g := gitinfo.Lookup(r.Context(), sess.Cwd)
 		sess.Repo = g.Repo
 		sess.Branch = g.Branch
 		sess.Commit = g.Commit
+	}
+	if !bump {
+		return s.db.UpsertSessionKeepLastSeen(r.Context(), sess)
 	}
 	return s.db.UpsertSession(r.Context(), sess)
 }
@@ -560,7 +565,7 @@ func (s *Server) handleUserPrompt(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	s.ensureSession(r, p, model.StatusActive)
+	s.ensureSessionAt(r, p, model.StatusActive, true) // a prompt is what moves last_seen
 	summary := truncate(strings.TrimSpace(p.Prompt), 200)
 	_, _ = s.db.AppendEvent(r.Context(), &model.Event{
 		SessionID: p.SessionID,
