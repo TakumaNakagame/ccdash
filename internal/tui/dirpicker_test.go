@@ -13,6 +13,7 @@ import (
 
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/takumanakagame/ccmanage/internal/store"
 )
 
 func pickerModel(t *testing.T) (*model, string) {
@@ -180,3 +181,57 @@ func TestSettingsHelpShownOnce(t *testing.T) {
 		t.Fatal("path edit footer lacks the tab hint")
 	}
 }
+
+// TestPathSettingSuggestions: entering edit on the path setting shows the
+// candidates at once, right under the input and only as wide as needed;
+// ↓ + Enter substitutes, Enter again saves.
+func TestPathSettingSuggestions(t *testing.T) {
+	m, _ := pickerModel(t)
+	m.store = &memStore{kv: map[string]string{}}
+	m.pane = paneSettings
+	for i, s := range settings.AllSpecs() {
+		if s.Path {
+			m.settingsSel = i
+		}
+	}
+	m.handleKeySettings(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.settingsEdit || m.settingsBuffer != "~/" {
+		t.Fatalf("edit=%v buf=%q, want editing from ~/", m.settingsEdit, m.settingsBuffer)
+	}
+	out := ansi.Strip(m.renderSettingsBody(200))
+	rows := strings.Split(out, "\n")
+	inputRow := -1
+	for i, r := range rows {
+		if strings.Contains(r, "New session directory") {
+			inputRow = i
+		}
+	}
+	if inputRow < 0 || !strings.Contains(rows[inputRow+2], "other/") && !strings.Contains(rows[inputRow+2], "work/") {
+		t.Fatalf("no suggestions right under the input:\n%s", strings.Join(rows[max(0, inputRow):min(len(rows), inputRow+6)], "\n"))
+	}
+	if w := ansi.StringWidth(strings.TrimRight(rows[inputRow+1], " ")); w >= m.width {
+		t.Fatalf("suggestion box spans the full width (%d cols)", w)
+	}
+
+	m.handleKeySettings(tea.KeyPressMsg{Text: "w", Code: 'w'})
+	m.handleKeySettings(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.handleKeySettings(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.settingsBuffer != "~/work/" || !m.settingsEdit {
+		t.Fatalf("after pick: buf=%q edit=%v", m.settingsBuffer, m.settingsEdit)
+	}
+	m.handleKeySettings(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.settingsEdit || m.settings.NewSessionDir != "~/work/" {
+		t.Fatalf("after save: edit=%v dir=%q", m.settingsEdit, m.settings.NewSessionDir)
+	}
+}
+
+// memStore implements just the settings methods of store.Store; any
+// other call panics on the nil embedded interface.
+type memStore struct {
+	store.Store
+	kv map[string]string
+}
+
+func (s *memStore) GetSetting(_ context.Context, k string) (string, error) { return s.kv[k], nil }
+func (s *memStore) SetSetting(_ context.Context, k, v string) error        { s.kv[k] = v; return nil }
+func (s *memStore) AllSettings(context.Context) (map[string]string, error) { return s.kv, nil }

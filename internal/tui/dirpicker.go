@@ -132,18 +132,15 @@ func listDirCandidates(buf string) []dirCand {
 	return append(append(out, prefix...), contains...)
 }
 
-// completePath is shell-style Tab completion for a directory path: a
-// single match is filled in (with a trailing /), several extend the input
-// to their longest common prefix. Returns the new input and the matching
-// directory names (for display).
-func completePath(buf string) (string, []string) {
+// pathMatches lists subdirectories whose name starts with the partial
+// last segment of buf, like a shell would complete (the picker's
+// substring matches would shrink the common prefix to nothing).
+// Exact-case matches win; case-insensitive ones are the fallback.
+func pathMatches(buf string) []dirCand {
 	partial := ""
 	if !strings.HasSuffix(buf, "/") {
 		partial = filepath.Base(buf)
 	}
-	// Prefix matches only, like a shell (the picker's substring matches
-	// would shrink the common prefix to nothing). Exact-case matches win;
-	// fall back to case-insensitive ones when there are none.
 	var exact, folded []dirCand
 	for _, c := range listDirCandidates(buf) {
 		switch {
@@ -154,10 +151,18 @@ func completePath(buf string) (string, []string) {
 			folded = append(folded, c)
 		}
 	}
-	cands := exact
-	if len(cands) == 0 {
-		cands = folded
+	if len(exact) > 0 {
+		return exact
 	}
+	return folded
+}
+
+// completePath is shell-style Tab completion for a directory path: a
+// single match is filled in (with a trailing /), several extend the input
+// to their longest common prefix. Returns the new input and the matching
+// directory names.
+func completePath(buf string) (string, []string) {
+	cands := pathMatches(buf)
 	names := make([]string, len(cands))
 	for i, c := range cands {
 		names[i] = c.label
@@ -180,6 +185,35 @@ func completePath(buf string) (string, []string) {
 		return common, names
 	}
 	return buf, names
+}
+
+// pathSuggestBox renders the live candidate list shown under a path
+// setting being edited: a small box sized to its content, with the
+// highlighted row (sel, -1 = none) marked.
+func pathSuggestBox(cands []dirCand, sel, maxW int) string {
+	const maxRows = 8
+	var lines []string
+	start := 0
+	if sel >= maxRows {
+		start = sel - maxRows + 1
+	}
+	for i := start; i < len(cands) && i < start+maxRows; i++ {
+		row := "  " + cands[i].label
+		if i == sel {
+			row = pendingStyle.Render("▶ " + cands[i].label)
+		}
+		lines = append(lines, runewidth.Truncate(row, maxW, "…"))
+	}
+	if len(cands) == 0 {
+		lines = append(lines, subtitleStyle.Render("(no matching directory)"))
+	} else if more := len(cands) - (start + len(lines)); more > 0 {
+		lines = append(lines, subtitleStyle.Render("  …"+strconv.Itoa(more)+" more"))
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Padding(0, 1).
+		Render(strings.Join(lines, "\n"))
 }
 
 // recentCwds returns distinct session working directories, most recently

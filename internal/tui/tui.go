@@ -171,6 +171,7 @@ type model struct {
 	settingsSel    int
 	settingsEdit   bool   // editing an int / string value inline
 	settingsBuffer string // edit buffer (digits only for ints)
+	settingsPick   int    // highlighted path suggestion while editing a Path setting; -1 = none
 
 	// transcript view state
 	transcriptMessages []transcript.Message
@@ -2606,7 +2607,7 @@ func (m *model) renderFooter() string {
 		if m.settingsEdit {
 			keys = "enter save · esc cancel"
 			if settings.AllSpecs()[m.settingsSel].Path {
-				keys = "tab complete · enter save · esc cancel"
+				keys = "↑↓ pick · tab complete · enter save · esc cancel"
 			}
 		}
 	}
@@ -2787,7 +2788,7 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	specs := settings.AllSpecs()
 	if m.settingsEdit {
 		switch {
-		case msg.Code == tea.KeyEnter && specs[m.settingsSel].Kind == settings.KindString:
+		case msg.Code == tea.KeyEnter && specs[m.settingsSel].Kind == settings.KindString && !(specs[m.settingsSel].Path && m.settingsPick >= 0):
 			cur := specs[m.settingsSel]
 			next, err := settings.Set(m.ctx, m.store, m.settings, cur.Key, strings.TrimSpace(m.settingsBuffer))
 			if err == nil {
@@ -2798,7 +2799,7 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.settingsEdit = false
 			m.settingsBuffer = ""
 			return m, nil
-		case msg.Code == tea.KeyEnter:
+		case msg.Code == tea.KeyEnter && specs[m.settingsSel].Kind != settings.KindString:
 			cur := specs[m.settingsSel]
 			n, err := strconv.Atoi(m.settingsBuffer)
 			if err == nil {
@@ -2822,23 +2823,33 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.settingsEdit = false
 			m.settingsBuffer = ""
 			return m, nil
-		case msg.String() == "tab" && specs[m.settingsSel].Path:
-			var names []string
-			m.settingsBuffer, names = completePath(m.settingsBuffer)
-			switch {
-			case len(names) == 0:
-				m.flash = "no matching directory"
-			case len(names) > 1:
-				m.flash = strings.Join(names, "  ")
-			default:
-				m.flash = ""
+		case specs[m.settingsSel].Path && (msg.String() == "down" || msg.String() == "up"):
+			if n := len(pathMatches(m.settingsBuffer)); n > 0 {
+				d := 1
+				if msg.String() == "up" {
+					d = -1
+				}
+				if m.settingsPick < 0 && d < 0 {
+					m.settingsPick = n - 1
+				} else {
+					m.settingsPick = ((m.settingsPick+d)%n + n) % n
+				}
 			}
+		case specs[m.settingsSel].Path && (msg.String() == "tab" || (msg.Code == tea.KeyEnter && m.settingsPick >= 0)):
+			if cands := pathMatches(m.settingsBuffer); m.settingsPick >= 0 && m.settingsPick < len(cands) {
+				m.settingsBuffer = cands[m.settingsPick].path
+			} else {
+				m.settingsBuffer, _ = completePath(m.settingsBuffer)
+			}
+			m.settingsPick = -1
 		case msg.Code == tea.KeyBackspace:
 			if r := []rune(m.settingsBuffer); len(r) > 0 {
 				m.settingsBuffer = string(r[:len(r)-1])
 			}
+			m.settingsPick = -1
 		case msg.Text != "":
 			m.settingsBuffer += filterSettingsInput(specs[m.settingsSel], msg.Text)
+			m.settingsPick = -1
 		}
 		return m, nil
 	}
@@ -2880,6 +2891,11 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case settings.KindString:
 			m.settingsEdit = true
 			m.settingsBuffer = settings.Get(m.settings, cur.Key).(string)
+			m.settingsPick = -1
+			if cur.Path && m.settingsBuffer == "" {
+				// Start from ~/ so suggestions show right away.
+				m.settingsBuffer = "~/"
+			}
 		case settings.KindAction:
 			if cur.Apply != nil {
 				next, err := cur.Apply(m.ctx, m.store, m.settings)
@@ -2913,10 +2929,15 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// settingsValueCol is where a settings row's value starts: marker (2) +
+// %-32s label + 2 spaces.
+const settingsValueCol = 36
+
 func (m *model) renderSettingsBody(height int) string {
 	specs := settings.AllSpecs()
 	header := titleStyle.Render("settings") + "  " + subtitleStyle.Render("(persists across runs)")
 	var rows []string
+	selEnd := 0 // rows index just past the selected setting (and its suggestions)
 	for i, s := range specs {
 		marker := "  "
 		if i == m.settingsSel {
@@ -2990,12 +3011,29 @@ func (m *model) renderSettingsBody(height int) string {
 			labelLine = selectedRow.Render(padRight(labelLine, m.width))
 		}
 		rows = append(rows, labelLine)
+		if s.Path && m.settingsEdit && i == m.settingsSel {
+			// Live suggestions right under the input, in the value column.
+			indent := strings.Repeat(" ", settingsValueCol)
+			box := pathSuggestBox(pathMatches(m.settingsBuffer), m.settingsPick, max(20, min(60, m.width-settingsValueCol-4)))
+			for _, l := range strings.Split(box, "\n") {
+				rows = append(rows, indent+l)
+			}
+		}
+		if i == m.settingsSel {
+			selEnd = len(rows)
+		}
 		rows = append(rows, subtitleStyle.Render("    "+s.Help))
 		rows = append(rows, "")
 	}
 	// Key help lives in the shared footer (renderFooter), not here.
-	body := strings.Join(rows, "\n")
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", body)
+	lines := append([]string{header, ""}, rows...)
+	selEnd += 2
+	// Scroll so the selected row (and its suggestions) stay on screen.
+	if height > 0 && len(lines) > height && selEnd > height {
+		start := min(selEnd-height, len(lines)-height)
+		lines = lines[start:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *model) renderSessionsBody(height int) string {
