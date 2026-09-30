@@ -469,7 +469,9 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.ensureSession(r, p, model.StatusActive); err != nil {
+	// Resuming only opens the session — don't let that move it to the
+	// top of the list. Fresh starts and clears are real activity.
+	if err := s.ensureSessionAt(r, p, model.StatusActive, p.Source != "resume"); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -491,6 +493,14 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 // and therefore never emit a SessionStart event) still appear in the dashboard
 // once they fire any other hook.
 func (s *Server) ensureSession(r *http.Request, p *hookPayload, status model.SessionStatus) error {
+	return s.ensureSessionAt(r, p, status, true)
+}
+
+// ensureSessionAt is ensureSession with control over last_seen: bump=false
+// leaves an existing row's timestamp alone (upsert keeps MAX(last_seen));
+// a brand-new row gets a placeholder that discovery corrects from the
+// transcript within one pass.
+func (s *Server) ensureSessionAt(r *http.Request, p *hookPayload, status model.SessionStatus, bump bool) error {
 	if p.SessionID == "" {
 		return nil
 	}
@@ -514,6 +524,9 @@ func (s *Server) ensureSession(r *http.Request, p *hookPayload, status model.Ses
 		Model:          p.Model,
 		Status:         status,
 	}
+	if !bump {
+		sess.LastSeen = time.Unix(1, 0)
+	}
 	if sess.Repo == "" && sess.Branch == "" && sess.Commit == "" && sess.Cwd != "" {
 		g := gitinfo.Lookup(r.Context(), sess.Cwd)
 		sess.Repo = g.Repo
@@ -529,7 +542,9 @@ func (s *Server) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	s.ensureSession(r, p, model.StatusStopped)
+	// Closing a session isn't activity either (often it was only opened
+	// to look at it).
+	s.ensureSessionAt(r, p, model.StatusStopped, false)
 	_, _ = s.db.AppendEvent(r.Context(), &model.Event{
 		SessionID: p.SessionID,
 		EventType: model.EventSessionEnd,

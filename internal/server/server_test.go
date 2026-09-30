@@ -14,6 +14,7 @@ import (
 
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/model"
+	"time"
 )
 
 // newTestServer opens a fresh temp SQLite DB, points $XDG_STATE_HOME at a
@@ -341,5 +342,42 @@ func TestListenAddrs(t *testing.T) {
 
 	if _, err := listenAddrs("no-port"); err == nil {
 		t.Error("listenAddrs without a port should error")
+	}
+}
+
+// TestResumeDoesNotBumpLastSeen: opening (resume) and closing a session
+// are not activity, so they must not move it to the top of the list; a
+// real prompt still does.
+func TestResumeDoesNotBumpLastSeen(t *testing.T) {
+	s, d, tok := newTestServer(t)
+	old := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+	if err := d.UpsertSession(context.Background(), &model.Session{
+		SessionID: "s1", Cwd: "/tmp/proj", Status: model.StatusIdle, LastSeen: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lastSeen := func() time.Time {
+		t.Helper()
+		ss, err := d.ListSessions(context.Background(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, x := range ss {
+			if x.SessionID == "s1" {
+				return x.LastSeen
+			}
+		}
+		t.Fatal("s1 missing")
+		return time.Time{}
+	}
+
+	do(t, s, http.MethodPost, "/hooks/session-start", tok, []byte(`{"session_id":"s1","source":"resume","cwd":"/tmp/proj"}`))
+	do(t, s, http.MethodPost, "/hooks/session-end", tok, []byte(`{"session_id":"s1","cwd":"/tmp/proj"}`))
+	if got := lastSeen(); !got.Equal(old) {
+		t.Fatalf("after resume+end last_seen = %v, want unchanged %v", got, old)
+	}
+	do(t, s, http.MethodPost, "/hooks/session-start", tok, []byte(`{"session_id":"s1","source":"startup","cwd":"/tmp/proj"}`))
+	if got := lastSeen(); !got.After(old) {
+		t.Fatalf("after a fresh start last_seen = %v, want bumped", got)
 	}
 }

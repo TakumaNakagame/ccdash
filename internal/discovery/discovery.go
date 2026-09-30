@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/takumanakagame/ccmanage/internal/redact"
@@ -25,7 +26,11 @@ type Discovered struct {
 	GitBranch      string
 	Title          string
 	TranscriptPath string
-	LastModified   time.Time
+	// LastModified is when the session last did something: the newest
+	// entry timestamp in the transcript, falling back to the file mtime.
+	// Not the mtime itself — `claude --resume` touches the file without
+	// adding entries, so merely opening a session would bump it.
+	LastModified time.Time
 }
 
 // Scan walks ~/.claude/projects looking for transcript files. The base
@@ -86,7 +91,7 @@ func readTranscript(path string) (Discovered, error) {
 	if err != nil {
 		return d, err
 	}
-	d.LastModified = info.ModTime()
+	d.LastModified = lastEntryTime(path, info)
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -120,6 +125,74 @@ func readTranscript(path string) (Discovered, error) {
 		d.SessionID = base
 	}
 	return d, nil
+}
+
+// tailCache memoizes lastEntryTime per transcript: discovery rescans
+// every ~10 s and most files haven't changed since the last pass.
+var (
+	tailMu    sync.Mutex
+	tailCache = map[string]tailEntry{}
+)
+
+type tailEntry struct {
+	size  int64
+	mtime time.Time
+	ts    time.Time
+}
+
+// lastEntryTime returns the newest top-level "timestamp" in the
+// transcript, reading only the tail of the file (transcripts can be tens
+// of MB). Falls back to the mtime when no timestamp is found.
+func lastEntryTime(path string, info os.FileInfo) time.Time {
+	tailMu.Lock()
+	c, ok := tailCache[path]
+	tailMu.Unlock()
+	if ok && c.size == info.Size() && c.mtime.Equal(info.ModTime()) {
+		return c.ts
+	}
+	ts := scanTailTimestamp(path, info.Size())
+	if ts.IsZero() {
+		ts = info.ModTime()
+	}
+	tailMu.Lock()
+	tailCache[path] = tailEntry{size: info.Size(), mtime: info.ModTime(), ts: ts}
+	tailMu.Unlock()
+	return ts
+}
+
+// scanTailTimestamp reads growing windows from the end of the file until
+// a line with a timestamp turns up (a trailing tool result can be large).
+func scanTailTimestamp(path string, size int64) time.Time {
+	f, err := os.Open(path)
+	if err != nil {
+		return time.Time{}
+	}
+	defer f.Close()
+	for win := int64(64 << 10); ; win *= 4 {
+		off := size - win
+		if off < 0 {
+			off = 0
+		}
+		buf := make([]byte, size-off)
+		if _, err := f.ReadAt(buf, off); err != nil && !errors.Is(err, io.EOF) {
+			return time.Time{}
+		}
+		lines := strings.Split(string(buf), "\n")
+		if off > 0 {
+			lines = lines[1:] // first line is likely cut mid-way
+		}
+		for i := len(lines) - 1; i >= 0; i-- {
+			var e struct {
+				Timestamp time.Time `json:"timestamp"`
+			}
+			if json.Unmarshal([]byte(lines[i]), &e) == nil && !e.Timestamp.IsZero() {
+				return e.Timestamp
+			}
+		}
+		if off == 0 || win >= 16<<20 {
+			return time.Time{}
+		}
+	}
 }
 
 // applyLine pulls metadata or a title out of a single transcript line.
