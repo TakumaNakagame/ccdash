@@ -11,6 +11,7 @@ import (
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/vt"
 
 	"github.com/takumanakagame/ccmanage/internal/attach"
 	"github.com/takumanakagame/ccmanage/internal/screen"
@@ -156,5 +157,55 @@ func TestScreenStreamRoundTrip(t *testing.T) {
 		case <-deadline:
 			t.Fatal("echoed key never appeared in a frame")
 		}
+	}
+}
+
+// TestNormalizeKeyEncodesShiftedText drives normalizeKey through a real
+// x/vt emulator: Shift+letter used to be dropped because the encoder only
+// emits printable keys with Mod == 0.
+func TestNormalizeKeyEncodesShiftedText(t *testing.T) {
+	cases := []struct {
+		name string
+		key  uv.Key
+		want string
+	}{
+		{"shift letter", uv.Key{Code: 'a', ShiftedCode: 'A', Text: "A", Mod: uv.ModShift}, "A"},
+		{"shift symbol", uv.Key{Code: '1', ShiftedCode: '!', Text: "!", Mod: uv.ModShift}, "!"},
+		{"caps lock", uv.Key{Code: 'b', Text: "B", Mod: uv.ModCapsLock}, "B"},
+		{"plain", uv.Key{Code: 'c', Text: "c"}, "c"},
+		{"multi rune", uv.Key{Code: uv.KeyExtended, Text: "日本"}, "日本"},
+		{"ctrl passes through", uv.Key{Code: 'c', Mod: uv.ModCtrl}, "\x03"},
+		{"shift tab passes through", uv.Key{Code: uv.KeyTab, Mod: uv.ModShift}, "\x1b[Z"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			emu := vt.NewEmulator(80, 24)
+			// emu.SendKey writes into an unbuffered pipe, so keep reading
+			// until every byte we expect has arrived.
+			got := make(chan string, 1)
+			go func() {
+				var acc []byte
+				buf := make([]byte, 64)
+				for len(acc) < len(tc.want) {
+					n, err := emu.Read(buf)
+					acc = append(acc, buf[:n]...)
+					if err != nil {
+						break
+					}
+				}
+				got <- string(acc)
+			}()
+			for _, k := range normalizeKey(tc.key) {
+				emu.SendKey(k)
+			}
+			select {
+			case s := <-got:
+				if s != tc.want {
+					t.Fatalf("got %q, want %q", s, tc.want)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("no output from emulator")
+			}
+		})
 	}
 }

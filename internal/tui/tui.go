@@ -118,6 +118,9 @@ type model struct {
 	titleBuffer   string
 	groupCandIdx  int    // index into filteredGroupCandidates(); -1 == "no pick yet"
 	groupFilter   string // "" = All; otherwise repo / cwd basename
+	// groupSel remembers the selected session ID per group so switching
+	// tabs returns the cursor to where the operator left it.
+	groupSel      map[string]string
 	searchQuery   string // "" = no filter; case-insensitive substring search
 	accountFilter string // "" = all accounts; otherwise account name (from accounts.json)
 
@@ -987,9 +990,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "q":
 		return m, m.quit()
 	case "j", "down":
-		return m, m.move(1)
+		return m, m.moveWrap(1)
 	case "k", "up":
-		return m, m.move(-1)
+		return m, m.moveWrap(-1)
 	case "g", "home":
 		return m, m.jumpTo(0)
 	case "G", "end":
@@ -1478,14 +1481,47 @@ func (m *model) cycleGroup(delta int) tea.Cmd {
 		}
 	}
 	idx = (idx + delta + len(projects)) % len(projects)
+	m.rememberSelection()
 	m.groupFilter = projects[idx]
 	m.applyGroupFilter()
-	m.selSess = m.defaultSelectionIdx()
+	if !m.restoreSelection() {
+		m.selSess = m.defaultSelectionIdx()
+	}
 	m.sessScroll = 0
 	m.tailScroll = 0
 	m.tailPath = ""
 	m.tailMtime = time.Time{}
 	return m.loadTailCmd()
+}
+
+// rememberSelection records the current session as the cursor position
+// for the active group, so cycleGroup can come back to it later.
+func (m *model) rememberSelection() {
+	id := m.currentSessionID()
+	if id == "" {
+		return
+	}
+	if m.groupSel == nil {
+		m.groupSel = map[string]string{}
+	}
+	m.groupSel[m.groupFilter] = id
+}
+
+// restoreSelection moves the cursor to the session remembered for the
+// active group. Returns false when nothing is remembered or the session
+// is no longer in the list.
+func (m *model) restoreSelection() bool {
+	id, ok := m.groupSel[m.groupFilter]
+	if !ok {
+		return false
+	}
+	for i, s := range m.sessions {
+		if s.SessionID == id {
+			m.selSess = i
+			return true
+		}
+	}
+	return false
 }
 
 // defaultSelectionIdx returns the cursor position to land on when the
@@ -2255,6 +2291,17 @@ func (m *model) move(delta int) tea.Cmd {
 	return nil
 }
 
+// moveWrap is move for keyboard navigation: stepping past either end
+// wraps around to the other. Mouse wheel keeps the clamping move so a
+// long scroll doesn't spin through the list.
+func (m *model) moveWrap(delta int) tea.Cmd {
+	n := len(m.sessions)
+	if n <= 1 {
+		return nil
+	}
+	return m.jumpTo(((m.selSess+delta)%n + n) % n)
+}
+
 func (m *model) jumpTo(idx int) tea.Cmd {
 	if len(m.sessions) == 0 {
 		return nil
@@ -2529,7 +2576,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  h/l tabs  / search  n new  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/group  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
+	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/group  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
 	if m.pane == paneSessions {
 		if live := m.liveForCurrent(); live != nil && !live.exited {
 			if m.liveFocus {

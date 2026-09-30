@@ -434,7 +434,9 @@ func (e *ptyEntry) applyInput(in screen.Input) {
 		}
 		e.emuMu.Lock()
 		if !e.exited.Load() {
-			e.emu.SendKey(uv.KeyPressEvent(*in.Key))
+			for _, k := range normalizeKey(*in.Key) {
+				e.emu.SendKey(k)
+			}
 		}
 		e.emuMu.Unlock()
 	case screen.InputTypePaste:
@@ -465,6 +467,26 @@ func (e *ptyEntry) applyInput(in screen.Input) {
 		}
 		e.emuMu.Unlock()
 	}
+}
+
+// textMods are modifiers that don't change what a printable key means:
+// the character itself is already in Key.Text.
+const textMods = uv.ModShift | uv.ModCapsLock | uv.ModNumLock | uv.ModScrollLock
+
+// normalizeKey turns a key that produced text into plain unmodified key
+// presses, one per rune. x/vt's encoder only emits printable keys whose
+// Mod is 0, so Shift+A (Code 'a', Text "A", Mod Shift) would otherwise
+// be dropped. Keys carrying Ctrl/Alt/etc. — or no text — pass through
+// unchanged so the emulator's control-sequence table still handles them.
+func normalizeKey(k uv.Key) []uv.KeyPressEvent {
+	if k.Text == "" || k.Mod&^textMods != 0 {
+		return []uv.KeyPressEvent{uv.KeyPressEvent(k)}
+	}
+	out := make([]uv.KeyPressEvent, 0, len(k.Text))
+	for _, r := range k.Text {
+		out = append(out, uv.KeyPressEvent{Code: r, Text: string(r)})
+	}
+	return out
 }
 
 // ptyInfo is one row of GET /pty.
