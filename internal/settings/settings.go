@@ -57,6 +57,13 @@ type Settings struct {
 	// NewSessionDir is where the `n` directory picker starts. Empty means
 	// the home directory. May use ~/.
 	NewSessionDir string
+
+	// PaneSplit is the horizontal layout's left:right ratio: "50/50" or
+	// the compact "30/70" (narrow session list, wide right pane).
+	PaneSplit string
+	// TimeFormat renders session times as "relative" (4m, 2h, 3d) or
+	// "absolute" (09/30 18:45).
+	TimeFormat string
 }
 
 const (
@@ -81,6 +88,8 @@ const (
 	keySummaryTimeoutSec    = "summary_timeout_sec"
 	keyRefreshIntervalMs    = "refresh_interval_ms"
 	keyNewSessionDir        = "new_session_dir"
+	keyPaneSplit            = "pane_split"
+	keyTimeFormat           = "time_format"
 )
 
 // Defaults returns the baseline values used whenever a key is missing.
@@ -99,6 +108,9 @@ func Defaults() Settings {
 		TailBudgetKB:      256,
 		SummaryTimeoutSec: 180,
 		RefreshIntervalMs: 1000,
+
+		PaneSplit:  "50/50",
+		TimeFormat: "relative",
 	}
 }
 
@@ -133,6 +145,16 @@ func loadPairs(out *Settings) []loadPair {
 		{keySummaryTimeoutSec, func(v string) { out.SummaryTimeoutSec = parseInt(v, out.SummaryTimeoutSec) }},
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
 		{keyNewSessionDir, func(v string) { out.NewSessionDir = v }},
+		{keyPaneSplit, func(v string) {
+			if v == "50/50" || v == "30/70" {
+				out.PaneSplit = v
+			}
+		}},
+		{keyTimeFormat, func(v string) {
+			if v == "relative" || v == "absolute" {
+				out.TimeFormat = v
+			}
+		}},
 	}
 }
 
@@ -257,6 +279,8 @@ func AllSpecs() []Spec {
 		{Key: keyBellOnPending, Label: "Bell on pending", Help: "Ring the terminal bell when the pending count goes from 0 to >0", Kind: KindBool},
 		{Key: keyNewestAtBottom, Label: "Newest at bottom", Help: "Show the newest session at the bottom of the list (matches the transcript tail orientation)", Kind: KindBool},
 		{Key: keyLayoutMode, Label: "Vertical layout", Help: "Auto = pick from terminal width (vertical when narrow). On = always vertical. Off = always horizontal (side-by-side).", Kind: KindEnum, Options: []string{"auto", "on", "off"}},
+		{Key: keyPaneSplit, Label: "Pane split (left/right)", Help: "Horizontal layout width ratio. 30/70 = compact session list with a wide right pane.", Kind: KindEnum, Options: []string{"50/50", "30/70"}},
+		{Key: keyTimeFormat, Label: "Session time", Help: "How the session list shows each session's last prompt time: relative (4m, 2h) or absolute (09/30 18:45).", Kind: KindEnum, Options: []string{"relative", "absolute"}},
 		{Key: keyVerticalAutoCols, Label: "Vertical auto threshold (cols)", Help: "Width in columns below which auto-layout flips to vertical. Lower = stay horizontal longer; higher = go vertical sooner.", Kind: KindInt, Min: 40, Max: 240},
 		// Risk-bearing toggles
 		{Key: keyApproveEnabled, Label: "Approval blocking", Help: "When OFF, ccdash never holds PermissionRequest hooks — Claude prompts you in the terminal as it would without ccdash, and the a/A/d shortcuts are disabled", Kind: KindBool},
@@ -327,6 +351,10 @@ func Get(s Settings, key string) any {
 		return s.RefreshIntervalMs
 	case keyNewSessionDir:
 		return s.NewSessionDir
+	case keyPaneSplit:
+		return s.PaneSplit
+	case keyTimeFormat:
+		return s.TimeFormat
 	}
 	return nil
 }
@@ -371,6 +399,10 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.RefreshIntervalMs = value.(int)
 	case keyNewSessionDir:
 		s.NewSessionDir = value.(string)
+	case keyPaneSplit:
+		s.PaneSplit = value.(string)
+	case keyTimeFormat:
+		s.TimeFormat = value.(string)
 	}
 	return s, persist(ctx, st, key, value)
 }

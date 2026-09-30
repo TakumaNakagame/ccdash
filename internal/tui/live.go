@@ -136,10 +136,7 @@ func (m *model) rightPaneGeom() (g paneGeom, ok bool) {
 		listH, rightH := m.verticalSplit(bodyHeight)
 		return paneGeom{x: 0, y: bodyTop + listH + 1, w: m.width, h: rightH}, true
 	}
-	leftW := m.width / 2
-	if leftW < 30 {
-		leftW = 30
-	}
+	leftW := m.leftPaneWidth()
 	rightW := m.width - leftW - 3
 	if rightW < 20 {
 		rightW = 20

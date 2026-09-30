@@ -1588,11 +1588,7 @@ func (m *model) mouseInRightPane(mm tea.Mouse) bool {
 		// +1 for the separator row between the list and the transcript.
 		return mm.Y >= bodyTop+listH+1
 	}
-	leftW := m.width / 2
-	if leftW < 30 {
-		leftW = 30
-	}
-	return mm.X >= leftW+3 // 3-col vertical separator
+	return mm.X >= m.leftPaneWidth()+3 // 3-col vertical separator
 }
 
 // tailHalfPage approximates half the right pane's visible height. We don't
@@ -3036,16 +3032,27 @@ func (m *model) renderSettingsBody(height int) string {
 	return strings.Join(lines, "\n")
 }
 
+// leftPaneWidth is the session list's width in the horizontal layout,
+// per the pane-split setting. Every geometry consumer (render, mouse
+// zoning, live pane sizing) must use this so they agree to the cell.
+func (m *model) leftPaneWidth() int {
+	w := m.width / 2
+	if m.settings.PaneSplit == "30/70" {
+		w = m.width * 3 / 10
+	}
+	if w < 30 {
+		w = 30
+	}
+	return w
+}
+
 func (m *model) renderSessionsBody(height int) string {
 	if m.useVerticalLayout() {
 		return m.renderSessionsBodyVertical(height)
 	}
 	// Reserve 3 cols for " │ " separator.
 	const sepW = 3
-	leftWidth := m.width / 2
-	if leftWidth < 30 {
-		leftWidth = 30
-	}
+	leftWidth := m.leftPaneWidth()
 	rightWidth := m.width - leftWidth - sepW
 	if rightWidth < 20 {
 		rightWidth = 20
@@ -3249,14 +3256,16 @@ func sameYMD(a, b time.Time) bool {
 // Line 1 leads with status, age, and the title (the most useful identifier
 // for the operator). Line 2 carries supporting metadata in dim text.
 func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string {
-	const indent = "         " // 9 columns, aligns with where title starts on line 1
+	age := m.sessionTime(s.LastSeen)
+	// Line-2 indent aligns with where the title starts on line 1:
+	// marker(1) + " "(1) + dot(1) + " "(1) + age + " "(1).
+	indent := strings.Repeat(" ", 5+runewidth.StringWidth(age))
 
 	marker := " "
 	if selected {
 		marker = "▶"
 	}
 	statusDot := renderStatusDot(s.Status, m.animTick)
-	age := runewidth.FillRight(humanDuration(time.Since(s.LastSeen)), 4)
 
 	title := s.DisplayTitle()
 	if title == "" {
@@ -3268,8 +3277,7 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if s.PendingCount > 0 {
 		title = "⚠ " + title
 	}
-	// Line 1 chrome: marker(1) + " "(1) + dot(1) + " "(1) + age(4) + " "(1) = 9 cols
-	titleBudget := width - 9
+	titleBudget := width - runewidth.StringWidth(indent)
 	if titleBudget < 10 {
 		titleBudget = 10
 	}
@@ -3976,6 +3984,19 @@ func ttyForPID(pid int) string {
 		}
 	}
 	return ""
+}
+
+// sessionTime renders a session's list time per the time-format
+// setting, padded to a fixed width so the titles line up: relative
+// ("4m  ", 4 cols) or absolute ("09/30 18:45", 11 cols).
+func (m *model) sessionTime(t time.Time) string {
+	if m.settings.TimeFormat == "absolute" {
+		if t.IsZero() {
+			return runewidth.FillRight("-", 11)
+		}
+		return t.Local().Format("01/02 15:04")
+	}
+	return runewidth.FillRight(humanDuration(time.Since(t)), 4)
 }
 
 func humanDuration(d time.Duration) string {

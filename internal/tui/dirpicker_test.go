@@ -235,3 +235,53 @@ type memStore struct {
 func (s *memStore) GetSetting(_ context.Context, k string) (string, error) { return s.kv[k], nil }
 func (s *memStore) SetSetting(_ context.Context, k, v string) error        { s.kv[k] = v; return nil }
 func (s *memStore) AllSettings(context.Context) (map[string]string, error) { return s.kv, nil }
+
+func TestPaneSplitCompact(t *testing.T) {
+	m := newModel(context.Background(), nil, RemoteInfo{})
+	m.width, m.height = 200, 40
+	m.settings.LayoutMode = "horizontal"
+	m.sessions = []mdl.Session{{SessionID: "s1"}} // rightPaneGeom needs a selection
+	if got := m.leftPaneWidth(); got != 100 {
+		t.Fatalf("50/50: left = %d", got)
+	}
+	m.settings.PaneSplit = "30/70"
+	if got := m.leftPaneWidth(); got != 60 {
+		t.Fatalf("30/70: left = %d", got)
+	}
+	// Live pane geometry and mouse zoning follow the same split.
+	g, ok := m.rightPaneGeom()
+	if !ok || g.x != 63 {
+		t.Fatalf("right pane x = %d (ok=%v), want 63", g.x, ok)
+	}
+	if m.mouseInRightPane(tea.Mouse{X: 62}) || !m.mouseInRightPane(tea.Mouse{X: 63}) {
+		t.Fatal("mouse zoning disagrees with the split")
+	}
+	// Narrow terminals keep the 30-col minimum.
+	m.width = 80
+	if got := m.leftPaneWidth(); got != 30 {
+		t.Fatalf("narrow: left = %d", got)
+	}
+}
+
+func TestSessionRowAbsoluteTime(t *testing.T) {
+	m := newModel(context.Background(), nil, RemoteInfo{})
+	ts := time.Date(2026, 9, 30, 18, 45, 0, 0, time.Local)
+	s := mdl.Session{SessionID: "abcdef12", Title: "hello", Cwd: "/w/proj", LastSeen: ts}
+
+	m.settings.TimeFormat = "absolute"
+	rows := strings.Split(ansi.Strip(m.renderSessionRow(s, false, 60)), "\n")
+	if !strings.Contains(rows[0], "09/30 18:45 hello") {
+		t.Fatalf("line 1 = %q", rows[0])
+	}
+	// Line 2 starts under the title.
+	title := ansi.StringWidth(rows[0][:strings.Index(rows[0], "hello")])
+	if meta := len(rows[1]) - len(strings.TrimLeft(rows[1], " ")); title != meta {
+		t.Fatalf("title at col %d, meta at col %d", title, meta)
+	}
+
+	m.settings.TimeFormat = "relative"
+	rows = strings.Split(ansi.Strip(m.renderSessionRow(s, false, 60)), "\n")
+	if strings.Contains(rows[0], "09/30") {
+		t.Fatalf("relative mode shows an absolute time: %q", rows[0])
+	}
+}
