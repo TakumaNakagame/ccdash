@@ -122,6 +122,7 @@ type model struct {
 	// tabs returns the cursor to where the operator left it.
 	groupSel map[string]string
 	liveSel  liveSelection // drag selection in the live pane
+	spawnTag int           // hook tag of an `n` spawn awaiting its row; 0 = none
 	// removedSel remembers where the cursor was when x took the selected
 	// session out of the current view, so the refresh that drops it keeps
 	// the cursor at that row instead of jumping to defaultSelectionIdx.
@@ -346,12 +347,16 @@ func (m *model) spawnNewSession(expanded string, created bool) tea.Cmd {
 	if created {
 		createdNote = " (created)"
 	}
+	cols, rows := 0, 0
+	if g, ok := m.liveScreenGeom(); ok {
+		cols, rows = g.w, g.h
+	}
 	return func() tea.Msg {
-		ptyKey, err := postPTYStart("", "", cwd, 0, 0)
+		ptyKey, tag, err := postPTYStart("", "", cwd, cols, rows)
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}
-		return ptyStartedMsg{ptyKey: ptyKey, cwd: cwd, createdNote: createdNote}
+		return ptyStartedMsg{ptyKey: ptyKey, cwd: cwd, createdNote: createdNote, live: true, tag: tag}
 	}
 }
 
@@ -726,6 +731,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.removedSel.sid = ""
 		}
+		m.selectSpawned()
 		if m.selSess >= len(m.sessions) {
 			m.selSess = len(m.sessions) - 1
 		}
@@ -817,6 +823,14 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.ptyAlive[msg.ptyKey] = true
+		if msg.live && msg.sessionID == "" {
+			// Fresh `n` spawn: there's no row to select until claude's
+			// first hook lands. sessionsMsg picks the row by its tag
+			// (selectSpawned), and the live pane focuses once it streams.
+			m.spawnTag = msg.tag
+			m.flash = "starting claude in " + msg.cwd + msg.createdNote + "… (appears in the right pane)"
+			return m, nil
+		}
 		if msg.live {
 			// Resume path: the server now hosts the session; syncLive (run
 			// after this Update) dials the screen stream and we focus it
@@ -1525,6 +1539,42 @@ func (m *model) cycleGroup(delta int) tea.Cmd {
 	return m.loadTailCmd()
 }
 
+// selectSpawned moves the cursor onto the session started by `n` once its
+// row shows up (matched by the server's hook tag in WrapperPID), switching
+// to its tab if needed, and arranges for the live pane to take focus.
+func (m *model) selectSpawned() {
+	if m.spawnTag == 0 {
+		return
+	}
+	var target *mdl.Session
+	for i := range m.allSessions {
+		if m.allSessions[i].WrapperPID == m.spawnTag {
+			target = &m.allSessions[i]
+			break
+		}
+	}
+	if target == nil {
+		return
+	}
+	sid := target.SessionID
+	if !m.groupLocked && m.groupFilter != "" && groupOf(*target) != m.groupFilter {
+		m.rememberSelection()
+		m.groupFilter = groupOf(*target)
+	}
+	if m.searchQuery != "" && !sessionMatchesQuery(*target, strings.ToLower(m.searchQuery)) {
+		m.searchQuery = ""
+	}
+	m.applyGroupFilter()
+	for i, s := range m.sessions {
+		if s.SessionID == sid {
+			m.selSess = i
+			m.liveFocusPending = sid
+			break
+		}
+	}
+	m.spawnTag = 0
+}
+
 // rememberSelection records the current session as the cursor position
 // for the active group, so cycleGroup can come back to it later.
 func (m *model) rememberSelection() {
@@ -2108,13 +2158,17 @@ type ptyStartedMsg struct {
 	cwd         string
 	createdNote string
 	// live is true when the caller wants the session in the right pane
-	// (resume via Enter) instead of a fullscreen attach.
+	// (resume via Enter, or a fresh `n` spawn) instead of a fullscreen
+	// attach.
 	live bool
+	// tag is the server's hook tag for a fresh spawn: the new session's
+	// row carries it as WrapperPID, which is how we find and select it.
+	tag int
 }
 
 // postPTYStart calls POST /pty/start on the local server and returns the ptyKey.
 // sessionId and resumeId may be empty for brand-new sessions.
-func postPTYStart(sessionID, resumeID, cwd string, cols, rows int) (string, error) {
+func postPTYStart(sessionID, resumeID, cwd string, cols, rows int) (string, int, error) {
 	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
 	body, _ := json.Marshal(map[string]any{
 		"sessionId": sessionID,
@@ -2125,7 +2179,7 @@ func postPTYStart(sessionID, resumeID, cwd string, cols, rows int) (string, erro
 	})
 	req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/pty/start", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if tok, err := auth.Load(); err == nil {
@@ -2133,20 +2187,21 @@ func postPTYStart(sessionID, resumeID, cwd string, cols, rows int) (string, erro
 	}
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
-		return "", fmt.Errorf("pty/start: %w", err)
+		return "", 0, fmt.Errorf("pty/start: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("pty/start: %s: %s", resp.Status, strings.TrimSpace(string(b)))
+		return "", 0, fmt.Errorf("pty/start: %s: %s", resp.Status, strings.TrimSpace(string(b)))
 	}
 	var out struct {
 		PtyKey string `json:"ptyKey"`
+		Tag    int    `json:"tag"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("pty/start decode: %w", err)
+		return "", 0, fmt.Errorf("pty/start decode: %w", err)
 	}
-	return out.PtyKey, nil
+	return out.PtyKey, out.Tag, nil
 }
 
 // attachCurrent decides how to attach to the selected session and returns the
@@ -2180,7 +2235,7 @@ func (m *model) attachCurrent() tea.Cmd {
 	}
 	m.flash = "starting claude --resume " + shortID(sid) + "…"
 	return func() tea.Msg {
-		ptyKey, err := postPTYStart(sid, sid, cwd, cols, rows)
+		ptyKey, _, err := postPTYStart(sid, sid, cwd, cols, rows)
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}

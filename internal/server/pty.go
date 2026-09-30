@@ -108,12 +108,20 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 	if req.Cwd != "" {
 		c.Dir = req.Cwd
 	}
-	c.Env = attach.SafeEnv()
+	s.ptyMu.Lock()
+	s.ptyTagSeq++
+	tag := ptyTagBase + s.ptyTagSeq
+	s.ptyMu.Unlock()
+	// The installed hooks forward $CCDASH_WRAPPER_PID as a header, so the
+	// child's first hook tells us which session this PTY holds. (A later
+	// duplicate wins in exec's env dedup, overriding any inherited value.)
+	c.Env = append(attach.SafeEnv(), fmt.Sprintf("CCDASH_WRAPPER_PID=%d", tag))
 
 	sess := attach.New(c)
 	// The key is finalized after Start (we need the PID), but the entry
 	// must exist before Start so the sink is wired for the first bytes.
 	entry := newPTYEntry(sess, "", req.Cols, req.Rows)
+	entry.tag = tag
 	if err := sess.Start(); err != nil {
 		http.Error(w, fmt.Sprintf("pty start: %v", err), http.StatusInternalServerError)
 		return
@@ -147,7 +155,7 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"ptyKey": ptyKey})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ptyKey": ptyKey, "tag": tag})
 }
 
 // handlePTYStream upgrades the HTTP connection to a raw bidirectional PTY
@@ -270,6 +278,30 @@ func (s *Server) handlePTYRegister(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ptyTagBase is where the per-PTY hook tags start. They travel in the
+// X-Ccdash-Wrapper-Pid slot (the only integer the installed hooks already
+// forward), so they sit far above any real PID to stay distinguishable.
+const ptyTagBase = 1 << 30
+
+// aliasPTYByTag registers sessionID as a key for the PTY spawned with tag.
+// No-op when the tag is unknown (e.g. the PTY already exited).
+func (s *Server) aliasPTYByTag(tag int, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	s.ptyMu.Lock()
+	defer s.ptyMu.Unlock()
+	if _, ok := s.ptyMap[sessionID]; ok {
+		return
+	}
+	for _, e := range s.ptyMap {
+		if e.tag == tag {
+			s.ptyMap[sessionID] = e
+			return
+		}
+	}
 }
 
 // handlePTYClose terminates the PTY session and removes it from the map.

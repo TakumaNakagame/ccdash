@@ -64,6 +64,7 @@ type ptyEntry struct {
 	// which never takes the lock.
 	emuMu     sync.Mutex
 	emu       *vt.Emulator
+	tag       int            // hook tag handed to the child; see ptyTagBase
 	sf        strFilter      // scrubs C1-looking bytes out of OSC etc.; see strfilter.go
 	trace     io.WriteCloser // raw child output dump; nil unless CCDASH_PTY_TRACE_DIR is set
 	curHidden bool

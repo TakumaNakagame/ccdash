@@ -51,6 +51,8 @@ type Server struct {
 	// sessionID once discovery picks it up.
 	ptyMu  sync.Mutex
 	ptyMap map[string]*ptyEntry
+	// ptyTagSeq hands out hook tags for spawned PTYs; see ptyTagBase.
+	ptyTagSeq int
 
 	// cancelFn stops the server's context (graceful shutdown).
 	cancelFn context.CancelFunc
@@ -492,6 +494,12 @@ func (s *Server) ensureSession(r *http.Request, p *hookPayload, status model.Ses
 		return nil
 	}
 	pid, _ := strconv.Atoi(headerVal(r, "X-Ccdash-Wrapper-Pid"))
+	if pid >= ptyTagBase {
+		// A claude we spawned in a PTY: key that PTY by its session ID
+		// right away so the TUI can mirror it without waiting for
+		// discovery to learn the PID.
+		s.aliasPTYByTag(pid, p.SessionID)
+	}
 	sess := &model.Session{
 		SessionID:      p.SessionID,
 		Cwd:            p.Cwd,

@@ -94,3 +94,36 @@ func TestArchiveKeepsCursorRow(t *testing.T) {
 		t.Fatalf("cursor on %q, want %q (same row)", got, "b")
 	}
 }
+
+// TestSelectSpawnedByTag: after `n`, the new session's row (carrying the
+// server's hook tag as WrapperPID) gets the cursor — switching tabs if
+// the current one hides it — and is queued for live focus.
+func TestSelectSpawnedByTag(t *testing.T) {
+	m := newModel(context.Background(), nil, RemoteInfo{})
+	m.Update(sessionsMsg([]mdl.Session{
+		{SessionID: "old1", UserGroup: "g1"},
+		{SessionID: "old2", UserGroup: "g1"},
+	}))
+	m.groupFilter = "g1"
+	m.applyGroupFilter()
+	m.Update(ptyStartedMsg{ptyKey: "pid-1", cwd: "/tmp/x", live: true, tag: 1<<30 + 7})
+	if m.spawnTag == 0 {
+		t.Fatal("spawnTag not recorded")
+	}
+	// Row not there yet: nothing moves.
+	m.Update(sessionsMsg([]mdl.Session{{SessionID: "old1", UserGroup: "g1"}, {SessionID: "old2", UserGroup: "g1"}}))
+	if m.spawnTag == 0 {
+		t.Fatal("spawnTag consumed before the row appeared")
+	}
+	m.Update(sessionsMsg([]mdl.Session{
+		{SessionID: "new", UserGroup: "g2", WrapperPID: 1<<30 + 7},
+		{SessionID: "old1", UserGroup: "g1"},
+		{SessionID: "old2", UserGroup: "g1"},
+	}))
+	if got := m.currentSessionID(); got != "new" {
+		t.Fatalf("cursor on %q, want new", got)
+	}
+	if m.groupFilter != "g2" || m.liveFocusPending != "new" || m.spawnTag != 0 {
+		t.Fatalf("group=%q focusPending=%q spawnTag=%d", m.groupFilter, m.liveFocusPending, m.spawnTag)
+	}
+}

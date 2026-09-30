@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -207,5 +208,70 @@ func TestNormalizeKeyEncodesShiftedText(t *testing.T) {
 				t.Fatal("no output from emulator")
 			}
 		})
+	}
+}
+
+// TestPTYTagAliasesSession: a spawned child sees its hook tag in
+// CCDASH_WRAPPER_PID, and a hook carrying that tag keys the PTY by the
+// session ID so the TUI can mirror a fresh `n` spawn right away.
+func TestPTYTagAliasesSession(t *testing.T) {
+	old := newPTYCommand
+	newPTYCommand = func(args ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", `printf 'tag=%s' "$CCDASH_WRAPPER_PID"; cat`)
+	}
+	t.Cleanup(func() { newPTYCommand = old })
+
+	s := &Server{ptyMap: map[string]*ptyEntry{}}
+	ts := httptest.NewServer(http.HandlerFunc(s.handlePTY))
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/pty/start", "application/json", strings.NewReader(`{"cols":40,"rows":3}`))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	var started struct {
+		PtyKey string
+		Tag    int
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&started); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	resp.Body.Close()
+	t.Cleanup(func() {
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/pty/"+started.PtyKey, nil)
+		if r, err := http.DefaultClient.Do(req); err == nil {
+			r.Body.Close()
+		}
+	})
+	if started.Tag < ptyTagBase {
+		t.Fatalf("tag = %d, want >= %d", started.Tag, ptyTagBase)
+	}
+
+	s.ptyMu.Lock()
+	entry := s.ptyMap[started.PtyKey]
+	s.ptyMu.Unlock()
+	want := fmt.Sprintf("tag=%d", started.Tag)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		rows, _, _, _ := entry.snapshot()
+		if strings.HasPrefix(ansi.Strip(rows[0]), want) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("child env: row 0 = %q, want prefix %q", ansi.Strip(rows[0]), want)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	s.aliasPTYByTag(started.Tag+1, "other") // unknown tag: no-op
+	s.aliasPTYByTag(started.Tag, "sess-1")
+	s.ptyMu.Lock()
+	got, other := s.ptyMap["sess-1"], s.ptyMap["other"]
+	s.ptyMu.Unlock()
+	if got != entry {
+		t.Fatal("sess-1 not aliased to the spawned PTY")
+	}
+	if other != nil {
+		t.Fatal("unknown tag created an alias")
 	}
 }
