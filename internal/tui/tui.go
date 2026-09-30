@@ -120,10 +120,17 @@ type model struct {
 	groupFilter   string // "" = All; otherwise repo / cwd basename
 	// groupSel remembers the selected session ID per group so switching
 	// tabs returns the cursor to where the operator left it.
-	groupSel      map[string]string
-	liveSel       liveSelection // drag selection in the live pane
-	searchQuery   string        // "" = no filter; case-insensitive substring search
-	accountFilter string        // "" = all accounts; otherwise account name (from accounts.json)
+	groupSel map[string]string
+	liveSel  liveSelection // drag selection in the live pane
+	// removedSel remembers where the cursor was when x took the selected
+	// session out of the current view, so the refresh that drops it keeps
+	// the cursor at that row instead of jumping to defaultSelectionIdx.
+	removedSel struct {
+		sid string
+		idx int
+	}
+	searchQuery   string // "" = no filter; case-insensitive substring search
+	accountFilter string // "" = all accounts; otherwise account name (from accounts.json)
 
 	settings settings.Settings
 
@@ -711,7 +718,13 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if !found {
-			m.selSess = m.defaultSelectionIdx()
+			if prev != "" && prev == m.removedSel.sid {
+				// x just removed it: stay on the same row (clamped below).
+				m.selSess = m.removedSel.idx
+			} else {
+				m.selSess = m.defaultSelectionIdx()
+			}
+			m.removedSel.sid = ""
 		}
 		if m.selSess >= len(m.sessions) {
 			m.selSess = len(m.sessions) - 1
@@ -1254,8 +1267,10 @@ func (m *model) applyGroupFilter() {
 		src = out
 	}
 	if m.settings.NewestAtBottom {
-		// Reverse in place — caller no longer relies on the original
-		// ordering of m.sessions, just on the displayed indices.
+		// Reverse a copy: with no filter active src still aliases
+		// m.allSessions, and reversing that in place would flip the
+		// order back on the next applyGroupFilter without a refresh.
+		src = append([]mdl.Session(nil), src...)
 		for i, j := 0, len(src)-1; i < j; i, j = i+1, j-1 {
 			src[i], src[j] = src[j], src[i]
 		}
@@ -1782,6 +1797,9 @@ func (m *model) toggleArchiveCurrent() tea.Cmd {
 	s := m.sessions[m.selSess]
 	want := !s.Archived
 	sid := s.SessionID
+	// Either way the session leaves the list being shown (active view
+	// loses it on archive, archived view on unarchive).
+	m.removedSel.sid, m.removedSel.idx = sid, m.selSess
 	verb := "archived"
 	if !want {
 		verb = "unarchived"

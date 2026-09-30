@@ -70,3 +70,27 @@ func TestLivePlaceholderWhileDialing(t *testing.T) {
 		t.Fatalf("cached: want cached rows, got:\n%s", out)
 	}
 }
+
+// TestArchiveKeepsCursorRow: after x drops the selected session from the
+// list, the cursor stays on the same row instead of jumping to the
+// newest end (the bottom with NewestAtBottom).
+func TestArchiveKeepsCursorRow(t *testing.T) {
+	m := newModel(context.Background(), nil, RemoteInfo{})
+	m.settings.NewestAtBottom = true
+	all := []mdl.Session{{SessionID: "a"}, {SessionID: "b"}, {SessionID: "c"}, {SessionID: "d"}}
+	// DB order is newest first (a..d); NewestAtBottom renders rows d,c,b,a.
+	m.Update(sessionsMsg(all))
+	if got := m.sessions[0].SessionID; got != "d" {
+		t.Fatalf("row 0 = %q, want d (newest at bottom)", got)
+	}
+	m.applyGroupFilter() // must not flip the order back
+	if got := m.sessions[0].SessionID; got != "d" {
+		t.Fatalf("after re-filter row 0 = %q, want d", got)
+	}
+	m.selSess = 1 // "c"
+	_ = m.toggleArchiveCurrent()
+	m.Update(sessionsMsg([]mdl.Session{all[0], all[1], all[3]}))
+	if got := m.currentSessionID(); got != "b" {
+		t.Fatalf("cursor on %q, want %q (same row)", got, "b")
+	}
+}
