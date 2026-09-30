@@ -209,6 +209,9 @@ type Spec struct {
 	Apply ActionFunc
 	// Options enumerate the legal values for KindEnum, in cycle order.
 	Options []string
+	// Path marks a KindString value as a directory path, so the settings
+	// page offers Tab completion while editing it.
+	Path bool
 }
 
 type Kind int
@@ -265,7 +268,7 @@ func AllSpecs() []Spec {
 		{Key: keyTailBudgetKB, Label: "Right-pane tail budget (KB)", Help: "Bytes of transcript loaded for the inline live tail; bigger == more context, slower", Kind: KindInt, Min: 32, Max: 8192},
 		{Key: keySummaryTimeoutSec, Label: "Summary timeout (s)", Help: "How long to wait for `claude -p` to produce a summary before giving up", Kind: KindInt, Min: 30, Max: 600},
 		{Key: keyRefreshIntervalMs, Label: "Refresh interval (ms)", Help: "How often the TUI re-queries the DB for new state", Kind: KindInt, Min: 250, Max: 10000},
-		{Key: keyNewSessionDir, Label: "New session directory", Help: "Where the 'n' directory picker starts (~/ allowed). Empty = home directory.", Kind: KindString},
+		{Key: keyNewSessionDir, Label: "New session directory", Help: "Where the 'n' directory picker starts (~/ allowed). Empty = home directory.", Kind: KindString, Path: true},
 	}
 }
 

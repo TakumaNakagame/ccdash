@@ -132,6 +132,56 @@ func listDirCandidates(buf string) []dirCand {
 	return append(append(out, prefix...), contains...)
 }
 
+// completePath is shell-style Tab completion for a directory path: a
+// single match is filled in (with a trailing /), several extend the input
+// to their longest common prefix. Returns the new input and the matching
+// directory names (for display).
+func completePath(buf string) (string, []string) {
+	partial := ""
+	if !strings.HasSuffix(buf, "/") {
+		partial = filepath.Base(buf)
+	}
+	// Prefix matches only, like a shell (the picker's substring matches
+	// would shrink the common prefix to nothing). Exact-case matches win;
+	// fall back to case-insensitive ones when there are none.
+	var exact, folded []dirCand
+	for _, c := range listDirCandidates(buf) {
+		switch {
+		case c.label == "../":
+		case strings.HasPrefix(c.label, partial):
+			exact = append(exact, c)
+		case strings.HasPrefix(strings.ToLower(c.label), strings.ToLower(partial)):
+			folded = append(folded, c)
+		}
+	}
+	cands := exact
+	if len(cands) == 0 {
+		cands = folded
+	}
+	names := make([]string, len(cands))
+	for i, c := range cands {
+		names[i] = c.label
+	}
+	switch len(cands) {
+	case 0:
+		return buf, nil
+	case 1:
+		return cands[0].path, names
+	}
+	common := strings.TrimSuffix(cands[0].path, "/")
+	for _, c := range cands[1:] {
+		p := strings.TrimSuffix(c.path, "/")
+		for !strings.HasPrefix(p, common) {
+			_, size := utf8.DecodeLastRuneInString(common)
+			common = common[:len(common)-size]
+		}
+	}
+	if len([]rune(common)) > len([]rune(buf)) {
+		return common, names
+	}
+	return buf, names
+}
+
 // recentCwds returns distinct session working directories, most recently
 // active first.
 func (m *model) recentCwds() []string {

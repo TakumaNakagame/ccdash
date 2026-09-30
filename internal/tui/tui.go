@@ -2603,6 +2603,12 @@ func (m *model) renderFooter() string {
 	}
 	if m.pane == paneSettings {
 		keys = "↑/↓ select · space toggle · enter edit · esc back"
+		if m.settingsEdit {
+			keys = "enter save · esc cancel"
+			if settings.AllSpecs()[m.settingsSel].Path {
+				keys = "tab complete · enter save · esc cancel"
+			}
+		}
 	}
 	if m.showArchived {
 		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  q quit"
@@ -2816,6 +2822,17 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.settingsEdit = false
 			m.settingsBuffer = ""
 			return m, nil
+		case msg.String() == "tab" && specs[m.settingsSel].Path:
+			var names []string
+			m.settingsBuffer, names = completePath(m.settingsBuffer)
+			switch {
+			case len(names) == 0:
+				m.flash = "no matching directory"
+			case len(names) > 1:
+				m.flash = strings.Join(names, "  ")
+			default:
+				m.flash = ""
+			}
 		case msg.Code == tea.KeyBackspace:
 			if r := []rune(m.settingsBuffer); len(r) > 0 {
 				m.settingsBuffer = string(r[:len(r)-1])
@@ -2976,9 +2993,9 @@ func (m *model) renderSettingsBody(height int) string {
 		rows = append(rows, subtitleStyle.Render("    "+s.Help))
 		rows = append(rows, "")
 	}
-	hint := "↑/↓ select · space toggle / enter edit · esc back"
+	// Key help lives in the shared footer (renderFooter), not here.
 	body := strings.Join(rows, "\n")
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, subtitleStyle.Render(hint))
+	return lipgloss.JoinVertical(lipgloss.Left, header, "", body)
 }
 
 func (m *model) renderSessionsBody(height int) string {

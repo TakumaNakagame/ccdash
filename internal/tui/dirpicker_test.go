@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/takumanakagame/ccmanage/internal/settings"
 )
 
 func pickerModel(t *testing.T) (*model, string) {
@@ -135,5 +136,47 @@ func TestDirPickerOverlayKeepsWidth(t *testing.T) {
 	}
 	if v.Cursor == nil {
 		t.Fatal("no caret for the path input")
+	}
+}
+
+func TestCompletePath(t *testing.T) {
+	_, _ = pickerModel(t) // sets HOME and the tree
+	cases := []struct{ in, want string }{
+		{"~/wo", "~/work/"},            // single match → filled + slash
+		{"~/work/b", "~/work/beta/"},   // single
+		{"~/work/al", "~/work/alpha/"}, // alpha only; Alphabet differs in case, xalpha isn't a prefix match
+		{"~/work/zz", "~/work/zz"},     // no match → unchanged
+	}
+	for _, c := range cases {
+		if got, _ := completePath(c.in); got != c.want {
+			t.Errorf("completePath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// Several matches: extend to the common prefix and report the names.
+	if err := os.MkdirAll(filepath.Join(os.Getenv("HOME"), "work", "betamax"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, names := completePath("~/work/b")
+	if got != "~/work/beta" || len(names) != 2 {
+		t.Fatalf("got %q names %v, want ~/work/beta with 2 names", got, names)
+	}
+}
+
+func TestSettingsHelpShownOnce(t *testing.T) {
+	m, _ := pickerModel(t)
+	m.pane = paneSettings
+	out := ansi.Strip(m.View().Content)
+	if n := strings.Count(out, "esc back"); n != 1 {
+		t.Fatalf("settings help appears %d times, want 1", n)
+	}
+	// Editing the path setting advertises Tab completion.
+	for i, s := range settings.AllSpecs() {
+		if s.Path {
+			m.settingsSel = i
+		}
+	}
+	m.settingsEdit = true
+	if out := ansi.Strip(m.View().Content); !strings.Contains(out, "tab complete") {
+		t.Fatal("path edit footer lacks the tab hint")
 	}
 }
