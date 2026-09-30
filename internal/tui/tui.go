@@ -121,8 +121,9 @@ type model struct {
 	// groupSel remembers the selected session ID per group so switching
 	// tabs returns the cursor to where the operator left it.
 	groupSel      map[string]string
-	searchQuery   string // "" = no filter; case-insensitive substring search
-	accountFilter string // "" = all accounts; otherwise account name (from accounts.json)
+	liveSel       liveSelection // drag selection in the live pane
+	searchQuery   string        // "" = no filter; case-insensitive substring search
+	accountFilter string        // "" = all accounts; otherwise account name (from accounts.json)
 
 	settings settings.Settings
 
@@ -768,15 +769,24 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// Clicking the emulator area focuses it; clicking anywhere else
 		// gives the keyboard back to the dashboard.
+		// A left press in the emulator area also anchors a drag
+		// selection (see livesel.go).
+		m.clearLiveSelection()
 		if msg.Button == tea.MouseLeft {
 			mm := msg.Mouse()
-			if m.mouseInLiveScreen(mm) && m.liveForCurrent() != nil {
+			if live := m.liveForCurrent(); live != nil && m.mouseInLiveScreen(mm) {
 				m.setLiveFocus(true)
+				m.startLiveSelection(live, mm)
 			} else {
 				m.setLiveFocus(false)
 			}
 		}
 		return m, nil
+	case tea.MouseMotionMsg:
+		m.dragLiveSelection(msg.Mouse())
+		return m, nil
+	case tea.MouseReleaseMsg:
+		return m, m.finishLiveSelection(msg.Mouse())
 	case tea.PasteMsg:
 		return m.handlePaste(msg.Content)
 	case ptyStartedMsg:
@@ -929,6 +939,7 @@ func (m *model) handleMouse(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	m.clearLiveSelection()
 	if m.pane == paneSessions && m.liveFocus {
 		if live := m.liveForCurrent(); live != nil {
 			return m.handleLiveKey(msg, live)

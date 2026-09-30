@@ -486,7 +486,7 @@ func (m *model) renderLivePane(live *liveScreen, width, height int) string {
 	case live.exited:
 		hdr = statusStop.Render("⬡ ended") + "  " + subtitleStyle.Render(shortID(m.currentSessionID())+" · screen frozen until the server drops it")
 	case m.liveFocus:
-		hdr = statusActive.Render("⬡ live · typing → claude") + "  " + subtitleStyle.Render("ctrl+] back to dashboard · F fullscreen")
+		hdr = statusActive.Render("⬡ live · typing → claude") + "  " + subtitleStyle.Render("ctrl+] back to dashboard · drag to copy · F fullscreen")
 	default:
 		hdr = statusIdle.Render("⬡ live") + "  " + subtitleStyle.Render(shortID(m.currentSessionID())+" · enter / ctrl+] to type · F fullscreen")
 	}
@@ -499,12 +499,20 @@ func (m *model) renderLivePane(live *liveScreen, width, height int) string {
 	}
 	lines := make([]string, 0, height)
 	lines = append(lines, hdr)
+	sel := m.liveSel
+	showSel := sel.shown && sel.key == live.key
 	for y := 0; y < screenH; y++ {
 		row := ""
 		if y < len(live.rows) {
 			row = live.rows[y]
 		}
-		lines = append(lines, fitWidth(row, width))
+		row = fitWidth(row, width)
+		if showSel {
+			if from, to, ok := sel.span(y, width); ok {
+				row = highlightRow(row, from, to)
+			}
+		}
+		lines = append(lines, row)
 	}
 	if approvalH > 0 {
 		for _, l := range strings.Split(approvalSection, "\n") {
