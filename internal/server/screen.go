@@ -23,6 +23,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,6 +64,8 @@ type ptyEntry struct {
 	// which never takes the lock.
 	emuMu     sync.Mutex
 	emu       *vt.Emulator
+	sf        strFilter      // scrubs C1-looking bytes out of OSC etc.; see strfilter.go
+	trace     io.WriteCloser // raw child output dump; nil unless CCDASH_PTY_TRACE_DIR is set
 	curHidden bool
 	curStyle  vt.CursorStyle
 	curBlink  bool
@@ -121,6 +125,7 @@ func newPTYEntry(sess *attach.Session, key string, cols, rows int) *ptyEntry {
 			e.curBlink = blink
 		},
 	})
+	e.trace = openPTYTrace(key)
 	sess.InitialSize = &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}
 	// Child output → emulator (+ raw relay when attached).
 	sess.SetSink(e)
@@ -142,7 +147,10 @@ func (e *ptyEntry) startPumps() {
 // into the emulator and, when a fullscreen client is attached, to it too.
 func (e *ptyEntry) Write(p []byte) (int, error) {
 	e.emuMu.Lock()
-	_, _ = e.emu.Write(p)
+	if e.trace != nil {
+		_, _ = e.trace.Write(p)
+	}
+	_, _ = e.emu.Write(e.sf.filter(p))
 	e.emuMu.Unlock()
 
 	e.rawMu.Lock()
@@ -193,7 +201,35 @@ func (e *ptyEntry) onExit() {
 		_ = e.emu.Close()
 		e.emuMu.Unlock()
 	}
+	e.emuMu.Lock()
+	if e.trace != nil {
+		_ = e.trace.Close()
+		e.trace = nil
+	}
+	e.emuMu.Unlock()
 	e.kickViewers()
+}
+
+// openPTYTrace opens a file receiving the child's raw output when the
+// collector runs with CCDASH_PTY_TRACE_DIR set — a debugging aid for
+// emulator rendering bugs (replay the bytes into x/vt vs a real terminal).
+// Returns nil when tracing is off or the file can't be created.
+func openPTYTrace(key string) io.WriteCloser {
+	dir := os.Getenv("CCDASH_PTY_TRACE_DIR")
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Printf("pty trace: %v", err)
+		return nil
+	}
+	name := fmt.Sprintf("%s-%d.raw", strings.ReplaceAll(key, "/", "_"), time.Now().Unix())
+	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		log.Printf("pty trace: %v", err)
+		return nil
+	}
+	return f
 }
 
 // setRaw installs (or clears, with nil) the fullscreen relay sink.
