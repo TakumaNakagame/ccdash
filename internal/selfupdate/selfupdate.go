@@ -14,9 +14,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/mod/semver"
@@ -80,7 +82,7 @@ func ReleaseInfo(ctx context.Context, tag string) (notes string, err error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	setAPIHeaders(req)
 	c := &http.Client{Timeout: 10 * time.Second}
 	resp, err := c.Do(req)
 	if err != nil {
@@ -90,7 +92,7 @@ func ReleaseInfo(ctx context.Context, tag string) (notes string, err error) {
 	if resp.StatusCode != http.StatusOK {
 		hint := ""
 		if resp.StatusCode == http.StatusForbidden {
-			hint = " — likely GitHub anonymous API rate limit (60/hr)"
+			hint = rateLimitHint()
 		}
 		return "", fmt.Errorf("github api: %s%s", resp.Status, hint)
 	}
@@ -241,12 +243,62 @@ func latestAsset(ctx context.Context, channel Channel) (tag, assetURL, sumURL st
 
 // getJSON fetches the URL and decodes the body into v. Returns the same
 // rate-limit-aware error message as the old inline code.
+// setAPIHeaders prepares a GitHub REST API request, authenticating it when
+// a token is available. Anonymous calls share a 60/hour budget per source
+// IP, which behind a corporate NAT is typically exhausted by others;
+// authenticated ones get 5,000/hour per user. Only api.github.com requests
+// carry the token — release asset downloads (and their redirect to
+// objects.githubusercontent.com) never do.
+func setAPIHeaders(req *http.Request) {
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if tok := apiToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+}
+
+var (
+	tokenOnce sync.Once
+	token     string
+)
+
+// apiToken looks for a GitHub token in CCDASH_GITHUB_TOKEN, GITHUB_TOKEN,
+// GH_TOKEN, then `gh auth token`. Resolved once per process; empty means
+// fall back to anonymous access.
+func apiToken() string {
+	tokenOnce.Do(func() {
+		for _, k := range []string{"CCDASH_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"} {
+			if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+				token = v
+				return
+			}
+		}
+		if _, err := exec.LookPath("gh"); err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "gh", "auth", "token", "--hostname", "github.com").Output()
+		if err == nil {
+			token = strings.TrimSpace(string(out))
+		}
+	})
+	return token
+}
+
+// rateLimitHint explains a 403 from the API.
+func rateLimitHint() string {
+	if apiToken() != "" {
+		return " — GitHub API rate limit or token rejected"
+	}
+	return " — likely GitHub anonymous API rate limit (60/hr); set GITHUB_TOKEN or run `gh auth login` to authenticate"
+}
+
 func getJSON(ctx context.Context, url string, v any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	setAPIHeaders(req)
 	c := &http.Client{Timeout: 10 * time.Second}
 	resp, err := c.Do(req)
 	if err != nil {
@@ -256,7 +308,7 @@ func getJSON(ctx context.Context, url string, v any) error {
 	if resp.StatusCode != http.StatusOK {
 		hint := ""
 		if resp.StatusCode == http.StatusForbidden {
-			hint = " — likely GitHub anonymous API rate limit (60/hr)"
+			hint = rateLimitHint()
 		}
 		return fmt.Errorf("github api: %s%s", resp.Status, hint)
 	}

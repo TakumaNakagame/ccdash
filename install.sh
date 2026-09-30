@@ -64,12 +64,24 @@ if [ -z "$TAG" ]; then
   # doesn't accept the GNU `\+` ERE-style quantifier in BRE mode and
   # silently produces no match, which is what was making this script
   # fail on a stock macOS install.
-  TAG="$(curl -fsSL "$API" \
+  # Authenticate when a token is around: behind a shared NAT the
+  # anonymous 60/hr budget is usually already spent by someone else.
+  TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+  if [ -z "$TOKEN" ] && command -v gh >/dev/null 2>&1; then
+    TOKEN="$(gh auth token 2>/dev/null || true)"
+  fi
+  if [ -n "$TOKEN" ]; then
+    set -- -H "Authorization: Bearer $TOKEN"
+  else
+    set --
+  fi
+  TAG="$(curl -fsSL "$@" "$API" \
     | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
     | head -n1)"
   if [ -z "${TAG:-}" ]; then
     echo "ccdash: failed to resolve latest release tag from $API" >&2
-    echo "ccdash: GitHub may have rate-limited you (anonymous limit is 60/hr)" >&2
+    echo "ccdash: GitHub may have rate-limited you (anonymous limit is 60/hr;" >&2
+    echo "ccdash: set GITHUB_TOKEN or run \`gh auth login\` to authenticate)" >&2
     echo "ccdash: workaround — re-run with an explicit version, e.g.:" >&2
     echo "ccdash:   CCDASH_VERSION=v0.1.0 sh install.sh" >&2
     exit 1
