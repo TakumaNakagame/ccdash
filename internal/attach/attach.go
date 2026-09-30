@@ -342,6 +342,10 @@ func (s *Session) Attach() (Result, error) {
 // spawn opens the PTY and starts the child. Sets up the long-lived Wait
 // goroutine and the PTY reader pump. Called exactly once per Session via
 // spawnOnce.
+// drainTimeout caps how long an exited child's PTY output is drained
+// before the master is closed.
+const drainTimeout = 250 * time.Millisecond
+
 func (s *Session) spawn() error {
 	f, err := pty.StartWithSize(s.cmd, s.InitialSize)
 	if err != nil {
@@ -349,15 +353,26 @@ func (s *Session) spawn() error {
 	}
 	s.pty = f
 	s.childExit = make(chan struct{})
+	s.pumpDone = make(chan struct{})
 	go func() {
 		s.childErr = s.cmd.Wait()
-		close(s.childExit)
+		// Let the reader pump drain what the child wrote before it died:
+		// closing the master first drops unread output (on Linux the next
+		// Read just fails), so a short-lived child's last screen — or all
+		// of it — never reached the sink. Bounded, because a grandchild
+		// holding the slave open keeps the pump from ever seeing EOF.
+		select {
+		case <-s.pumpDone:
+		case <-time.After(drainTimeout):
+		}
 		// Closing the PTY here ensures the reader pump exits. Without it,
 		// the pump would block forever on a closed child's PTY which the
 		// kernel tends to leave half-open.
 		_ = s.pty.Close()
+		// Close childExit last so that, by the time anyone observes the
+		// exit, the child's final output has already gone to the sink.
+		close(s.childExit)
 	}()
-	s.pumpDone = make(chan struct{})
 	go func() {
 		defer close(s.pumpDone)
 		buf := make([]byte, 4096)
