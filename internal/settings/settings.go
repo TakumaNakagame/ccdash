@@ -53,6 +53,10 @@ type Settings struct {
 	TailBudgetKB      int
 	SummaryTimeoutSec int
 	RefreshIntervalMs int
+
+	// NewSessionDir is where the `n` directory picker starts. Empty means
+	// the home directory. May use ~/.
+	NewSessionDir string
 }
 
 const (
@@ -76,6 +80,7 @@ const (
 	keyTailBudgetKB         = "tail_budget_kb"
 	keySummaryTimeoutSec    = "summary_timeout_sec"
 	keyRefreshIntervalMs    = "refresh_interval_ms"
+	keyNewSessionDir        = "new_session_dir"
 )
 
 // Defaults returns the baseline values used whenever a key is missing.
@@ -127,6 +132,7 @@ func loadPairs(out *Settings) []loadPair {
 		{keyTailBudgetKB, func(v string) { out.TailBudgetKB = parseInt(v, out.TailBudgetKB) }},
 		{keySummaryTimeoutSec, func(v string) { out.SummaryTimeoutSec = parseInt(v, out.SummaryTimeoutSec) }},
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
+		{keyNewSessionDir, func(v string) { out.NewSessionDir = v }},
 	}
 }
 
@@ -215,6 +221,8 @@ const (
 	KindAction
 	// KindEnum cycles a string value through a fixed list of Options.
 	KindEnum
+	// KindString is free text edited inline on the settings page.
+	KindString
 )
 
 // Spec.Apply is non-nil only for KindAction rows.
@@ -257,6 +265,7 @@ func AllSpecs() []Spec {
 		{Key: keyTailBudgetKB, Label: "Right-pane tail budget (KB)", Help: "Bytes of transcript loaded for the inline live tail; bigger == more context, slower", Kind: KindInt, Min: 32, Max: 8192},
 		{Key: keySummaryTimeoutSec, Label: "Summary timeout (s)", Help: "How long to wait for `claude -p` to produce a summary before giving up", Kind: KindInt, Min: 30, Max: 600},
 		{Key: keyRefreshIntervalMs, Label: "Refresh interval (ms)", Help: "How often the TUI re-queries the DB for new state", Kind: KindInt, Min: 250, Max: 10000},
+		{Key: keyNewSessionDir, Label: "New session directory", Help: "Where the 'n' directory picker starts (~/ allowed). Empty = home directory.", Kind: KindString},
 	}
 }
 
@@ -313,6 +322,8 @@ func Get(s Settings, key string) any {
 		return s.SummaryTimeoutSec
 	case keyRefreshIntervalMs:
 		return s.RefreshIntervalMs
+	case keyNewSessionDir:
+		return s.NewSessionDir
 	}
 	return nil
 }
@@ -355,6 +366,8 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.SummaryTimeoutSec = value.(int)
 	case keyRefreshIntervalMs:
 		s.RefreshIntervalMs = value.(int)
+	case keyNewSessionDir:
+		s.NewSessionDir = value.(string)
 	}
 	return s, persist(ctx, st, key, value)
 }

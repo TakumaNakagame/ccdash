@@ -82,7 +82,7 @@ task.md                         original product spec; historical, not authorita
 `internal/settings/AllSpecs()` is the single source of truth for the list of preferences. Adding a setting means:
 
 1. Add the storage field on `settings.Settings` and a default in `Defaults()`.
-2. Pick a `Kind` (`KindBool` / `KindInt` / `KindEnum` / `KindAction`) and append a `Spec` to `AllSpecs()`.
+2. Pick a `Kind` (`KindBool` / `KindInt` / `KindEnum` / `KindString` / `KindAction`) and append a `Spec` to `AllSpecs()`.
 3. Add a `loadPairs` entry (the read path) and the typed accessor branch in `Get` and `Set`. `AllKeys()` — which feeds `GET /api/settings` for remote mode — derives from `AllSpecs` automatically, and `TestKeyTablesAgree` fails if `loadPairs` and `AllSpecs` ever drift apart.
 4. If the value gates a TUI behavior, read it from `m.settings.Foo` rather than caching on the model — the settings page mutates `m.settings` in-place via `settings.Set`.
 

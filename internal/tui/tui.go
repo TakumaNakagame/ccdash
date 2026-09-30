@@ -169,8 +169,8 @@ type model struct {
 
 	// settings page state
 	settingsSel    int
-	settingsEdit   bool   // editing an int value inline
-	settingsBuffer string // numeric buffer while editing
+	settingsEdit   bool   // editing an int / string value inline
+	settingsBuffer string // edit buffer (digits only for ints)
 
 	// transcript view state
 	transcriptMessages []transcript.Message
@@ -226,10 +226,11 @@ type model struct {
 	// path in the new-session footer prompt (entered via 'n').
 	editingNewSession bool
 	newSessionBuffer  string
-	// newSessionCompletions caches the directory expansion for the current
-	// buffer prefix; cycled by repeated Tab presses.
-	newSessionCompletions []string
-	newSessionCompIdx     int
+	// pickSel is the highlighted row of the `n` directory picker (-1 =
+	// none, so Enter starts in the typed directory); pickScroll is the
+	// first visible row. See dirpicker.go.
+	pickSel    int
+	pickScroll int
 
 	// Live right pane (see live.go). live is the active screen stream for
 	// the selected session; nil when that session isn't hosted by the
@@ -402,43 +403,6 @@ func expandPath(p string) (string, error) {
 		return "", err
 	}
 	return abs, nil
-}
-
-// completeDirPrefix lists subdirectories whose name starts with the
-// final segment of `buf`. Returns the candidates (full-path form, with
-// a trailing slash) so the caller can substitute them into the input.
-// Quiet on errors — completion is best-effort.
-func completeDirPrefix(buf string) []string {
-	expanded, err := expandPath(buf)
-	if err != nil {
-		return nil
-	}
-	dir := expanded
-	prefix := ""
-	if !strings.HasSuffix(buf, "/") && !strings.HasSuffix(buf, string(filepath.Separator)) {
-		dir = filepath.Dir(expanded)
-		prefix = filepath.Base(expanded)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".") {
-			// Skip dotdirs unless the operator is explicitly asking for one.
-			continue
-		}
-		if prefix != "" && !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		out = append(out, filepath.Join(dir, name)+string(filepath.Separator))
-	}
-	return out
 }
 
 func (m *model) Init() tea.Cmd {
@@ -938,14 +902,9 @@ func (m *model) handlePaste(content string) (tea.Model, tea.Cmd) {
 		m.groupCandIdx = -1
 	case m.editingNewSession:
 		m.newSessionBuffer += flat
-		m.newSessionCompletions = nil
-		m.newSessionCompIdx = -1
+		m.pickSel = -1
 	case m.pane == paneSettings && m.settingsEdit:
-		for _, r := range flat {
-			if r >= '0' && r <= '9' {
-				m.settingsBuffer += string(r)
-			}
-		}
+		m.settingsBuffer += filterSettingsInput(settings.AllSpecs()[m.settingsSel], flat)
 	}
 	return m, nil
 }
@@ -1227,27 +1186,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.updateNotesScroll = 0
 		return m, m.fetchReleaseNotesCmd(m.updateAvailable)
 	case "n":
-		// Start a new claude session by typing a directory path. Default
-		// to ~/ so the operator only has to extend, not start over.
+		// Start a new claude session: open the directory picker window.
 		if !m.settings.AttachEnabled {
 			m.flash = "attach is OFF (settings ',')"
 			return m, nil
 		}
-		switch {
-		case m.remote.Enabled:
-			// The local home dir means nothing on the remote host; seed
-			// with a tilde the remote shell will expand itself.
-			m.newSessionBuffer = "~/"
-		default:
-			if home, err := os.UserHomeDir(); err == nil {
-				m.newSessionBuffer = home + string(filepath.Separator)
-			} else {
-				m.newSessionBuffer = ""
-			}
-		}
-		m.newSessionCompletions = nil
-		m.newSessionCompIdx = -1
-		m.editingNewSession = true
+		m.openDirPicker()
 		return m, nil
 	case "esc":
 		cleared := false
@@ -1394,86 +1338,7 @@ func (m *model) handleKeySearchEdit(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 //   - Enter        : with no highlight, starts a `claude` session in the
 //     buffer path (creates the dir if missing).
 //   - Esc          : cancel.
-func (m *model) handleKeyNewSessionEdit(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	hasHighlight := m.newSessionCompIdx >= 0 && m.newSessionCompIdx < len(m.newSessionCompletions)
-
-	commitHighlight := func() {
-		m.newSessionBuffer = m.newSessionCompletions[m.newSessionCompIdx]
-		m.newSessionCompletions = nil
-		m.newSessionCompIdx = -1
-	}
-
-	switch key := msg.String(); {
-	case msg.Code == tea.KeyEnter:
-		if hasHighlight {
-			commitHighlight()
-			return m, nil
-		}
-		dir := m.newSessionBuffer
-		m.editingNewSession = false
-		m.newSessionBuffer = ""
-		m.newSessionCompletions = nil
-		m.newSessionCompIdx = -1
-		return m, m.startNewSession(dir)
-	case msg.Code == tea.KeyEscape || key == "ctrl+c":
-		m.editingNewSession = false
-		m.newSessionBuffer = ""
-		m.newSessionCompletions = nil
-		m.newSessionCompIdx = -1
-		return m, nil
-	case key == "tab":
-		// Tab is preview only — recompute against the current buffer and
-		// advance the highlight index. The buffer is untouched until the
-		// operator commits with `/` or Enter. There's no local filesystem
-		// to complete against in remote mode, so it's a no-op there.
-		if m.remote.Enabled {
-			return m, nil
-		}
-		m.newSessionCompletions = completeDirPrefix(m.newSessionBuffer)
-		if len(m.newSessionCompletions) == 0 {
-			m.flash = "no directory matches"
-			m.newSessionCompIdx = -1
-			return m, nil
-		}
-		m.newSessionCompIdx = (m.newSessionCompIdx + 1) % len(m.newSessionCompletions)
-		return m, nil
-	case key == "shift+tab":
-		if m.remote.Enabled {
-			return m, nil
-		}
-		m.newSessionCompletions = completeDirPrefix(m.newSessionBuffer)
-		if len(m.newSessionCompletions) == 0 {
-			m.flash = "no directory matches"
-			m.newSessionCompIdx = -1
-			return m, nil
-		}
-		if m.newSessionCompIdx <= 0 {
-			m.newSessionCompIdx = len(m.newSessionCompletions) - 1
-		} else {
-			m.newSessionCompIdx--
-		}
-		return m, nil
-	case msg.Code == tea.KeyBackspace:
-		if r := []rune(m.newSessionBuffer); len(r) > 0 {
-			m.newSessionBuffer = string(r[:len(r)-1])
-		}
-		m.newSessionCompletions = nil
-		m.newSessionCompIdx = -1
-	case msg.Text != "":
-		// "/" is overloaded: when a candidate is highlighted it commits
-		// (just like Enter on a highlight). Otherwise it's just another
-		// path-separator character.
-		if msg.Text == "/" && hasHighlight {
-			commitHighlight()
-			return m, nil
-		}
-		m.newSessionBuffer += msg.Text
-		m.newSessionCompletions = nil
-		m.newSessionCompIdx = -1
-	}
-	return m, nil
-}
-
+//
 // groupOf names the group a session belongs to. Operator-set user_group
 // wins; otherwise we fall back to the repo basename, then the cwd
 // basename, so sessions still bucket sensibly without any explicit
@@ -2533,10 +2398,18 @@ func (m *model) View() tea.View {
 	// Final safety net: never emit more lines than the terminal can show, or
 	// the alt-screen scrolls and the title bar disappears off the top.
 	out = clampLines(out, m.height)
-	v.SetContent(out)
 	// Place the terminal's real cursor inside the live pane while it has
 	// focus — that's what lets an OS-level IME anchor its pre-edit text.
 	v.Cursor = m.liveCursor()
+	if m.editingNewSession {
+		box, cx, cy := m.dirPickerBox()
+		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
+		x, y := max(0, (m.width-bw)/2), max(1, (m.height-bh)/3)
+		out = overlay(out, box, x, y)
+		// The caret doubles as the IME anchor while typing a path.
+		v.Cursor = tea.NewCursor(x+cx, y+cy)
+	}
+	v.SetContent(out)
 	return v
 }
 
@@ -2694,45 +2567,6 @@ func (m *model) renderFooter() string {
 		prompt := "/" + m.titleBuffer + "▏"
 		hint := subtitleStyle.Render("enter apply · esc cancel · empty=clear")
 		return pendingStyle.Render(prompt) + "  " + hint
-	}
-	if m.editingNewSession {
-		prompt := "new session in: " + m.newSessionBuffer + "▏"
-		// Hint shifts by context: with a highlighted candidate Enter and
-		// "/" both descend; without one Enter starts the session.
-		var hint string
-		if m.newSessionCompIdx >= 0 && m.newSessionCompIdx < len(m.newSessionCompletions) {
-			hint = subtitleStyle.Render("tab/shift+tab cycle · enter or '/' descend · esc cancel")
-		} else {
-			hint = subtitleStyle.Render("tab cycle · enter start (creates dir if missing) · esc cancel")
-		}
-		// Always show live candidates so the operator doesn't have to hit
-		// Tab to peek. Cap the visible count so a `~/` listing doesn't
-		// drown the screen; the cap intentionally exceeds typical project
-		// directory counts.
-		const maxCands = 8
-		cands := completeDirPrefix(m.newSessionBuffer)
-		var candLine string
-		if len(cands) == 0 {
-			candLine = subtitleStyle.Render("(no matches)")
-		} else {
-			shown := cands
-			suffix := ""
-			if len(shown) > maxCands {
-				suffix = subtitleStyle.Render(fmt.Sprintf("  …+%d more", len(shown)-maxCands))
-				shown = shown[:maxCands]
-			}
-			labels := make([]string, len(shown))
-			for i, c := range shown {
-				display := shortenLeft(c, 40)
-				if i == m.newSessionCompIdx {
-					labels[i] = pendingStyle.Render("▶ " + display)
-				} else {
-					labels[i] = subtitleStyle.Render(display)
-				}
-			}
-			candLine = strings.Join(labels, "  ") + suffix
-		}
-		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
 	if m.editingTitle {
 		prompt := "rename: " + m.titleBuffer + "▏"
@@ -2923,10 +2757,41 @@ func (m *model) renderReleaseNotesBody(height int) string {
 	return title + "\n" + body
 }
 
+// filterSettingsInput keeps the characters an inline settings edit
+// accepts: digits for KindInt, anything printable for KindString.
+func filterSettingsInput(spec settings.Spec, text string) string {
+	if spec.Kind == settings.KindString {
+		return strings.Map(func(r rune) rune {
+			if r == '\n' || r == '\r' {
+				return -1
+			}
+			return r
+		}, text)
+	}
+	var b strings.Builder
+	for _, r := range text {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	specs := settings.AllSpecs()
 	if m.settingsEdit {
 		switch {
+		case msg.Code == tea.KeyEnter && specs[m.settingsSel].Kind == settings.KindString:
+			cur := specs[m.settingsSel]
+			next, err := settings.Set(m.ctx, m.store, m.settings, cur.Key, strings.TrimSpace(m.settingsBuffer))
+			if err == nil {
+				m.settings = next
+			} else {
+				m.err = err
+			}
+			m.settingsEdit = false
+			m.settingsBuffer = ""
+			return m, nil
 		case msg.Code == tea.KeyEnter:
 			cur := specs[m.settingsSel]
 			n, err := strconv.Atoi(m.settingsBuffer)
@@ -2956,11 +2821,7 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.settingsBuffer = string(r[:len(r)-1])
 			}
 		case msg.Text != "":
-			for _, r := range msg.Text {
-				if r >= '0' && r <= '9' {
-					m.settingsBuffer += string(r)
-				}
-			}
+			m.settingsBuffer += filterSettingsInput(specs[m.settingsSel], msg.Text)
 		}
 		return m, nil
 	}
@@ -2999,6 +2860,9 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.settingsEdit = true
 			v := settings.Get(m.settings, cur.Key).(int)
 			m.settingsBuffer = strconv.Itoa(v)
+		case settings.KindString:
+			m.settingsEdit = true
+			m.settingsBuffer = settings.Get(m.settings, cur.Key).(string)
 		case settings.KindAction:
 			if cur.Apply != nil {
 				next, err := cur.Apply(m.ctx, m.store, m.settings)
@@ -3079,6 +2943,16 @@ func (m *model) renderSettingsBody(height int) string {
 					marker = "< threshold ⇒ vertical"
 				}
 				valStr += "  " + subtitleStyle.Render(fmt.Sprintf("(now: %d cols, %s)", m.width, marker))
+			}
+		case settings.KindString:
+			cur := settings.Get(m.settings, s.Key).(string)
+			switch {
+			case m.settingsEdit && i == m.settingsSel:
+				valStr = pendingStyle.Render(m.settingsBuffer + "▏")
+			case cur == "":
+				valStr = subtitleStyle.Render("(home)")
+			default:
+				valStr = cur
 			}
 		case settings.KindAction:
 			valStr = pendingStyle.Render("[run]")
@@ -4024,25 +3898,6 @@ func shorten(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	if n <= 0 {
 		return ""
-	}
-	return runewidth.Truncate(s, n, "…")
-}
-
-// shortenLeft truncates from the LEFT (so the trailing path segment, the
-// part the operator usually cares about, stays visible). Inserts a leading
-// ellipsis when truncation happened.
-func shortenLeft(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if runewidth.StringWidth(s) <= n {
-		return s
-	}
-	r := []rune(s)
-	for i := 0; i < len(r); i++ {
-		if runewidth.StringWidth("…"+string(r[i:])) <= n {
-			return "…" + string(r[i:])
-		}
 	}
 	return runewidth.Truncate(s, n, "…")
 }
