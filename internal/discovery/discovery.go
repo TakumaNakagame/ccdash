@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/takumanakagame/ccmanage/internal/redact"
+	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
 type Discovered struct {
@@ -249,9 +250,10 @@ func extractUserText(msg json.RawMessage) string {
 
 func cleanTitle(s string) string {
 	s = strings.TrimSpace(s)
-	// Skip Claude Code's auto-injected slash command wrappers like
-	// "<command-name>...</command-name>\n<command-message>...".
-	if strings.HasPrefix(s, "<command-") {
+	// Skip text Claude Code injects as a "user" turn: slash command
+	// wrappers ("<command-name>…"), local-command output and its caveat,
+	// system reminders. The next real prompt becomes the title instead.
+	if transcript.IsNoise(s) {
 		return ""
 	}
 	// First line, collapsed.

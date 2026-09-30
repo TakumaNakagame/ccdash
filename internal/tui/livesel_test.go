@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
 func TestSelectionText(t *testing.T) {
@@ -146,5 +147,35 @@ func TestSpawnMatchedByHookTag(t *testing.T) {
 	m.Update(sessionsMsg([]mdl.Session{{SessionID: "real", WrapperPID: 1<<30 + 3}, {SessionID: "old1"}}))
 	if got := m.currentSessionID(); got != "real" {
 		t.Fatalf("cursor on %q, want real", got)
+	}
+}
+
+func TestPreviewCompactsToolTraffic(t *testing.T) {
+	use := transcript.Message{Kind: transcript.KindToolUse, Tool: "Bash", ToolInput: "git status\ngit diff"}
+	res := transcript.Message{Kind: transcript.KindToolResult, Text: "\nOn branch main\nnothing to commit\n"}
+	errRes := transcript.Message{Kind: transcript.KindToolResult, Text: "boom", IsError: true}
+	cases := []struct {
+		msg  transcript.Message
+		want string
+	}{
+		{use, "⏺ Bash  git status"},
+		{res, "  ⎿ On branch main  (+1 line)"},
+		{errRes, "  ⎿ error: boom"},
+	}
+	for _, c := range cases {
+		lines := renderPreviewMessage(c.msg, 60)
+		if len(lines) != 1 {
+			t.Fatalf("%v: %d lines, want 1", c.msg.Kind, len(lines))
+		}
+		if got := strings.TrimRight(ansi.Strip(lines[0]), " "); got != c.want {
+			t.Fatalf("got %q, want %q", got, c.want)
+		}
+		if w := ansi.StringWidth(lines[0]); w != 60 {
+			t.Fatalf("width %d, want 60", w)
+		}
+	}
+	// The full viewer keeps the expanded form.
+	if n := len(renderTranscriptMessage(res, 60)); n < 2 {
+		t.Fatalf("full viewer collapsed the result (%d lines)", n)
 	}
 }

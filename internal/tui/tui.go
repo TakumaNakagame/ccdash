@@ -3542,9 +3542,11 @@ func (m *model) renderTranscriptTail(width, height int) string {
 			addBlock(summaryBlock, true)
 			summaryInserted = true
 		}
-		// Keep a tool call and its result visually attached.
-		leadBlank := i > 0 && msg.Kind != transcript.KindToolResult
-		addBlock(renderTranscriptMessage(msg, bodyWidth), leadBlank)
+		// Tool calls and their results render as one line each; keep a
+		// run of them together as a single block.
+		leadBlank := i > 0 && msg.Kind != transcript.KindToolResult &&
+			!(msg.Kind == transcript.KindToolUse && isToolKind(m.tailMessages[i-1].Kind))
+		addBlock(renderPreviewMessage(msg, bodyWidth), leadBlank)
 	}
 	if !summaryInserted {
 		addBlock(summaryBlock, true)
@@ -3777,6 +3779,68 @@ var (
 	systemRowStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	systemLabelStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Bold(true)
 )
+
+// isToolKind reports tool_use / tool_result, which render compactly.
+func isToolKind(k transcript.Kind) bool {
+	return k == transcript.KindToolUse || k == transcript.KindToolResult
+}
+
+// renderToolLine renders a tool call or its result as a single line, the
+// way Claude Code's own console does: "⏺ Bash  git status" and
+// "  ⎿ first line of output  (+12 lines)".
+func renderToolLine(msg transcript.Message, width int) []string {
+	var text string
+	var style lipgloss.Style
+	if msg.Kind == transcript.KindToolUse {
+		text = "⏺ " + msg.Tool
+		if in := firstLine(msg.ToolInput); in != "" {
+			text += "  " + in
+		}
+		style = toolRowStyle
+	} else {
+		body := strings.TrimSpace(msg.Text)
+		first := firstLine(body)
+		if first == "" {
+			first = "(no output)"
+		}
+		if msg.IsError {
+			first = "error: " + first
+		}
+		text = "  ⎿ " + first
+		switch n := strings.Count(body, "\n"); {
+		case n == 1:
+			text += "  (+1 line)"
+		case n > 1:
+			text += fmt.Sprintf("  (+%d lines)", n)
+		}
+		style = resultRowStyle
+		if msg.IsError {
+			style = errorRowStyle
+		}
+	}
+	text = runewidth.Truncate(text, width, "…")
+	return []string{style.Render(runewidth.FillRight(text, width))}
+}
+
+// firstLine returns the first non-blank line of s, whitespace-trimmed.
+func firstLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// renderPreviewMessage is renderTranscriptMessage for the right-pane
+// preview: tool traffic collapses to one line each. The full viewer (o)
+// keeps the expanded rendering.
+func renderPreviewMessage(msg transcript.Message, width int) []string {
+	if isToolKind(msg.Kind) {
+		return renderToolLine(msg, width)
+	}
+	return renderTranscriptMessage(msg, width)
+}
 
 func renderTranscriptMessage(msg transcript.Message, width int) []string {
 	var label string
