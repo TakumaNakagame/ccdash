@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/charmbracelet/x/vt"
 
 	"github.com/takumanakagame/ccmanage/internal/attach"
+	"github.com/takumanakagame/ccmanage/internal/procmap"
 	"github.com/takumanakagame/ccmanage/internal/screen"
 )
 
@@ -273,5 +275,63 @@ func TestPTYTagAliasesSession(t *testing.T) {
 	}
 	if other != nil {
 		t.Fatal("unknown tag created an alias")
+	}
+}
+
+// TestAliasPTYsByParent: without hooks, discovery's procmap entry for a
+// claude whose parent is a pid-<N> PTY shell keys that PTY by session ID.
+func TestAliasPTYsByParent(t *testing.T) {
+	old := newPTYCommand
+	// `; :` keeps sh from exec-ing sleep, so sleep is the shell's child —
+	// the same shape as `$SHELL -i -c claude`.
+	newPTYCommand = func(args ...string) *exec.Cmd { return exec.Command("sh", "-c", "sleep 5; :") }
+	t.Cleanup(func() { newPTYCommand = old })
+
+	s := &Server{ptyMap: map[string]*ptyEntry{}}
+	ts := httptest.NewServer(http.HandlerFunc(s.handlePTY))
+	t.Cleanup(ts.Close)
+	resp, err := http.Post(ts.URL+"/pty/start", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	var started struct{ PtyKey string }
+	_ = json.NewDecoder(resp.Body).Decode(&started)
+	resp.Body.Close()
+	t.Cleanup(func() {
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/pty/"+started.PtyKey, nil)
+		if r, err := http.DefaultClient.Do(req); err == nil {
+			r.Body.Close()
+		}
+	})
+	s.ptyMu.Lock()
+	entry := s.ptyMap[started.PtyKey]
+	s.ptyMu.Unlock()
+	shell := entry.sess.PID()
+
+	var child int
+	deadline := time.Now().Add(3 * time.Second)
+	for child == 0 && time.Now().Before(deadline) {
+		for pid, ppid := range parentPIDs(context.Background()) {
+			if ppid == shell {
+				child = pid
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if child == 0 {
+		t.Fatal("no child process under the PTY shell")
+	}
+
+	s.aliasPTYsByParent(context.Background(), map[string]procmap.Entry{
+		"sess-x":    {SessionID: "sess-x", PID: child},
+		"unrelated": {SessionID: "unrelated", PID: 1},
+	})
+	s.ptyMu.Lock()
+	defer s.ptyMu.Unlock()
+	if s.ptyMap["sess-x"] != entry {
+		t.Fatal("sess-x not aliased to the PTY whose shell is its parent")
+	}
+	if _, ok := s.ptyMap["unrelated"]; ok {
+		t.Fatal("unrelated process got aliased")
 	}
 }

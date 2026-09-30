@@ -2,15 +2,20 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/takumanakagame/ccmanage/internal/attach"
+	"github.com/takumanakagame/ccmanage/internal/procmap"
 )
 
 // newPTYCommand builds the child for POST /pty/start. A variable so tests
@@ -302,6 +307,66 @@ func (s *Server) aliasPTYByTag(tag int, sessionID string) {
 			return
 		}
 	}
+}
+
+// aliasPTYsByParent keys still-unaliased `n` spawns (pid-<shell pid>) by
+// their session ID, found by matching a running claude's parent PID to
+// the PTY's shell. This is the hook-less path: without ccdash's hooks
+// installed, the tag in aliasPTYByTag never arrives, but claude still
+// writes ~/.claude/sessions/<pid>.json (procs) right at startup — well
+// before its first prompt creates the transcript discovery lists.
+func (s *Server) aliasPTYsByParent(ctx context.Context, procs map[string]procmap.Entry) {
+	s.ptyMu.Lock()
+	pending := map[int]*ptyEntry{} // shell pid → entry, only if no alias yet
+	for k, e := range s.ptyMap {
+		if strings.HasPrefix(k, "pid-") && !e.exited.Load() {
+			pending[e.sess.PID()] = e
+		}
+	}
+	for k, e := range s.ptyMap {
+		if !strings.HasPrefix(k, "pid-") {
+			delete(pending, e.sess.PID())
+		}
+	}
+	s.ptyMu.Unlock()
+	if len(pending) == 0 || len(procs) == 0 {
+		return
+	}
+	parents := parentPIDs(ctx)
+	s.ptyMu.Lock()
+	defer s.ptyMu.Unlock()
+	for sid, pe := range procs {
+		if _, ok := s.ptyMap[sid]; ok || sid == "" {
+			continue
+		}
+		if e, ok := pending[parents[pe.PID]]; ok {
+			s.ptyMap[sid] = e
+		}
+	}
+}
+
+// parentPIDs returns pid → ppid for every process, via one `ps` call
+// (portable across darwin and linux). Empty on failure.
+func parentPIDs(ctx context.Context) map[int]int {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=,ppid=").Output()
+	m := map[int]int{}
+	if err != nil {
+		return m
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		ppid, err2 := strconv.Atoi(f[1])
+		if err1 == nil && err2 == nil {
+			m[pid] = ppid
+		}
+	}
+	return m
 }
 
 // handlePTYClose terminates the PTY session and removes it from the map.

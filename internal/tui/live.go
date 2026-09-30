@@ -60,6 +60,7 @@ type liveFramesMsg struct {
 // ptyListMsg carries GET /pty: which ptyKeys currently have a live child.
 type ptyListMsg struct {
 	alive map[string]bool
+	pids  map[string]int // ptyKey → shell pid; aliases of one PTY share it
 	err   error
 }
 
@@ -86,17 +87,20 @@ func fetchPTYListCmd() tea.Cmd {
 		var rows []struct {
 			Key   string `json:"key"`
 			Alive bool   `json:"alive"`
+			PID   int    `json:"pid"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
 			return ptyListMsg{err: err}
 		}
 		alive := make(map[string]bool, len(rows))
+		pids := make(map[string]int, len(rows))
 		for _, r := range rows {
 			if r.Alive {
 				alive[r.Key] = true
+				pids[r.Key] = r.PID
 			}
 		}
-		return ptyListMsg{alive: alive}
+		return ptyListMsg{alive: alive, pids: pids}
 	}
 }
 

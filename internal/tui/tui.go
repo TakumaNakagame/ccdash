@@ -122,7 +122,18 @@ type model struct {
 	// tabs returns the cursor to where the operator left it.
 	groupSel map[string]string
 	liveSel  liveSelection // drag selection in the live pane
-	spawnTag int           // hook tag of an `n` spawn awaiting its row; 0 = none
+	// spawn tracks an `n` spawn until its real session row shows up.
+	// Without ccdash hooks a fresh claude has no row until its first
+	// prompt writes a transcript, so injectSpawnRow shows a placeholder
+	// row keyed by the PTY (pid-<N>) that the live pane can mirror.
+	spawn struct {
+		pty   string    // ptyKey; "" = nothing pending
+		tag   int       // server hook tag (matches WrapperPID when hooks exist)
+		sid   string    // session ID once the server aliased the PTY
+		cwd   string    // for the placeholder row
+		group string    // tab the placeholder lives in
+		at    time.Time // placeholder LastSeen
+	}
 	// removedSel remembers where the cursor was when x took the selected
 	// session out of the current view, so the refresh that drops it keeps
 	// the cursor at that row instead of jumping to defaultSelectionIdx.
@@ -672,6 +683,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsMsg:
 		prev := m.currentSessionID()
 		m.allSessions = []mdl.Session(msg)
+		m.injectSpawnRow()
 		// Promote any newly-discovered sessions whose PID matches a
 		// freshly-spawned PTY so the server can alias the ptyKey to the
 		// real sessionID, enabling reattach by sessionID on next Enter.
@@ -778,6 +790,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			m.ptyAlive = msg.alive
 			m.ptyListWarned = false
+			m.resolveSpawnSID(msg.pids)
 		} else if !m.ptyListWarned {
 			// Usually an older ccdash server (no /pty list route) still
 			// holding the port — e.g. a previous TUI build left running.
@@ -827,8 +840,17 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Fresh `n` spawn: there's no row to select until claude's
 			// first hook lands. sessionsMsg picks the row by its tag
 			// (selectSpawned), and the live pane focuses once it streams.
-			m.spawnTag = msg.tag
-			m.flash = "starting claude in " + msg.cwd + msg.createdNote + "… (appears in the right pane)"
+			m.spawn.pty, m.spawn.tag, m.spawn.sid = msg.ptyKey, msg.tag, ""
+			m.spawn.cwd, m.spawn.group, m.spawn.at = msg.cwd, m.groupFilter, time.Now()
+			m.injectSpawnRow()
+			m.applyGroupFilter()
+			for i, s := range m.sessions {
+				if s.SessionID == msg.ptyKey {
+					m.selSess = i
+				}
+			}
+			m.liveFocusPending = msg.ptyKey
+			m.flash = "claude started in " + msg.cwd + msg.createdNote + " — ctrl+] returns to the dashboard"
 			return m, nil
 		}
 		if msg.live {
@@ -1539,29 +1561,100 @@ func (m *model) cycleGroup(delta int) tea.Cmd {
 	return m.loadTailCmd()
 }
 
-// selectSpawned moves the cursor onto the session started by `n` once its
-// row shows up (matched by the server's hook tag in WrapperPID), switching
-// to its tab if needed, and arranges for the live pane to take focus.
+// injectSpawnRow adds the placeholder row for a pending `n` spawn to
+// m.allSessions (rebuilt from the store on every refresh), or forgets the
+// spawn once its PTY is gone.
+func (m *model) injectSpawnRow() {
+	if m.spawn.pty == "" {
+		return
+	}
+	if !m.ptyAlive[m.spawn.pty] {
+		m.spawn.pty = ""
+		return
+	}
+	for _, s := range m.allSessions {
+		if s.SessionID == m.spawn.pty {
+			return
+		}
+	}
+	m.allSessions = append([]mdl.Session{{
+		SessionID: m.spawn.pty,
+		Cwd:       m.spawn.cwd,
+		Title:     "new claude session (starting…)",
+		UserGroup: m.spawn.group,
+		LastSeen:  m.spawn.at,
+		Status:    mdl.StatusActive,
+	}}, m.allSessions...)
+}
+
+// resolveSpawnSID learns the pending spawn's session ID from the /pty
+// list: once the server aliases the PTY, the session ID shows up as a
+// second key with the same shell pid.
+func (m *model) resolveSpawnSID(pids map[string]int) {
+	if m.spawn.pty == "" || m.spawn.sid != "" {
+		return
+	}
+	pid, ok := pids[m.spawn.pty]
+	if !ok {
+		return
+	}
+	for k, p := range pids {
+		if p == pid && k != m.spawn.pty && !strings.HasPrefix(k, "pid-") {
+			m.spawn.sid = k
+			return
+		}
+	}
+}
+
+// selectSpawned moves the cursor from the placeholder onto the spawned
+// session's real row once it shows up — matched by session ID (learned
+// from the /pty aliases) or by the server's hook tag in WrapperPID —
+// switching to its tab if needed, and keeps the live pane focused.
 func (m *model) selectSpawned() {
-	if m.spawnTag == 0 {
+	if m.spawn.pty == "" {
 		return
 	}
 	var target *mdl.Session
 	for i := range m.allSessions {
-		if m.allSessions[i].WrapperPID == m.spawnTag {
-			target = &m.allSessions[i]
+		s := &m.allSessions[i]
+		if s.SessionID == m.spawn.pty {
+			continue
+		}
+		if (m.spawn.sid != "" && s.SessionID == m.spawn.sid) || (m.spawn.tag != 0 && s.WrapperPID == m.spawn.tag) {
+			target = s
 			break
 		}
 	}
 	if target == nil {
 		return
 	}
-	sid := target.SessionID
-	if !m.groupLocked && m.groupFilter != "" && groupOf(*target) != m.groupFilter {
-		m.rememberSelection()
-		m.groupFilter = groupOf(*target)
+	tgt := *target
+	sid := tgt.SessionID
+	onPlaceholder := m.currentSessionID() == m.spawn.pty
+	// Carry the screen over so the pane doesn't blank while the stream
+	// re-dials under the session ID.
+	if m.live != nil && m.live.key == m.spawn.pty && len(m.live.rows) > 0 {
+		c := *m.live
+		c.client, c.key = nil, sid
+		m.liveCache[sid] = &c
 	}
-	if m.searchQuery != "" && !sessionMatchesQuery(*target, strings.ToLower(m.searchQuery)) {
+	pty := m.spawn.pty
+	m.spawn.pty = ""
+	kept := m.allSessions[:0:0]
+	for _, s := range m.allSessions {
+		if s.SessionID != pty {
+			kept = append(kept, s)
+		}
+	}
+	m.allSessions = kept
+	if !onPlaceholder {
+		return // the operator moved on; don't yank the cursor
+	}
+	if !m.groupLocked && m.groupFilter != "" && groupOf(tgt) != m.groupFilter {
+		m.rememberSelection()
+		m.groupFilter = groupOf(tgt)
+	}
+	if m.searchQuery != "" && !sessionMatchesQuery(tgt, strings.ToLower(m.searchQuery)) {
 		m.searchQuery = ""
 	}
 	m.applyGroupFilter()
@@ -1572,7 +1665,6 @@ func (m *model) selectSpawned() {
 			break
 		}
 	}
-	m.spawnTag = 0
 }
 
 // rememberSelection records the current session as the cursor position

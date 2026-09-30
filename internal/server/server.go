@@ -343,6 +343,7 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 			continue
 		}
 		procs, _ := procmap.Snapshot(ctx, acc.Dir)
+		s.aliasPTYsByParent(ctx, procs)
 
 		for _, d := range discovered {
 			sess := &model.Session{
