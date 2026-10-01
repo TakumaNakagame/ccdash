@@ -58,8 +58,12 @@ func (s liveSelection) span(y, width int) (from, to int, ok bool) {
 	return from, to, true
 }
 
-// selectionText extracts the selected text from rendered rows, trimming
-// the trailing blanks that pad every emulator row.
+// selectionText extracts the selected text from rendered rows, cleaned up
+// for pasting elsewhere (Slack, an editor): the trailing blanks that pad
+// every emulator row are dropped, blank rows at either end are dropped,
+// and the left margin Claude Code indents its output with is removed —
+// the first row loses its leading blanks, the rest lose their common
+// indent so nested structure (lists, code) keeps its relative shape.
 func selectionText(sel liveSelection, rows []string, width int) string {
 	var out []string
 	_, sy, _, ey := sel.ordered()
@@ -68,10 +72,40 @@ func selectionText(sel liveSelection, rows []string, width int) string {
 		if !ok {
 			continue
 		}
-		out = append(out, strings.TrimRight(ansi.Strip(ansi.Cut(rows[y], from, to)), " "))
+		out = append(out, strings.TrimRight(ansi.Strip(ansi.Cut(rows[y], from, to)), blankChars))
+	}
+	for len(out) > 0 && out[0] == "" {
+		out = out[1:]
+	}
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	out[0] = strings.TrimLeft(out[0], blankChars)
+	indent := -1
+	for _, l := range out[1:] {
+		if l == "" {
+			continue
+		}
+		if n := len(l) - len(strings.TrimLeft(l, blankChars)); indent < 0 || n < indent {
+			indent = n
+		}
+	}
+	if indent > 0 {
+		for i := 1; i < len(out); i++ {
+			if len(out[i]) >= indent {
+				out[i] = out[i][indent:]
+			}
+		}
 	}
 	return strings.Join(out, "\n")
 }
+
+// blankChars are the padding characters trimmed from copied rows. All are
+// single-byte so byte offsets equal column counts when dedenting.
+const blankChars = " \t"
 
 // highlightRow renders the selected columns of row in reverse video.
 func highlightRow(row string, from, to int) string {

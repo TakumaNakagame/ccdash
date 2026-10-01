@@ -37,6 +37,34 @@ func TestSelectionText(t *testing.T) {
 	}
 }
 
+// TestSelectionTextStripsMargins: a whole-width drag over Claude Code's
+// indented output copies without the left margin, padding, or blank rows.
+func TestSelectionTextStripsMargins(t *testing.T) {
+	rows := []string{
+		"                    ",
+		"⏺ First paragraph   ",
+		"  continues here    ",
+		"                    ",
+		"    - nested item   ",
+		"                    ",
+	}
+	sel := liveSelection{ax: 0, ay: 0, bx: 19, by: 5}
+	want := "⏺ First paragraph\ncontinues here\n\n  - nested item"
+	if got := selectionText(sel, rows, 20); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	sel = liveSelection{ax: 0, ay: 2, bx: 19, by: 4}
+	want = "continues here\n\n- nested item"
+	if got := selectionText(sel, rows, 20); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	if got := selectionText(liveSelection{ax: 0, ay: 0, bx: 19, by: 0}, rows, 20); got != "" {
+		t.Fatalf("blank-only selection: got %q, want empty", got)
+	}
+}
+
 func TestHighlightRowKeepsWidth(t *testing.T) {
 	row := "ab\x1b[31m日本\x1b[0mcd  "
 	got := highlightRow(row, 2, 6)
