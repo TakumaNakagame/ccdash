@@ -261,7 +261,9 @@ screen, and the pane header reads `⬡ live`.
 | `F` | Fullscreen: hand the whole terminal to the same session; `ctrl+d` returns |
 | mouse wheel over the pane | Scrolls claude, not the transcript |
 | click a session in the list | Select it (the right pane previews it) |
-| double-click a session | Stopped: resume it (like `enter`). Hosted by ccdash: focus its live pane. Running in another terminal / tmux: nothing (use `enter`) |
+| double-click a session | Same as `enter` |
+
+Opening (`enter` / double-click) a session whose claude is still running in another terminal asks first: a red **already running** window warns that resuming it here starts a second claude on the same conversation. Only `y` opens it anyway; `n`, `esc` or `enter` cancel. Sessions in a tmux pane just switch to it.
 
 While the pane has focus every other key goes to claude, including `q`.
 The emulator lives in the server, so the screen survives TUI restarts

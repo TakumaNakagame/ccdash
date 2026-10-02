@@ -262,6 +262,11 @@ type model struct {
 	lastClickIdx int
 	lastClickAt  time.Time
 
+	// dupConfirm shows the "already running" confirmation for
+	// dupSessionID (see dupconfirm.go).
+	dupConfirm   bool
+	dupSessionID string
+
 	restartConfirm   bool
 	restartRequested bool
 	// Skill picker state (see skillpicker.go).
@@ -821,6 +826,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A left press in the emulator area also anchors a drag
 		// selection (see livesel.go).
 		m.clearLiveSelection()
+		if m.modalOpen() && m.pane == paneSessions {
+			return m, nil // a picker / confirmation owns input
+		}
 		if msg.Button == tea.MouseLeft {
 			mm := msg.Mouse()
 			if live := m.liveForCurrent(); live != nil && m.mouseInLiveScreen(mm) {
@@ -1011,6 +1019,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.clearLiveSelection()
 	if m.restartConfirm {
 		return m.handleKeyRestartConfirm(msg)
+	}
+	if m.dupConfirm {
+		return m.handleKeyDupConfirm(msg)
 	}
 	if m.pane == paneSessions && m.liveFocus {
 		if live := m.liveForCurrent(); live != nil {
@@ -2237,10 +2248,22 @@ func postPTYStart(sessionID, resumeID, cwd, prompt string, cols, rows int) (stri
 // know one; otherwise it asks the server to start/resume the PTY session and
 // connects to it via StreamClient.
 func (m *model) attachCurrent() tea.Cmd {
+	return m.attachSession(false)
+}
+
+// attachSession opens the selected session. Unless force is set, a session
+// already running in another terminal opens the "already running"
+// confirmation instead of resuming a second claude (see dupconfirm.go).
+func (m *model) attachSession(force bool) tea.Cmd {
 	if m.pane != paneSessions || len(m.sessions) == 0 {
 		return nil
 	}
 	s := m.sessions[m.selSess]
+	if !force && m.liveForCurrent() == nil && m.runningElsewhere(s) {
+		m.dupSessionID = s.SessionID
+		m.dupConfirm = true
+		return nil
+	}
 	if m.remote.Enabled {
 		return m.attachRemote(s)
 	}
@@ -2502,6 +2525,12 @@ func (m *model) View() tea.View {
 		out = overlay(out, box, x, y)
 		// The caret doubles as the IME anchor while typing a path.
 		v.Cursor = tea.NewCursor(x+cx, y+cy)
+	}
+	if m.dupConfirm {
+		box := m.dupConfirmBox()
+		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
+		out = overlay(out, box, max(0, (m.width-bw)/2), max(1, (m.height-bh)/3))
+		v.Cursor = nil
 	}
 	if m.restartConfirm {
 		box := m.restartBox()

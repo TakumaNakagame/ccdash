@@ -2,18 +2,12 @@ package tui
 
 // Mouse selection in the session list: a click selects the session (the
 // right pane previews it), a double click on the same row opens it the way
-// enter would — but only where that can't surprise anyone: a stopped
-// session is resumed, one ccdash already hosts gets the keyboard, and one
-// running in another terminal / tmux is left alone (a click must not spawn
-// a second claude on a live session or yank the tmux client away).
+// enter does — including the "already running elsewhere" confirmation.
 
 import (
-	"strconv"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
 )
 
 // doubleClickWindow is the max gap between the two clicks of a double click.
@@ -24,7 +18,7 @@ const doubleClickWindow = 400 * time.Millisecond
 func (m *model) modalOpen() bool {
 	return m.pane != paneSessions ||
 		m.editingTitle || m.editingGroup || m.editingSearch ||
-		m.editingNewSession || m.editingSkill || m.restartConfirm ||
+		m.editingNewSession || m.editingSkill || m.restartConfirm || m.dupConfirm ||
 		m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm
 }
 
@@ -75,7 +69,10 @@ func (m *model) clickSessionList(mm tea.Mouse) tea.Cmd {
 	return m.openSessionByClick()
 }
 
-// openSessionByClick is the double-click action on the selected session.
+// openSessionByClick is the double-click action on the selected session:
+// the same as enter (attachCurrent, which asks before opening a session
+// that's already running in another terminal), except that a session
+// ccdash hosts but hasn't connected yet is left alone.
 func (m *model) openSessionByClick() tea.Cmd {
 	s := m.sessions[m.selSess]
 	if live := m.liveForCurrent(); live != nil && !live.exited {
@@ -84,19 +81,6 @@ func (m *model) openSessionByClick() tea.Cmd {
 	}
 	if m.ptyAlive[s.SessionID] {
 		return nil // hosted here; the live screen is still connecting
-	}
-	if s.Pane != "" {
-		m.flash = "running in tmux pane " + s.Pane + " — press enter to switch to it"
-		return nil
-	}
-	if s.Status == mdl.StatusActive || s.Status == mdl.StatusIdle {
-		// Resuming here would run a second claude on the same session.
-		where := "another terminal"
-		if s.ProcPID != 0 {
-			where += " (pid " + strconv.Itoa(s.ProcPID) + ")"
-		}
-		m.flash = "running in " + where + " — can't be shown here; exit it there, then double-click to resume"
-		return nil
 	}
 	if !m.settings.AttachEnabled {
 		m.flash = "attach is OFF (settings ',')"

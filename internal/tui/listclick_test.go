@@ -65,11 +65,12 @@ func TestListClickSelectsAndDoubleClickResumes(t *testing.T) {
 				t.Fatalf("slow second click acted: %q", m.flash)
 			}
 
-			// A session running in another terminal is never resumed.
+			// A session running in another terminal asks first.
 			click(1)
-			if cmd := click(1); cmd != nil {
-				t.Fatal("double click spawned a second claude on a running session")
+			if cmd := click(1); cmd != nil || !m.dupConfirm || m.dupSessionID != "b" {
+				t.Fatalf("double click on running: cmd=%v confirm=%v id=%q", cmd, m.dupConfirm, m.dupSessionID)
 			}
+			m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 		})
 	}
 }
@@ -202,5 +203,51 @@ func TestSettingsScrollKeepsWindow(t *testing.T) {
 	}
 	if m.settingsScroll != 0 {
 		t.Fatalf("at first row scroll=%d, want 0", m.settingsScroll)
+	}
+}
+
+// TestDupConfirm: enter on a session running in another terminal opens the
+// confirmation; enter / n / esc there cancel, only y resumes it here.
+func TestDupConfirm(t *testing.T) {
+	m := newModel(context.Background(), nil, RemoteInfo{})
+	m.width, m.height = 120, 40
+	m.settings.AttachEnabled = true
+	m.sessions = []mdl.Session{{SessionID: "run1", Title: "busy elsewhere", Cwd: "/w/x", Status: mdl.StatusActive, ProcPID: 2873}}
+	enter := func() tea.Cmd { _, c := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); return c }
+
+	if cmd := enter(); cmd != nil || !m.dupConfirm {
+		t.Fatalf("enter: cmd=%v confirm=%v", cmd, m.dupConfirm)
+	}
+	box := ansi.Strip(m.dupConfirmBox())
+	for _, want := range []string{"already running", "busy elsewhere", "pid 2873", "second claude", "y yes"} {
+		if !strings.Contains(box, want) {
+			t.Errorf("modal missing %q:\n%s", want, box)
+		}
+	}
+	if out := ansi.Strip(m.View().Content); !strings.Contains(out, "already running") {
+		t.Fatal("modal not drawn")
+	}
+	// enter inside the modal is "no": the risky choice needs y.
+	if cmd := enter(); cmd != nil || m.dupConfirm {
+		t.Fatalf("enter in modal: cmd=%v confirm=%v", cmd, m.dupConfirm)
+	}
+	enter()
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.dupConfirm {
+		t.Fatal("esc did not close the modal")
+	}
+	enter()
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"}); cmd == nil || m.dupConfirm {
+		t.Fatalf("y: cmd=%v confirm=%v", cmd, m.dupConfirm)
+	}
+
+	// Stopped sessions and tmux panes don't ask.
+	m.sessions[0].Status = mdl.StatusStopped
+	if enter(); m.dupConfirm {
+		t.Fatal("stopped session asked")
+	}
+	m.sessions[0].Status, m.sessions[0].Pane = mdl.StatusActive, "%3"
+	if enter(); m.dupConfirm {
+		t.Fatal("tmux session asked")
 	}
 }
