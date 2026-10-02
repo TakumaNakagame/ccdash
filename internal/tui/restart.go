@@ -46,11 +46,23 @@ func (m *model) pendingApprovalCount() int {
 	return n
 }
 
-// handleKeyRestartConfirm: y / enter restarts, anything else cancels.
+// openRestartConfirm shows the restart confirmation, focus on Restart.
+// note is an optional first line ("Updated to vX…").
+func (m *model) openRestartConfirm(note string) {
+	m.restartNote = note
+	m.restartConfirm = true
+	m.modalFocus = 0
+}
+
+// handleKeyRestartConfirm: Restart quits with ErrRestart, Cancel closes
+// the window; arrows / hjkl move between the two (see resolveModalKey).
 func (m *model) handleKeyRestartConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	action := m.resolveModalKey(msg)
+	if action == "" {
+		return m, nil
+	}
 	m.restartConfirm = false
-	switch msg.String() {
-	case "y", "Y", "enter":
+	if action == "y" {
 		m.restartRequested = true
 		return m, tea.Quit
 	}
@@ -112,9 +124,9 @@ func (m *model) restartBox() (string, []modalButton) {
 	row, spans := buttonRow([]buttonSpec{
 		{key: "y", label: "Restart", style: btnGo},
 		{key: "n", label: "Cancel", style: btnPlain},
-	})
+	}, m.modalFocus)
 	btns := placeButtons(spans, len(lines))
-	lines = append(lines, row, "", subtitleStyle.Render("click a button, or press y / enter to restart (any other key cancels)"))
+	lines = append(lines, row, "", subtitleStyle.Render("←/→ or h/l select · enter choose · y / n · esc cancel · or click"))
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

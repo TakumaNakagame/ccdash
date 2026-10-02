@@ -269,6 +269,8 @@ type model struct {
 	// modalBtns are the on-screen buttons of the open confirmation,
 	// recorded by View (see modalbtn.go).
 	modalBtns []modalButton
+	// modalFocus is the keyboard-focused button of the open confirmation.
+	modalFocus int
 
 	restartConfirm   bool
 	restartRequested bool
@@ -692,8 +694,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.updateAvailable = ""
 		// The new binary only runs after a restart: offer it right away.
-		m.restartNote = "Updated to " + msg.res.NewVersion + ". Restart now to run it."
-		m.restartConfirm = true
+		m.openRestartConfirm("Updated to " + msg.res.NewVersion + ". Restart now to run it.")
 		return m, nil
 	case updateNotesMsg:
 		m.updateNotes = msg.notes
@@ -2268,8 +2269,7 @@ func (m *model) attachSession(force bool) tea.Cmd {
 	}
 	s := m.sessions[m.selSess]
 	if !force && m.liveForCurrent() == nil && m.runningElsewhere(s) {
-		m.dupSessionID = s.SessionID
-		m.dupConfirm = true
+		m.openDupConfirm(s)
 		return nil
 	}
 	if m.remote.Enabled {
@@ -3045,8 +3045,7 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		case settings.KindAction:
 			if cur.Key == settings.KeyRestart {
-				m.restartNote = ""
-				m.restartConfirm = true
+				m.openRestartConfirm("")
 				return m, nil
 			}
 			if cur.Key == settings.KeyUpdate {

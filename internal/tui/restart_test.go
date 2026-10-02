@@ -173,7 +173,7 @@ func TestModalButtonsClickable(t *testing.T) {
 	screen := strings.Split(ansi.Strip(m.View().Content), "\n")
 	for _, b := range m.modalBtns {
 		label := ansi.Cut(screen[b.y], b.x0, b.x1)
-		if !strings.HasPrefix(strings.TrimSpace(label), b.key+" ") {
+		if !strings.HasPrefix(strings.Trim(label, " ><"), b.key+" ") {
 			t.Fatalf("button %q covers %q", b.key, label)
 		}
 	}
@@ -200,5 +200,56 @@ func TestModalButtonsClickable(t *testing.T) {
 	}
 	if cmd := click(m.modalBtns[0].x0, m.modalBtns[0].y); cmd == nil || !m.restartRequested {
 		t.Fatal("Restart button did not request a restart")
+	}
+}
+
+// TestModalKeyboardNav: arrows / hjkl / tab move the focus between the
+// buttons, enter presses the focused one, unrelated keys are ignored.
+func TestModalKeyboardNav(t *testing.T) {
+	m := newModel(context.Background(), nil, RemoteInfo{})
+	m.width, m.height = 120, 40
+	m.settings.AttachEnabled = true
+	m.sessions = []mdl.Session{{SessionID: "run1", Title: "busy", Status: mdl.StatusActive}}
+	key := func(k tea.KeyPressMsg) tea.Cmd { _, c := m.Update(k); return c }
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+
+	key(enter) // opens the already-running confirmation, focus on No
+	if !m.dupConfirm || m.modalFocus != 1 {
+		t.Fatalf("confirm=%v focus=%d, want No focused", m.dupConfirm, m.modalFocus)
+	}
+	db, _ := m.dupConfirmBox()
+	if !strings.Contains(ansi.Strip(db), ">n  No<") {
+		t.Fatalf("focused No not marked:\n%s", ansi.Strip(db))
+	}
+	for _, k := range []tea.KeyPressMsg{
+		{Code: tea.KeyDown}, {Code: tea.KeyUp}, {Code: 'x', Text: "x"}, {Code: 'q', Text: "q"},
+	} {
+		key(k)
+	}
+	if !m.dupConfirm || m.modalFocus != 1 {
+		t.Fatalf("down/up/x/q: confirm=%v focus=%d", m.dupConfirm, m.modalFocus)
+	}
+	key(tea.KeyPressMsg{Code: tea.KeyLeft}) // → Yes
+	if m.modalFocus != 0 {
+		t.Fatalf("left: focus=%d, want 0 (Yes)", m.modalFocus)
+	}
+	key(tea.KeyPressMsg{Code: 'l', Text: "l"}) // → No
+	key(tea.KeyPressMsg{Code: 'h', Text: "h"}) // → Yes
+	if cmd := key(enter); cmd == nil || m.dupConfirm {
+		t.Fatalf("enter on Yes: cmd=%v confirm=%v", cmd, m.dupConfirm)
+	}
+
+	// enter on the default No cancels.
+	key(enter)
+	if cmd := key(enter); cmd != nil || m.dupConfirm {
+		t.Fatalf("enter on No: cmd=%v confirm=%v", cmd, m.dupConfirm)
+	}
+
+	// Restart: focus starts on Restart; tab → Cancel; enter cancels.
+	m.openRestartConfirm("")
+	key(tea.KeyPressMsg{Code: tea.KeyTab})
+	key(enter)
+	if m.restartConfirm || m.restartRequested {
+		t.Fatalf("tab+enter: confirm=%v requested=%v", m.restartConfirm, m.restartRequested)
 	}
 }

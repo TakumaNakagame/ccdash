@@ -32,8 +32,10 @@ var (
 )
 
 // buttonRow renders the buttons on one line, three spaces apart, and
-// their column spans relative to the line start.
-func buttonRow(specs []buttonSpec) (string, []modalButton) {
+// their column spans relative to the line start. The button at focus is
+// drawn as >key label< (same width; ASCII, not the ambiguous-width ›‹),
+// bold and underlined.
+func buttonRow(specs []buttonSpec, focus int) (string, []modalButton) {
 	var parts []string
 	var spans []modalButton
 	x := 0
@@ -43,8 +45,13 @@ func buttonRow(specs []buttonSpec) (string, []modalButton) {
 			x += 3
 		}
 		txt := " " + b.key + "  " + b.label + " "
+		style := b.style
+		if i == focus {
+			txt = ">" + b.key + "  " + b.label + "<"
+			style = style.Bold(true).Underline(true)
+		}
 		w := ansi.StringWidth(txt)
-		parts = append(parts, b.style.Render(txt))
+		parts = append(parts, style.Render(txt))
 		spans = append(spans, modalButton{x0: x, x1: x + w, key: b.key})
 		x += w
 	}
@@ -60,6 +67,30 @@ func placeButtons(spans []modalButton, line int) []modalButton {
 		out[i] = modalButton{x0: s.x0 + 2, x1: s.x1 + 2, y: line + 1, key: s.key}
 	}
 	return out
+}
+
+// modalButtonKeys are the keys of the confirmation's buttons, in order.
+var modalButtonKeys = []string{"y", "n"}
+
+// resolveModalKey maps a key press in a confirmation window to an action:
+// "y" / "n" for a button, "" for a key that only moved the focus or that
+// the window ignores. Arrows / hjkl / tab move the focus; enter and space
+// press the focused button; esc is "n".
+func (m *model) resolveModalKey(msg tea.KeyPressMsg) string {
+	n := len(modalButtonKeys)
+	switch msg.String() {
+	case "y", "Y":
+		return "y"
+	case "n", "N", "esc":
+		return "n"
+	case "enter", "space":
+		return modalButtonKeys[clamp(m.modalFocus, 0, n-1)]
+	case "left", "h", "up", "k", "shift+tab":
+		m.modalFocus = (m.modalFocus - 1 + n) % n
+	case "right", "l", "down", "j", "tab":
+		m.modalFocus = (m.modalFocus + 1) % n
+	}
+	return ""
 }
 
 // clickModalButton replays the key of the button under a left click, if

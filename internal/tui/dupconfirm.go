@@ -26,13 +26,25 @@ func (m *model) runningElsewhere(s mdl.Session) bool {
 	return s.Status == mdl.StatusActive || s.Status == mdl.StatusIdle
 }
 
-// handleKeyDupConfirm: y opens the session anyway; anything else cancels.
-// enter deliberately cancels too — the risky choice needs the explicit y.
+// openDupConfirm asks before opening s, which runs in another terminal.
+// The focus starts on No, so a reflexive enter doesn't open a second one.
+func (m *model) openDupConfirm(s mdl.Session) {
+	m.dupSessionID = s.SessionID
+	m.dupConfirm = true
+	m.modalFocus = 1
+}
+
+// handleKeyDupConfirm: Yes opens the session anyway, No closes the window;
+// arrows / hjkl move between the two (see resolveModalKey).
 func (m *model) handleKeyDupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	action := m.resolveModalKey(msg)
+	if action == "" {
+		return m, nil
+	}
 	sid := m.dupSessionID
 	m.dupConfirm = false
 	m.dupSessionID = ""
-	if msg.String() != "y" && msg.String() != "Y" {
+	if action != "y" {
 		m.flash = "not opened"
 		return m, nil
 	}
@@ -77,9 +89,9 @@ func (m *model) dupConfirmBox() (string, []modalButton) {
 	row, spans := buttonRow([]buttonSpec{
 		{key: "y", label: "Yes, open a second one", style: btnDanger},
 		{key: "n", label: "No", style: btnPlain},
-	})
+	}, m.modalFocus)
 	btns := placeButtons(spans, len(lines))
-	lines = append(lines, row, "", subtitleStyle.Render("click a button, or press y / n (esc and enter also cancel)"))
+	lines = append(lines, row, "", subtitleStyle.Render("←/→ or h/l select · enter choose · y / n · esc cancel · or click"))
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
