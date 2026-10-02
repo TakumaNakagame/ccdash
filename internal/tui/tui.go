@@ -266,6 +266,9 @@ type model struct {
 	// dupSessionID (see dupconfirm.go).
 	dupConfirm   bool
 	dupSessionID string
+	// modalBtns are the on-screen buttons of the open confirmation,
+	// recorded by View (see modalbtn.go).
+	modalBtns []modalButton
 
 	restartConfirm   bool
 	restartRequested bool
@@ -826,6 +829,11 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A left press in the emulator area also anchors a drag
 		// selection (see livesel.go).
 		m.clearLiveSelection()
+		if msg.Button == tea.MouseLeft {
+			if cmd, ok := m.clickModalButton(msg.Mouse()); ok {
+				return m, cmd
+			}
+		}
 		if m.modalOpen() && m.pane == paneSessions {
 			return m, nil // a picker / confirmation owns input
 		}
@@ -2526,17 +2534,21 @@ func (m *model) View() tea.View {
 		// The caret doubles as the IME anchor while typing a path.
 		v.Cursor = tea.NewCursor(x+cx, y+cy)
 	}
-	if m.dupConfirm {
-		box := m.dupConfirmBox()
+	m.modalBtns = nil
+	confirmBox := func(box string, btns []modalButton) {
 		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
-		out = overlay(out, box, max(0, (m.width-bw)/2), max(1, (m.height-bh)/3))
+		x, y := max(0, (m.width-bw)/2), max(1, (m.height-bh)/3)
+		out = overlay(out, box, x, y)
 		v.Cursor = nil
+		for _, b := range btns {
+			m.modalBtns = append(m.modalBtns, modalButton{x0: x + b.x0, x1: x + b.x1, y: y + b.y, key: b.key})
+		}
+	}
+	if m.dupConfirm {
+		confirmBox(m.dupConfirmBox())
 	}
 	if m.restartConfirm {
-		box := m.restartBox()
-		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
-		out = overlay(out, box, max(0, (m.width-bw)/2), max(1, (m.height-bh)/3))
-		v.Cursor = nil
+		confirmBox(m.restartBox())
 	}
 	if m.editingSkill {
 		box, cx, cy := m.skillPickerBox()

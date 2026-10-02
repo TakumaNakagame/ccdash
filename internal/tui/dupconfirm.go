@@ -46,8 +46,9 @@ func (m *model) handleKeyDupConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// dupConfirmBox renders the confirmation window.
-func (m *model) dupConfirmBox() string {
+// dupConfirmBox renders the confirmation window and its clickable
+// buttons (box-relative).
+func (m *model) dupConfirmBox() (string, []modalButton) {
 	w := min(max(m.width-8, 40), 80)
 	inner := w - 4
 	wrap := func(s string) []string {
@@ -72,8 +73,13 @@ func (m *model) dupConfirmBox() string {
 	lines = append(lines, wrap("This session is already open in "+where+".")...)
 	lines = append(lines, "")
 	lines = append(lines, wrap("Opening it here starts a second claude on the same conversation. Both write to the same transcript, so their replies can interleave and the history gets confusing.")...)
-	lines = append(lines, "", "Open it here anyway?", "",
-		statusActive.Render("y")+" yes, open a second one   "+statusActive.Render("n")+" / esc no")
+	lines = append(lines, "", "Open it here anyway?", "")
+	row, spans := buttonRow([]buttonSpec{
+		{key: "y", label: "Yes, open a second one", style: btnDanger},
+		{key: "n", label: "No", style: btnPlain},
+	})
+	btns := placeButtons(spans, len(lines))
+	lines = append(lines, row, "", subtitleStyle.Render("click a button, or press y / n (esc and enter also cancel)"))
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -87,5 +93,5 @@ func (m *model) dupConfirmBox() string {
 		bl[0] = ansi.Cut(bl[0], 0, 2) + pendingStyle.Render(title) + ansi.TruncateLeft(bl[0], 2+len(title), "")
 		box = bl[0] + "\n" + bl[1]
 	}
-	return box
+	return box, btns
 }

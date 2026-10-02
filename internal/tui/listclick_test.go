@@ -218,8 +218,9 @@ func TestDupConfirm(t *testing.T) {
 	if cmd := enter(); cmd != nil || !m.dupConfirm {
 		t.Fatalf("enter: cmd=%v confirm=%v", cmd, m.dupConfirm)
 	}
-	box := ansi.Strip(m.dupConfirmBox())
-	for _, want := range []string{"already running", "busy elsewhere", "pid 2873", "second claude", "y yes"} {
+	db, _ := m.dupConfirmBox()
+	box := ansi.Strip(db)
+	for _, want := range []string{"already running", "busy elsewhere", "pid 2873", "second claude", "Yes, open a second one"} {
 		if !strings.Contains(box, want) {
 			t.Errorf("modal missing %q:\n%s", want, box)
 		}

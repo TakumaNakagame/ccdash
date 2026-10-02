@@ -36,7 +36,8 @@ func TestRestartConfirm(t *testing.T) {
 	if !m.restartConfirm {
 		t.Fatal("restart row did not open the confirmation")
 	}
-	box := ansi.Strip(m.restartBox())
+	rb, _ := m.restartBox()
+	box := ansi.Strip(rb)
 	for _, want := range []string{"1 live session(s)", "STOPPED", "fix the login bug", "1 pending approval", "resume"} {
 		if !strings.Contains(box, want) {
 			t.Errorf("modal missing %q:\n%s", want, box)
@@ -133,8 +134,8 @@ func TestUpdateFromSettings(t *testing.T) {
 		t.Fatal("y did not start the install")
 	}
 	m.Update(updateDoneMsg{res: selfupdate.Result{OldVersion: "v0.5.0", NewVersion: "v0.5.1"}})
-	if !m.restartConfirm || !strings.Contains(ansi.Strip(m.restartBox()), "Updated to v0.5.1") {
-		t.Fatalf("after install: confirm=%v box=\n%s", m.restartConfirm, ansi.Strip(m.restartBox()))
+	if !m.restartConfirm || !strings.Contains(ansi.Strip(first(m.restartBox())), "Updated to v0.5.1") {
+		t.Fatalf("after install: confirm=%v box=\n%s", m.restartConfirm, ansi.Strip(first(m.restartBox())))
 	}
 
 	// Dev builds don't self-update.
@@ -143,5 +144,61 @@ func TestUpdateFromSettings(t *testing.T) {
 	m.pane = paneSettings
 	if cmd := activate(); cmd != nil || !strings.Contains(m.flash, "dev build") {
 		t.Fatalf("dev: cmd=%v flash=%q", cmd, m.flash)
+	}
+}
+
+func first(box string, _ []modalButton) string { return box }
+
+// TestModalButtonsClickable: the buttons View records sit on the rendered
+// labels, a click on one acts like its key, and a click elsewhere does
+// nothing (doesn't cancel, doesn't reach the dashboard).
+func TestModalButtonsClickable(t *testing.T) {
+	m := newModel(context.Background(), nil, RemoteInfo{})
+	m.width, m.height = 120, 40
+	m.settings.AttachEnabled = true
+	m.sessions = []mdl.Session{{SessionID: "run1", Title: "busy", Status: mdl.StatusActive}}
+	click := func(x, y int) tea.Cmd {
+		_, cmd := m.Update(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+		return cmd
+	}
+	open := func() {
+		m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m.View()
+		if !m.dupConfirm || len(m.modalBtns) != 2 {
+			t.Fatalf("confirm=%v buttons=%d", m.dupConfirm, len(m.modalBtns))
+		}
+	}
+
+	open()
+	screen := strings.Split(ansi.Strip(m.View().Content), "\n")
+	for _, b := range m.modalBtns {
+		label := ansi.Cut(screen[b.y], b.x0, b.x1)
+		if !strings.HasPrefix(strings.TrimSpace(label), b.key+" ") {
+			t.Fatalf("button %q covers %q", b.key, label)
+		}
+	}
+
+	no, yes := m.modalBtns[1], m.modalBtns[0]
+	click(0, 0) // outside the buttons: nothing happens
+	if !m.dupConfirm {
+		t.Fatal("a click off the buttons closed the modal")
+	}
+	click(no.x0, no.y)
+	if m.dupConfirm {
+		t.Fatal("No did not close the modal")
+	}
+	open()
+	if cmd := click(yes.x1-1, yes.y); cmd == nil || m.dupConfirm {
+		t.Fatalf("Yes: cmd=%v confirm=%v", cmd, m.dupConfirm)
+	}
+
+	// The restart confirmation's buttons work the same way.
+	m.restartConfirm = true
+	m.View()
+	if len(m.modalBtns) != 2 {
+		t.Fatalf("restart buttons=%d", len(m.modalBtns))
+	}
+	if cmd := click(m.modalBtns[0].x0, m.modalBtns[0].y); cmd == nil || !m.restartRequested {
+		t.Fatal("Restart button did not request a restart")
 	}
 }

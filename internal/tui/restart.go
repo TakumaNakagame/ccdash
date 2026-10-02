@@ -58,8 +58,9 @@ func (m *model) handleKeyRestartConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 	return m, nil
 }
 
-// restartBox renders the confirmation window.
-func (m *model) restartBox() string {
+// restartBox renders the confirmation window and its clickable buttons
+// (box-relative).
+func (m *model) restartBox() (string, []modalButton) {
 	w := min(max(m.width-8, 40), 80)
 	inner := w - 4
 	wrap := func(s string) []string {
@@ -107,7 +108,13 @@ func (m *model) restartBox() string {
 		lines = append(lines, bullet("Sessions started outside ccdash (your own terminal / tmux) are not affected.")...)
 		lines = append(lines, bullet("Hook events sent during the few seconds of restart are lost.")...)
 	}
-	lines = append(lines, "", subtitleStyle.Render("y / enter restart · any other key cancel"))
+	lines = append(lines, "")
+	row, spans := buttonRow([]buttonSpec{
+		{key: "y", label: "Restart", style: btnGo},
+		{key: "n", label: "Cancel", style: btnPlain},
+	})
+	btns := placeButtons(spans, len(lines))
+	lines = append(lines, row, "", subtitleStyle.Render("click a button, or press y / enter to restart (any other key cancels)"))
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -121,7 +128,7 @@ func (m *model) restartBox() string {
 		bl[0] = ansi.Cut(bl[0], 0, 2) + pendingStyle.Render(title) + ansi.TruncateLeft(bl[0], 2+len(title), "")
 		box = bl[0] + "\n" + bl[1]
 	}
-	return box
+	return box, btns
 }
 
 // openReleaseNotes shows the notes for m.updateAvailable; y there installs.
