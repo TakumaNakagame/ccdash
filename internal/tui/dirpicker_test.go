@@ -244,7 +244,7 @@ func TestPaneSplitCompact(t *testing.T) {
 	if got := m.leftPaneWidth(); got != 100 {
 		t.Fatalf("50/50: left = %d", got)
 	}
-	m.settings.PaneSplit = "30/70"
+	m.settings.PaneListPct = 30
 	if got := m.leftPaneWidth(); got != 60 {
 		t.Fatalf("30/70: left = %d", got)
 	}
@@ -260,6 +260,45 @@ func TestPaneSplitCompact(t *testing.T) {
 	m.width = 80
 	if got := m.leftPaneWidth(); got != 30 {
 		t.Fatalf("narrow: left = %d", got)
+	}
+}
+
+// TestPaneListPctBounds: whatever the stored value, neither pane drops
+// below 10% (or the 30-col list / 20-col right / 5-line minimums).
+func TestPaneListPctBounds(t *testing.T) {
+	m := newModel(context.Background(), nil, RemoteInfo{})
+	m.store = &memStore{kv: map[string]string{}}
+	m.width, m.height = 200, 40
+
+	for _, pct := range []int{-50, 0, 5, 95, 100, 1000} {
+		m.settings.PaneListPct = pct
+		left := m.leftPaneWidth()
+		if right := m.width - left - 3; left < 30 || right < 20 || left < m.width/10 || right < m.width/10-3 {
+			t.Errorf("pct %d: left %d right %d", pct, left, right)
+		}
+		listH, rightH := m.verticalSplit(30)
+		if listH < 5 || rightH < 5 || listH+rightH+1 != 30 {
+			t.Errorf("pct %d: vertical %d/%d", pct, listH, rightH)
+		}
+	}
+
+	// < / > step by 5 and stop at the bounds, persisting each change.
+	m.settings.PaneListPct = 50
+	for range 20 {
+		m.adjustPaneSplit(-5)
+	}
+	if m.settings.PaneListPct != settings.MinPaneListPct {
+		t.Fatalf("shrunk to %d, want %d", m.settings.PaneListPct, settings.MinPaneListPct)
+	}
+	m.adjustPaneSplit(5)
+	if got := m.store.(*memStore).kv["pane_list_pct"]; got != "15" {
+		t.Fatalf("persisted %q, want 15", got)
+	}
+	for range 20 {
+		m.adjustPaneSplit(5)
+	}
+	if m.settings.PaneListPct != settings.MaxPaneListPct {
+		t.Fatalf("grew to %d, want %d", m.settings.PaneListPct, settings.MaxPaneListPct)
 	}
 }
 

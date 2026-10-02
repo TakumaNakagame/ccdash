@@ -298,6 +298,7 @@ func (m *model) handleKeyNewSessionEdit(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 		return m, m.startNewSession(dir)
 	case msg.Code == tea.KeyEscape || key == "ctrl+c":
 		m.closeDirPicker()
+		m.spawnPrompt = ""
 		return m, nil
 	case key == "down" || key == "ctrl+n":
 		move(1)
@@ -427,11 +428,14 @@ func (m *model) dirPickerBox() (box string, caretX, caretY int) {
 		Padding(0, 1).
 		Width(w - 2)
 	title := " new claude session "
+	if m.spawnPrompt != "" {
+		title = " new claude session · " + runewidth.Truncate(m.spawnPrompt, inner-24, "…") + " "
+	}
 	box = style.Render(strings.Join(lines, "\n"))
 	// Put the title into the top border.
 	bl := strings.SplitN(box, "\n", 2)
-	if len(bl) == 2 && ansi.StringWidth(bl[0]) > len(title)+4 {
-		bl[0] = ansi.Cut(bl[0], 0, 2) + pendingStyle.Render(title) + ansi.TruncateLeft(bl[0], 2+len(title), "")
+	if tw := runewidth.StringWidth(title); len(bl) == 2 && ansi.StringWidth(bl[0]) > tw+4 {
+		bl[0] = ansi.Cut(bl[0], 0, 2) + pendingStyle.Render(title) + ansi.TruncateLeft(bl[0], 2+tw, "")
 		box = bl[0] + "\n" + bl[1]
 	}
 	return box, caretX, caretY

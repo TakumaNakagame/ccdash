@@ -27,6 +27,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/selfupdate"
 	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/takumanakagame/ccmanage/internal/skills"
 	"github.com/takumanakagame/ccmanage/internal/store"
 	"github.com/takumanakagame/ccmanage/internal/summarize"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
@@ -67,8 +68,13 @@ func Run(ctx context.Context, st store.Store, lockGroup string, srvMode ServerMo
 		m.groupLocked = true
 	}
 	p := tea.NewProgram(m)
-	_, err := p.Run()
-	return err
+	if _, err := p.Run(); err != nil {
+		return err
+	}
+	if m.restartRequested {
+		return ErrRestart
+	}
+	return nil
 }
 
 type pane int
@@ -169,6 +175,7 @@ type model struct {
 
 	// settings page state
 	settingsSel    int
+	settingsScroll int    // first visible line of the settings page
 	settingsEdit   bool   // editing an int / string value inline
 	settingsBuffer string // edit buffer (digits only for ints)
 	settingsPick   int    // highlighted path suggestion while editing a Path setting; -1 = none
@@ -232,6 +239,30 @@ type model struct {
 	// first visible row. See dirpicker.go.
 	pickSel    int
 	pickScroll int
+	// spawnPrompt is the first message for the next `n` spawn — set by
+	// the skill picker (`S`, "/<skill>") and consumed by spawnNewSession.
+	spawnPrompt string
+	// restartConfirm shows the "Restart ccdash" confirmation window;
+	// restartRequested makes Run return ErrRestart (see restart.go).
+	// listLineSess maps each visible line of the session list (from its
+	// top) to a session index, -1 for date headers; written by
+	// renderSessionsList, read by clickSessionList. lastClick* detect a
+	// double click on the same row.
+	listLineSess []int
+	// lastNavAt is when j/k last moved the list (see moveWrap).
+	lastNavAt    time.Time
+	lastClickIdx int
+	lastClickAt  time.Time
+
+	restartConfirm   bool
+	restartRequested bool
+	// Skill picker state (see skillpicker.go).
+	editingSkill bool
+	skillBuffer  string
+	skillList    []skills.Skill
+	skillSel     int
+	skillScroll  int
+	skillTabbed  skills.Skill // last Tab-completed entry, for its Dir
 
 	// Live right pane (see live.go). live is the active screen stream for
 	// the selected session; nil when that session isn't hosted by the
@@ -364,8 +395,10 @@ func (m *model) spawnNewSession(expanded string, created bool) tea.Cmd {
 	if g, ok := m.liveScreenGeom(); ok {
 		cols, rows = g.w, g.h
 	}
+	prompt := m.spawnPrompt
+	m.spawnPrompt = ""
 	return func() tea.Msg {
-		ptyKey, tag, err := postPTYStart("", "", cwd, cols, rows)
+		ptyKey, tag, err := postPTYStart("", "", cwd, prompt, cols, rows)
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}
@@ -637,7 +670,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateAvailable = ""
 			return m, nil
 		}
-		m.flash = "updated to " + msg.res.NewVersion + " — restart ccdash to use the new binary"
+		m.flash = "updated to " + msg.res.NewVersion + " — restart from settings (,) → Restart ccdash to use it"
 		m.updateAvailable = ""
 		return m, nil
 	case updateNotesMsg:
@@ -781,6 +814,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.startLiveSelection(live, mm)
 			} else {
 				m.setLiveFocus(false)
+				return m, m.clickSessionList(mm)
 			}
 		}
 		return m, nil
@@ -904,6 +938,9 @@ func (m *model) handlePaste(content string) (tea.Model, tea.Cmd) {
 	case m.editingNewSession:
 		m.newSessionBuffer += flat
 		m.pickSel = -1
+	case m.editingSkill:
+		m.skillBuffer += flat
+		m.skillSel, m.skillScroll = 0, 0
 	case m.pane == paneSettings && m.settingsEdit:
 		m.settingsBuffer += filterSettingsInput(settings.AllSpecs()[m.settingsSel], flat)
 	}
@@ -932,13 +969,17 @@ func (m *model) handleMouse(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	inRight := m.mouseInRightPane(mm)
+	listStep := 1
+	if m.settings.InvertListScroll {
+		listStep = -1
+	}
 	switch msg.Button {
 	case tea.MouseWheelUp:
 		if inRight {
 			m.tailScroll += wheelStep
 			return m, nil
 		}
-		return m, m.move(-1)
+		return m, m.move(-listStep)
 	case tea.MouseWheelDown:
 		if inRight {
 			m.tailScroll -= wheelStep
@@ -947,13 +988,16 @@ func (m *model) handleMouse(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		return m, m.move(1)
+		return m, m.move(listStep)
 	}
 	return m, nil
 }
 
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.clearLiveSelection()
+	if m.restartConfirm {
+		return m.handleKeyRestartConfirm(msg)
+	}
 	if m.pane == paneSessions && m.liveFocus {
 		if live := m.liveForCurrent(); live != nil {
 			return m.handleLiveKey(msg, live)
@@ -974,6 +1018,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.editingNewSession {
 		return m.handleKeyNewSessionEdit(msg)
+	}
+	if m.editingSkill {
+		return m.handleKeySkillEdit(msg)
 	}
 	if m.editingTitle || m.editingGroup {
 		return m.handleKeyTitleEdit(msg)
@@ -1007,6 +1054,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.flash = ""
 			return m, m.spawnNewSession(path, true)
 		default:
+			m.spawnPrompt = ""
 			m.flash = "new session cancelled"
 			return m, nil
 		}
@@ -1015,9 +1063,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "q":
 		return m, m.quit()
 	case "j", "down":
-		return m, m.moveWrap(1)
+		return m, m.moveWrap(1, msg.IsRepeat)
 	case "k", "up":
-		return m, m.moveWrap(-1)
+		return m, m.moveWrap(-1, msg.IsRepeat)
 	case "g", "home":
 		return m, m.jumpTo(0)
 	case "G", "end":
@@ -1165,6 +1213,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.settingsSel = 0
 		m.settingsEdit = false
 		return m, nil
+	case "<":
+		m.adjustPaneSplit(-5)
+		return m, nil
+	case ">":
+		m.adjustPaneSplit(5)
+		return m, nil
 	case "@":
 		m.cycleAccountFilter()
 		m.applyGroupFilter()
@@ -1192,7 +1246,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.flash = "attach is OFF (settings ',')"
 			return m, nil
 		}
+		m.spawnPrompt = ""
 		m.openDirPicker()
+		return m, nil
+	case "S":
+		// Run a skill in a throwaway session: pick a skill, then a dir.
+		if !m.settings.AttachEnabled {
+			m.flash = "attach is OFF (settings ',')"
+			return m, nil
+		}
+		m.openSkillPicker()
 		return m, nil
 	case "esc":
 		cleared := false
@@ -2122,12 +2185,13 @@ type ptyStartedMsg struct {
 
 // postPTYStart calls POST /pty/start on the local server and returns the ptyKey.
 // sessionId and resumeId may be empty for brand-new sessions.
-func postPTYStart(sessionID, resumeID, cwd string, cols, rows int) (string, int, error) {
+func postPTYStart(sessionID, resumeID, cwd, prompt string, cols, rows int) (string, int, error) {
 	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
 	body, _ := json.Marshal(map[string]any{
 		"sessionId": sessionID,
 		"resumeId":  resumeID,
 		"cwd":       cwd,
+		"prompt":    prompt,
 		"cols":      cols,
 		"rows":      rows,
 	})
@@ -2189,7 +2253,7 @@ func (m *model) attachCurrent() tea.Cmd {
 	}
 	m.flash = "starting claude --resume " + shortID(sid) + "…"
 	return func() tea.Msg {
-		ptyKey, _, err := postPTYStart(sid, sid, cwd, cols, rows)
+		ptyKey, _, err := postPTYStart(sid, sid, cwd, "", cols, rows)
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}
@@ -2239,6 +2303,10 @@ func (m *model) spawnNewSessionRemote(dir string) tea.Cmd {
 		return func() tea.Msg { return attachDoneMsg{err: fmt.Errorf("no ssh target configured (--ssh-target)")} }
 	}
 	script := remoteCD(dir) + " && exec claude"
+	if m.spawnPrompt != "" {
+		script += " " + shellQuote(m.spawnPrompt)
+		m.spawnPrompt = ""
+	}
 	c := sshCommand(target, script)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		if err != nil {
@@ -2334,15 +2402,34 @@ func (m *model) move(delta int) tea.Cmd {
 	return nil
 }
 
+// navRepeatGap is the longest gap between two navigation presses that
+// still counts as one continuous run (a held key or fast tapping). OS key
+// repeat fires every ~30-80 ms, well under it.
+const navRepeatGap = 200 * time.Millisecond
+
 // moveWrap is move for keyboard navigation: stepping past either end
-// wraps around to the other. Mouse wheel keeps the clamping move so a
-// long scroll doesn't spin through the list.
-func (m *model) moveWrap(delta int) tea.Cmd {
+// wraps around to the other — but only on a fresh press. While the key is
+// held (repeat) or presses come in a fast run, the selection stops at the
+// end, so racing down the list doesn't fly over the edge; pressing again
+// after a pause wraps. Mouse wheel keeps the clamping move so a long
+// scroll doesn't spin through the list.
+func (m *model) moveWrap(delta int, repeat bool) tea.Cmd {
 	n := len(m.sessions)
+	now := time.Now()
+	run := repeat || now.Sub(m.lastNavAt) < navRepeatGap
+	m.lastNavAt = now
 	if n <= 1 {
 		return nil
 	}
-	return m.jumpTo(((m.selSess+delta)%n + n) % n)
+	next := m.selSess + delta
+	if next < 0 || next >= n {
+		if run {
+			m.flash = "end of list — press again to wrap"
+			return nil
+		}
+		next = (next%n + n) % n
+	}
+	return m.jumpTo(next)
 }
 
 func (m *model) jumpTo(idx int) tea.Cmd {
@@ -2404,6 +2491,19 @@ func (m *model) View() tea.View {
 		x, y := max(0, (m.width-bw)/2), max(1, (m.height-bh)/3)
 		out = overlay(out, box, x, y)
 		// The caret doubles as the IME anchor while typing a path.
+		v.Cursor = tea.NewCursor(x+cx, y+cy)
+	}
+	if m.restartConfirm {
+		box := m.restartBox()
+		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
+		out = overlay(out, box, max(0, (m.width-bw)/2), max(1, (m.height-bh)/3))
+		v.Cursor = nil
+	}
+	if m.editingSkill {
+		box, cx, cy := m.skillPickerBox()
+		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
+		x, y := max(0, (m.width-bw)/2), max(1, (m.height-bh)/3)
+		out = overlay(out, box, x, y)
 		v.Cursor = tea.NewCursor(x+cx, y+cy)
 	}
 	v.SetContent(out)
@@ -2588,7 +2688,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/group  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
+	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  S skill  </> resize  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/group  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
 	if m.pane == paneSessions {
 		if live := m.liveForCurrent(); live != nil && !live.exited {
 			if m.liveFocus {
@@ -2893,6 +2993,10 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.settingsBuffer = "~/"
 			}
 		case settings.KindAction:
+			if cur.Key == settings.KeyRestart {
+				m.restartConfirm = true
+				return m, nil
+			}
 			if cur.Apply != nil {
 				next, err := cur.Apply(m.ctx, m.store, m.settings)
 				if err == nil {
@@ -2933,11 +3037,14 @@ func (m *model) renderSettingsBody(height int) string {
 	specs := settings.AllSpecs()
 	header := titleStyle.Render("settings") + "  " + subtitleStyle.Render("(persists across runs)")
 	var rows []string
-	selEnd := 0 // rows index just past the selected setting (and its suggestions)
+	selStart, selEnd := 0, 0 // rows span of the selected setting (label … help)
 	for i, s := range specs {
 		marker := "  "
 		if i == m.settingsSel {
 			marker = "▶ "
+		}
+		if i == m.settingsSel {
+			selStart = len(rows)
 		}
 		valStr := ""
 		switch s.Kind {
@@ -3015,35 +3122,57 @@ func (m *model) renderSettingsBody(height int) string {
 				rows = append(rows, indent+l)
 			}
 		}
+		rows = append(rows, subtitleStyle.Render("    "+s.Help))
 		if i == m.settingsSel {
 			selEnd = len(rows)
 		}
-		rows = append(rows, subtitleStyle.Render("    "+s.Help))
 		rows = append(rows, "")
 	}
 	// Key help lives in the shared footer (renderFooter), not here.
 	lines := append([]string{header, ""}, rows...)
-	selEnd += 2
-	// Scroll so the selected row (and its suggestions) stay on screen.
-	if height > 0 && len(lines) > height && selEnd > height {
-		start := min(selEnd-height, len(lines)-height)
-		lines = lines[start:]
+	selStart, selEnd = selStart+2, selEnd+2
+	// Scroll only when the selection leaves the window, like a list
+	// view: moving back up from the bottom moves the cursor first and
+	// scrolls once it reaches the top edge.
+	if height <= 0 || len(lines) <= height {
+		m.settingsScroll = 0
+		return strings.Join(lines, "\n")
 	}
-	return strings.Join(lines, "\n")
+	if m.settingsSel == 0 {
+		selStart = 0 // show the page header with the first row
+	}
+	if selStart < m.settingsScroll {
+		m.settingsScroll = selStart
+	}
+	if selEnd > m.settingsScroll+height {
+		m.settingsScroll = selEnd - height
+	}
+	m.settingsScroll = clamp(m.settingsScroll, 0, len(lines)-height)
+	return strings.Join(lines[m.settingsScroll:m.settingsScroll+height], "\n")
 }
 
 // leftPaneWidth is the session list's width in the horizontal layout,
-// per the pane-split setting. Every geometry consumer (render, mouse
+// per the list-size setting. Every geometry consumer (render, mouse
 // zoning, live pane sizing) must use this so they agree to the cell.
+// The list keeps 30 cols and the right pane 20 (after the 3-col
+// separator); on a terminal too narrow for both, the list wins.
 func (m *model) leftPaneWidth() int {
-	w := m.width / 2
-	if m.settings.PaneSplit == "30/70" {
-		w = m.width * 3 / 10
+	w := m.width * settings.ClampPaneListPct(m.settings.PaneListPct) / 100
+	w = min(w, m.width-3-20)
+	return max(w, 30)
+}
+
+// adjustPaneSplit grows (+) or shrinks (-) the session list by step
+// percent and persists it — the `<` / `>` dashboard keys.
+func (m *model) adjustPaneSplit(step int) {
+	pct := settings.ClampPaneListPct(m.settings.PaneListPct + step)
+	next, err := settings.Set(m.ctx, m.store, m.settings, "pane_list_pct", pct)
+	if err != nil {
+		m.err = err
+		return
 	}
-	if w < 30 {
-		w = 30
-	}
-	return w
+	m.settings = next
+	m.flash = fmt.Sprintf("session list %d%% · work pane %d%%", pct, 100-pct)
 }
 
 func (m *model) renderSessionsBody(height int) string {
@@ -3107,7 +3236,7 @@ func (m *model) renderSessionsBodyVertical(height int) string {
 // panes in vertical layout. Extracted so the mouse handler can compute
 // the same top/bottom boundary without re-rendering anything.
 func (m *model) verticalSplit(height int) (listH, rightH int) {
-	listH = height / 2
+	listH = height * settings.ClampPaneListPct(m.settings.PaneListPct) / 100
 	if listH < 5 {
 		listH = 5
 	}
@@ -3123,6 +3252,7 @@ func (m *model) verticalSplit(height int) (listH, rightH int) {
 }
 
 func (m *model) renderSessionsList(width, height int) string {
+	m.listLineSess = nil
 	if len(m.sessions) == 0 {
 		return lipgloss.NewStyle().Width(width).Height(height).
 			Render(subtitleStyle.Render("no sessions yet"))
@@ -3162,12 +3292,16 @@ func (m *model) renderSessionsList(width, height int) string {
 
 	// Flatten rows into a line slice and remember where each session lands.
 	var allLines []string
+	var lineSess []int // session index per line, -1 for headers
 	sessionLineStart := make([]int, len(m.sessions))
 	for _, r := range rows {
 		if r.sessionIdx >= 0 {
 			sessionLineStart[r.sessionIdx] = len(allLines)
 		}
 		allLines = append(allLines, r.lines...)
+		for range r.lines {
+			lineSess = append(lineSess, r.sessionIdx)
+		}
 	}
 
 	// Reserve one line at the bottom for the "n/N" indicator.
@@ -3206,6 +3340,8 @@ func (m *model) renderSessionsList(width, height int) string {
 	}
 
 	body := strings.Join(allLines[m.sessScroll:end], "\n")
+	// Mouse clicks map a list row back to its session through this.
+	m.listLineSess = lineSess[m.sessScroll:end]
 	indicator := fmt.Sprintf("%d / %d sessions", m.selSess+1, len(m.sessions))
 	if m.sessScroll > 0 || end < len(allLines) {
 		indicator += "  ↑↓ to scroll"

@@ -89,7 +89,7 @@ spawns a collector — everything goes over HTTP.`,
 				fmt.Println(version)
 				return nil
 			}
-			return runTUI(cmd.Context(), keepServer, initialGroup, rf)
+			return restartIfAsked(runTUI(cmd.Context(), keepServer, initialGroup, rf))
 		},
 	}
 	root.Flags().BoolVarP(&keepServer, "keep-server", "k", false,
@@ -728,7 +728,7 @@ func tuiCmd(rf *remoteFlags) *cobra.Command {
 		Use:   "tui",
 		Short: "Open the dashboard TUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI(cmd.Context(), keepServer, initialGroup, rf)
+			return restartIfAsked(runTUI(cmd.Context(), keepServer, initialGroup, rf))
 		},
 	}
 	c.Flags().BoolVarP(&keepServer, "keep-server", "k", false,
@@ -791,7 +791,58 @@ func runTUI(ctx context.Context, _ bool, lockGroup string, rf *remoteFlags) erro
 	}
 	defer d.Close()
 
-	return tui.Run(ctx, store.NewLocal(d), lockGroup, srvMode, tui.RemoteInfo{})
+	err = tui.Run(ctx, store.NewLocal(d), lockGroup, srvMode, tui.RemoteInfo{})
+	if errors.Is(err, tui.ErrRestart) {
+		// Take the collector (and the claude PTYs it hosts) down so the
+		// re-exec'd ccdash spawns a fresh one from the current binary.
+		stopServer(addr)
+	}
+	return err
+}
+
+// restartIfAsked re-execs ccdash with the same arguments when the TUI
+// returned tui.ErrRestart (settings → "Restart ccdash"); any other result
+// passes through. runTUI's defers (DB close, log restore) have already run
+// by the time this is called, and Exec keeps the PID and terminal.
+func restartIfAsked(err error) error {
+	if !errors.Is(err, tui.ErrRestart) {
+		return err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("restart: %w", err)
+	}
+	if err := syscall.Exec(self, os.Args, os.Environ()); err != nil {
+		return fmt.Errorf("restart: exec %s: %w", self, err)
+	}
+	return nil // unreachable: Exec only returns on failure
+}
+
+// stopServer asks the collector on addr to shut down and waits for the
+// port to free. Only if it's still answering after that does it fall back
+// to killStaleServer's PID-file SIGTERM — the PID file can be stale, so
+// it isn't the first resort.
+func stopServer(addr string) {
+	if !pingServer(addr) {
+		return
+	}
+	if tok, _ := loadToken(); tok != "" {
+		req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/shutdown", nil)
+		if err == nil {
+			req.Header.Set("X-Ccdash-Token", tok)
+			if resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req); err == nil {
+				resp.Body.Close()
+			}
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !pingServer(addr) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	killStaleServer(addr)
 }
 
 // spawnDetachedServer launches `ccdash server` as a session-leader child that

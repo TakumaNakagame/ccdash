@@ -260,6 +260,8 @@ screen, and the pane header reads `⬡ live`.
 | `ctrl+]` / `ctrl+d` / click elsewhere | Back to the dashboard (claude keeps running) |
 | `F` | Fullscreen: hand the whole terminal to the same session; `ctrl+d` returns |
 | mouse wheel over the pane | Scrolls claude, not the transcript |
+| click a session in the list | Select it (the right pane previews it) |
+| double-click a session | Stopped: resume it (like `enter`). Hosted by ccdash: focus its live pane. Running in another terminal / tmux: nothing (use `enter`) |
 
 While the pane has focus every other key goes to claude, including `q`.
 The emulator lives in the server, so the screen survives TUI restarts
@@ -269,6 +271,20 @@ Sessions started elsewhere (another terminal, tmux) cannot be mirrored;
 they keep the transcript tail, and `enter` switches tmux when a pane is
 known. Once a stopped session is resumed through ccdash it becomes
 hosted and goes live.
+
+### Run a skill in a new session (`S`)
+
+`S` lists the installed skills and slash commands (`~/.claude/skills`,
+`~/.claude/commands`, and enabled plugins), plus project skills
+(`<project>/.claude/skills`) of the projects your sessions ran in —
+those are tagged with the project directory, and picking one starts the
+directory step inside that project. Type to filter, `enter` to
+pick, then choose the directory exactly as with `n` — the new session
+starts as `claude "/<skill>"` and shows live in the right pane. `tab`
+copies the highlighted name into the input so you can add arguments
+(`/code-flow:ship-pr 123`); `enter` with no match sends the input as-is,
+which covers built-ins like `/simplify`. In remote mode only typed
+commands are offered.
 
 ## 9. Search (`/`)
 
@@ -322,6 +338,23 @@ The **Apply secure preset** action flips all four to off in one shot.
 - **Vertical auto threshold (cols)**: the width at which auto-mode
   flips vertical. Default 100. The row shows your live terminal width
   next to the value, e.g. `(now: 142 cols, ≥ threshold)`.
+- **Session list size (%)**: the session list's share of the screen
+  (width side-by-side, height when vertical); the work pane gets the
+  rest. Default 50, range 10–90. `<` / `>` on the dashboard adjust it
+  in 5% steps.
+- **Invert list scroll**: reverse the mouse wheel over the session
+  list (wheel down moves the selection up). The right pane is
+  unaffected. Default off.
+
+### Restart
+
+**Restart ccdash** stops the collector and relaunches ccdash with the
+same arguments, so a freshly installed binary (`go install`, `ccdash
+update`) takes effect — quitting the TUI alone leaves the old collector
+running. A confirmation window first lists what it breaks: live sessions
+hosted by ccdash are stopped mid-reply (resume them with `enter`), and
+pending approvals are released. Sessions started outside ccdash are not
+affected. In remote mode it only relaunches the local dashboard.
 - **Newest at bottom** — reverses the list so the most recent session
   is at the bottom (matching the transcript tail orientation).
 

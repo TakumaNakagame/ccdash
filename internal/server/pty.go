@@ -74,8 +74,10 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePTYStart creates a new PTY session or returns an existing alive one.
-// Body: {"sessionId":"...", "cwd":"...", "resumeId":"...", "cols":N, "rows":N}
-// If resumeId is empty a bare `claude` is spawned (new session). cols/rows
+// Body: {"sessionId":"...", "cwd":"...", "resumeId":"...", "prompt":"...", "cols":N, "rows":N}
+// If resumeId is empty a bare `claude` is spawned (new session); a
+// non-empty prompt becomes its first message (`claude "<prompt>"`), which
+// is how the TUI's skill picker launches `/<skill>` in a fresh session. cols/rows
 // size the PTY + emulator up front so the child's first render already fits
 // the viewer; zero falls back to 80x24.
 // Returns: {"ptyKey":"..."} — the key the TUI uses for subsequent calls.
@@ -84,6 +86,7 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 		SessionID string `json:"sessionId"`
 		ResumeID  string `json:"resumeId"`
 		Cwd       string `json:"cwd"`
+		Prompt    string `json:"prompt"`
 		Cols      int    `json:"cols"`
 		Rows      int    `json:"rows"`
 	}
@@ -108,6 +111,14 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 	var args []string
 	if req.ResumeID != "" {
 		args = append(args, "--resume", req.ResumeID)
+	}
+	if strings.HasPrefix(req.Prompt, "-") {
+		// claude would parse it as a flag, not a message.
+		http.Error(w, "prompt must not start with '-'", http.StatusBadRequest)
+		return
+	}
+	if req.Prompt != "" {
+		args = append(args, req.Prompt)
 	}
 	c := newPTYCommand(args...)
 	if req.Cwd != "" {

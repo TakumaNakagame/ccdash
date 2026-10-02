@@ -115,6 +115,9 @@ ccdash --version               # report the current version
 | `X` | toggle archive view (operator-archived sessions) |
 | `o` | full-screen transcript viewer |
 | `s` | run `claude -p` and cache a 3–5 bullet summary |
+| `n` | start a new claude session (directory picker) |
+| `S` | run a skill / slash command in a new session |
+| `<` / `>` | shrink / grow the session list by 5% (10–90%, saved as "Session list size") |
 | `enter` | attach to the session (tmux switch / `claude --resume`) |
 | `a` / `A` / `d` | allow / keep-allow / deny the oldest pending approval |
 | `Shift+J` `Shift+K` | scroll the right pane one line at a time |

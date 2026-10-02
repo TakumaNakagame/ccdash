@@ -90,3 +90,27 @@ func TestLoadUsesAllSettings(t *testing.T) {
 		t.Error("SummaryEnabled should default to true")
 	}
 }
+
+// TestPaneListPct: the legacy "30/70" enum migrates to 30 once, and
+// out-of-range stored values are clamped so neither pane can vanish.
+func TestPaneListPct(t *testing.T) {
+	ctx := context.Background()
+	st := mapStore{"pane_split": "30/70"}
+	s, _ := Load(ctx, st)
+	if s.PaneListPct != 30 || st["pane_list_pct"] != "30" {
+		t.Fatalf("legacy 30/70: pct=%d stored=%q", s.PaneListPct, st["pane_list_pct"])
+	}
+	if s, _ := Load(ctx, mapStore{"pane_split": "50/50"}); s.PaneListPct != 50 {
+		t.Fatalf("legacy 50/50: pct=%d", s.PaneListPct)
+	}
+	for v, want := range map[string]int{"3": 10, "99": 90, "junk": 50, "40": 40} {
+		if s, _ := Load(ctx, mapStore{"pane_list_pct": v}); s.PaneListPct != want {
+			t.Errorf("stored %q: pct=%d, want %d", v, s.PaneListPct, want)
+		}
+	}
+	st = mapStore{}
+	s, _ = Set(ctx, st, Defaults(), "pane_list_pct", 0)
+	if s.PaneListPct != 10 || st["pane_list_pct"] != "10" {
+		t.Fatalf("Set(0): pct=%d stored=%q", s.PaneListPct, st["pane_list_pct"])
+	}
+}

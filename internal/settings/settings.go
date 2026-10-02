@@ -58,9 +58,15 @@ type Settings struct {
 	// the home directory. May use ~/.
 	NewSessionDir string
 
-	// PaneSplit is the horizontal layout's left:right ratio: "50/50" or
-	// the compact "30/70" (narrow session list, wide right pane).
-	PaneSplit string
+	// PaneListPct is the session list's share of the body, in percent:
+	// its width in the horizontal layout, its height in the vertical one.
+	// The right (work) pane gets the rest. Clamped to
+	// [MinPaneListPct, MaxPaneListPct] so neither pane can vanish.
+	PaneListPct int
+	// InvertListScroll flips the mouse wheel over the session list: wheel
+	// down moves the selection up and vice versa. The right pane keeps
+	// its normal direction.
+	InvertListScroll bool
 	// TimeFormat renders session times as "relative" (4m, 2h, 3d) or
 	// "absolute" (09/30 18:45).
 	TimeFormat string
@@ -84,12 +90,20 @@ const (
 	keyAttachEnabled        = "attach_enabled"
 	keyAutoInstallSync      = "auto_install_sync"
 	keyPresetSecure         = "preset_secure"
-	keyTailBudgetKB         = "tail_budget_kb"
-	keySummaryTimeoutSec    = "summary_timeout_sec"
-	keyRefreshIntervalMs    = "refresh_interval_ms"
-	keyNewSessionDir        = "new_session_dir"
-	keyPaneSplit            = "pane_split"
-	keyTimeFormat           = "time_format"
+	// KeyRestart is the "Restart ccdash" action row. It has no Apply:
+	// the TUI intercepts it to show a confirmation modal and then exits
+	// with tui.ErrRestart.
+	KeyRestart           = "restart"
+	keyTailBudgetKB      = "tail_budget_kb"
+	keySummaryTimeoutSec = "summary_timeout_sec"
+	keyRefreshIntervalMs = "refresh_interval_ms"
+	keyNewSessionDir     = "new_session_dir"
+	keyPaneListPct       = "pane_list_pct"
+	// legacyKeyPaneSplit was the "50/50" / "30/70" enum PaneListPct
+	// replaced; Load folds it in once.
+	legacyKeyPaneSplit  = "pane_split"
+	keyTimeFormat       = "time_format"
+	keyInvertListScroll = "invert_list_scroll"
 )
 
 // Defaults returns the baseline values used whenever a key is missing.
@@ -109,8 +123,8 @@ func Defaults() Settings {
 		SummaryTimeoutSec: 180,
 		RefreshIntervalMs: 1000,
 
-		PaneSplit:  "50/50",
-		TimeFormat: "relative",
+		PaneListPct: 50,
+		TimeFormat:  "relative",
 	}
 }
 
@@ -145,11 +159,8 @@ func loadPairs(out *Settings) []loadPair {
 		{keySummaryTimeoutSec, func(v string) { out.SummaryTimeoutSec = parseInt(v, out.SummaryTimeoutSec) }},
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
 		{keyNewSessionDir, func(v string) { out.NewSessionDir = v }},
-		{keyPaneSplit, func(v string) {
-			if v == "50/50" || v == "30/70" {
-				out.PaneSplit = v
-			}
-		}},
+		{keyPaneListPct, func(v string) { out.PaneListPct = ClampPaneListPct(parseInt(v, out.PaneListPct)) }},
+		{keyInvertListScroll, func(v string) { out.InvertListScroll = parseBool(v, out.InvertListScroll) }},
 		{keyTimeFormat, func(v string) {
 			if v == "relative" || v == "absolute" {
 				out.TimeFormat = v
@@ -196,7 +207,27 @@ func Load(ctx context.Context, st Store) (Settings, error) {
 			_ = st.SetSetting(ctx, keyLayoutMode, mode)
 		}
 	}
+	// The local DB's AllSettings returns every row, legacy ones included,
+	// so this needs no extra round trip; a remote map omits the legacy key
+	// and the migration happens on the collector instead.
+	if all[keyPaneListPct] == "" {
+		if all[legacyKeyPaneSplit] == "30/70" {
+			out.PaneListPct = 30
+			_ = st.SetSetting(ctx, keyPaneListPct, "30")
+		}
+	}
 	return out, nil
+}
+
+// Bounds for PaneListPct: either pane keeps at least 10% of the body.
+const (
+	MinPaneListPct = 10
+	MaxPaneListPct = 90
+)
+
+// ClampPaneListPct forces pct into [MinPaneListPct, MaxPaneListPct].
+func ClampPaneListPct(pct int) int {
+	return min(max(pct, MinPaneListPct), MaxPaneListPct)
 }
 
 func SetAutoRepoTabs(ctx context.Context, st Store, v bool) error {
@@ -279,7 +310,8 @@ func AllSpecs() []Spec {
 		{Key: keyBellOnPending, Label: "Bell on pending", Help: "Ring the terminal bell when the pending count goes from 0 to >0", Kind: KindBool},
 		{Key: keyNewestAtBottom, Label: "Newest at bottom", Help: "Show the newest session at the bottom of the list (matches the transcript tail orientation)", Kind: KindBool},
 		{Key: keyLayoutMode, Label: "Vertical layout", Help: "Auto = pick from terminal width (vertical when narrow). On = always vertical. Off = always horizontal (side-by-side).", Kind: KindEnum, Options: []string{"auto", "on", "off"}},
-		{Key: keyPaneSplit, Label: "Pane split (left/right)", Help: "Horizontal layout width ratio. 30/70 = compact session list with a wide right pane.", Kind: KindEnum, Options: []string{"50/50", "30/70"}},
+		{Key: keyPaneListPct, Label: "Session list size (%)", Help: "Share of the screen the session list takes (width side-by-side, height when vertical); the work pane gets the rest. 30 = compact list, wide work pane. Also adjustable with < / > on the dashboard.", Kind: KindInt, Min: MinPaneListPct, Max: MaxPaneListPct},
+		{Key: keyInvertListScroll, Label: "Invert list scroll", Help: "Reverse the mouse wheel over the session list (wheel down moves the selection up). The right pane is unaffected.", Kind: KindBool},
 		{Key: keyTimeFormat, Label: "Session time", Help: "How the session list shows each session's last prompt time: relative (4m, 2h) or absolute (09/30 18:45).", Kind: KindEnum, Options: []string{"relative", "absolute"}},
 		{Key: keyVerticalAutoCols, Label: "Vertical auto threshold (cols)", Help: "Width in columns below which auto-layout flips to vertical. Lower = stay horizontal longer; higher = go vertical sooner.", Kind: KindInt, Min: 40, Max: 240},
 		// Risk-bearing toggles
@@ -288,6 +320,7 @@ func AllSpecs() []Spec {
 		{Key: keyAttachEnabled, Label: "Attach (enter)", Help: "When OFF, Enter only shows session info — ccdash never spawns claude --resume or runs tmux switch-client", Kind: KindBool},
 		{Key: keyAutoInstallSync, Label: "Auto-rewrite settings.json", Help: "When OFF, server start does NOT silently rewrite ~/.claude/settings.json when the token rotates; you'll need to run install-hooks manually", Kind: KindBool},
 		{Key: keyPresetSecure, Label: "Apply secure preset", Help: "Observation-only mode: turns off approval blocking, summarize, attach, and auto-install sync in one go", Kind: KindAction, Apply: applySecurePreset},
+		{Key: KeyRestart, Label: "Restart ccdash", Help: "Stop the collector and relaunch ccdash so a newly installed binary takes effect. Live sessions hosted by ccdash are stopped (asks first).", Kind: KindAction},
 		// Numeric tunables
 		{Key: keyTailBudgetKB, Label: "Right-pane tail budget (KB)", Help: "Bytes of transcript loaded for the inline live tail; bigger == more context, slower", Kind: KindInt, Min: 32, Max: 8192},
 		{Key: keySummaryTimeoutSec, Label: "Summary timeout (s)", Help: "How long to wait for `claude -p` to produce a summary before giving up", Kind: KindInt, Min: 30, Max: 600},
@@ -351,10 +384,12 @@ func Get(s Settings, key string) any {
 		return s.RefreshIntervalMs
 	case keyNewSessionDir:
 		return s.NewSessionDir
-	case keyPaneSplit:
-		return s.PaneSplit
+	case keyPaneListPct:
+		return s.PaneListPct
 	case keyTimeFormat:
 		return s.TimeFormat
+	case keyInvertListScroll:
+		return s.InvertListScroll
 	}
 	return nil
 }
@@ -399,10 +434,13 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.RefreshIntervalMs = value.(int)
 	case keyNewSessionDir:
 		s.NewSessionDir = value.(string)
-	case keyPaneSplit:
-		s.PaneSplit = value.(string)
+	case keyPaneListPct:
+		value = ClampPaneListPct(value.(int))
+		s.PaneListPct = value.(int)
 	case keyTimeFormat:
 		s.TimeFormat = value.(string)
+	case keyInvertListScroll:
+		s.InvertListScroll = value.(bool)
 	}
 	return s, persist(ctx, st, key, value)
 }

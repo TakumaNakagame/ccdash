@@ -335,3 +335,45 @@ func TestAliasPTYsByParent(t *testing.T) {
 		t.Fatal("unrelated process got aliased")
 	}
 }
+
+// TestPTYStartPrompt: a prompt becomes claude's trailing argument (the
+// skill picker's "/<skill>"), and one that looks like a flag is refused.
+func TestPTYStartPrompt(t *testing.T) {
+	old := newPTYCommand
+	got := make(chan []string, 1)
+	newPTYCommand = func(args ...string) *exec.Cmd {
+		got <- args
+		return exec.Command("sh", "-c", "cat")
+	}
+	t.Cleanup(func() { newPTYCommand = old })
+
+	s := &Server{ptyMap: map[string]*ptyEntry{}}
+	ts := httptest.NewServer(http.HandlerFunc(s.handlePTY))
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/pty/start", "application/json", strings.NewReader(`{"prompt":"/code-flow:ship-pr"}`))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	var started struct{ PtyKey string }
+	_ = json.NewDecoder(resp.Body).Decode(&started)
+	resp.Body.Close()
+	t.Cleanup(func() {
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/pty/"+started.PtyKey, nil)
+		if r, err := http.DefaultClient.Do(req); err == nil {
+			r.Body.Close()
+		}
+	})
+	if args := <-got; len(args) != 1 || args[0] != "/code-flow:ship-pr" {
+		t.Fatalf("args = %q, want [/code-flow:ship-pr]", args)
+	}
+
+	resp, err = http.Post(ts.URL+"/pty/start", "application/json", strings.NewReader(`{"prompt":"--dangerously-skip-permissions"}`))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("flag-like prompt: status %d, want 400", resp.StatusCode)
+	}
+}
