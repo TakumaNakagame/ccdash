@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/takumanakagame/ccmanage/internal/buildinfo"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 )
 
@@ -77,6 +78,9 @@ func (m *model) restartBox() string {
 	}
 
 	var lines []string
+	if m.restartNote != "" {
+		lines = append(lines, statusActive.Render(m.restartNote), "")
+	}
 	if m.remote.Enabled {
 		lines = append(lines, wrap("Relaunches this dashboard only. The remote collector keeps running — restart it on its host to pick up a new binary there.")...)
 	} else {
@@ -118,4 +122,51 @@ func (m *model) restartBox() string {
 		box = bl[0] + "\n" + bl[1]
 	}
 	return box
+}
+
+// openReleaseNotes shows the notes for m.updateAvailable; y there installs.
+// The notes view returns to whichever pane opened it.
+func (m *model) openReleaseNotes() tea.Cmd {
+	m.notesReturn = m.pane
+	m.pane = paneReleaseNotes
+	m.updateNotes = ""
+	m.updateNotesErr = nil
+	m.updateNotesScroll = 0
+	return m.fetchReleaseNotesCmd(m.updateAvailable)
+}
+
+// startUpdateFromSettings is the "Update ccdash" action: show the notes
+// for a release already known to be newer, otherwise check now.
+func (m *model) startUpdateFromSettings() tea.Cmd {
+	switch {
+	case buildinfo.IsDev():
+		m.flash = "dev build: update with git pull + go install, then Restart ccdash"
+		return nil
+	case m.updateRunning:
+		m.flash = "update already in progress…"
+		return nil
+	case m.updateChecking:
+		return nil
+	case m.updateAvailable != "":
+		return m.openReleaseNotes()
+	}
+	m.updateChecking = true
+	m.flash = "checking for updates…"
+	return m.checkUpdateCmd()
+}
+
+// manualUpdateChecked reports a settings-triggered check and, when a newer
+// release exists, goes straight to its notes.
+func (m *model) manualUpdateChecked(msg updateCheckMsg) tea.Cmd {
+	m.updateChecking = false
+	switch {
+	case msg.err != nil:
+		m.flash = "update check failed: " + msg.err.Error()
+		return nil
+	case msg.tag == "" || msg.tag == buildinfo.Version:
+		m.flash = "ccdash " + buildinfo.Version + " is up to date"
+		return nil
+	}
+	m.updateAvailable = msg.tag
+	return m.openReleaseNotes()
 }

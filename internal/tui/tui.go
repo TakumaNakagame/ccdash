@@ -223,6 +223,14 @@ type model struct {
 	// background goroutine. Drives the in-progress flash and prevents
 	// double-fires.
 	updateRunning bool
+	// updateChecking is set while a settings-triggered release check is in
+	// flight, so its result is reported even when there's nothing new.
+	updateChecking bool
+	// notesReturn is the pane the release-notes view goes back to.
+	notesReturn pane
+	// restartNote is an extra first line for the restart confirmation
+	// (e.g. "Updated to v0.5.1"); empty when opened from settings.
+	restartNote string
 	// updateNotes / updateNotesScroll back the paneReleaseNotes view.
 	// Notes are fetched lazily after 'u' triggers the modal; until the
 	// fetch returns we render a "loading…" stub.
@@ -648,6 +656,10 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.animTick++
 		return m, animTickCmd()
 	case updateCheckMsg:
+		if m.updateChecking {
+			// The operator asked (settings → Update ccdash): always answer.
+			return m, m.manualUpdateChecked(msg)
+		}
 		// Stay quiet on errors (probe failure shouldn't nag) and on
 		// "already latest" matches. Anything else is a real new tag.
 		if msg.err != nil || msg.tag == "" {
@@ -670,8 +682,10 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateAvailable = ""
 			return m, nil
 		}
-		m.flash = "updated to " + msg.res.NewVersion + " — restart from settings (,) → Restart ccdash to use it"
 		m.updateAvailable = ""
+		// The new binary only runs after a restart: offer it right away.
+		m.restartNote = "Updated to " + msg.res.NewVersion + ". Restart now to run it."
+		m.restartConfirm = true
 		return m, nil
 	case updateNotesMsg:
 		m.updateNotes = msg.notes
@@ -1235,11 +1249,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.updateAvailable == "" || m.updateRunning {
 			return m, nil
 		}
-		m.pane = paneReleaseNotes
-		m.updateNotes = ""
-		m.updateNotesErr = nil
-		m.updateNotesScroll = 0
-		return m, m.fetchReleaseNotesCmd(m.updateAvailable)
+		return m, m.openReleaseNotes()
 	case "n":
 		// Start a new claude session: open the directory picker window.
 		if !m.settings.AttachEnabled {
@@ -2037,7 +2047,7 @@ func (m *model) handleKeyReleaseNotes(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	case "ctrl+c":
 		return m, m.quit()
 	case "q", "esc", "tab":
-		m.pane = paneSessions
+		m.pane = m.notesReturn
 		return m, nil
 	case "y", "Y":
 		if m.updateRunning {
@@ -2045,7 +2055,7 @@ func (m *model) handleKeyReleaseNotes(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		}
 		m.updateRunning = true
 		m.flash = "updating to " + m.updateAvailable + "…"
-		m.pane = paneSessions
+		m.pane = m.notesReturn
 		return m, m.runUpdateCmd()
 	case "j", "down":
 		m.updateNotesScroll = clamp(m.updateNotesScroll+1, 0, max)
@@ -2994,8 +3004,12 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		case settings.KindAction:
 			if cur.Key == settings.KeyRestart {
+				m.restartNote = ""
 				m.restartConfirm = true
 				return m, nil
+			}
+			if cur.Key == settings.KeyUpdate {
+				return m, m.startUpdateFromSettings()
 			}
 			if cur.Apply != nil {
 				next, err := cur.Apply(m.ctx, m.store, m.settings)
@@ -3048,7 +3062,7 @@ func (m *model) settingsSystemHeader() []string {
 		fmt.Sprintf("  %-32s  %s", "Version", statusActive.Render(version)),
 	}
 	if m.updateAvailable != "" {
-		lines = append(lines, "  "+strings.Repeat(" ", 34)+pendingStyle.Render("update available: "+m.updateAvailable+" (press u on the dashboard)"))
+		lines = append(lines, "  "+strings.Repeat(" ", 34)+pendingStyle.Render("update available: "+m.updateAvailable+" (Update ccdash below)"))
 	}
 	return append(lines, "")
 }
@@ -3067,7 +3081,7 @@ func (m *model) renderSettingsBody(height int) string {
 		if i == m.settingsSel {
 			marker = "▶ "
 		}
-		if s.Key == settings.KeyRestart {
+		if s.Key == settings.KeyUpdate {
 			rows = append(rows, m.settingsSystemHeader()...)
 		}
 		if i == m.settingsSel {

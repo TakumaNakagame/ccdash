@@ -93,7 +93,10 @@ const (
 	// KeyRestart is the "Restart ccdash" action row. It has no Apply:
 	// the TUI intercepts it to show a confirmation modal and then exits
 	// with tui.ErrRestart.
-	KeyRestart           = "restart"
+	KeyRestart = "restart"
+	// KeyUpdate is the "Update ccdash" action row, also TUI-intercepted:
+	// check for a release, show its notes, install, offer a restart.
+	KeyUpdate            = "update"
 	keyTailBudgetKB      = "tail_budget_kb"
 	keySummaryTimeoutSec = "summary_timeout_sec"
 	keyRefreshIntervalMs = "refresh_interval_ms"
@@ -327,6 +330,7 @@ func AllSpecs() []Spec {
 		{Key: keyNewSessionDir, Label: "New session directory", Help: "Where the 'n' directory picker starts (~/ allowed). Empty = home directory.", Kind: KindString, Path: true},
 		// System section (rendered under its own heading with the version;
 		// keep it last).
+		{Key: KeyUpdate, Label: "Update ccdash", Help: "Check for a new release, show its notes, install it (y), then offer to restart into it.", Kind: KindAction},
 		{Key: KeyRestart, Label: "Restart ccdash", Help: "Stop the collector and relaunch ccdash so a newly installed binary takes effect. Live sessions hosted by ccdash are stopped (asks first).", Kind: KindAction},
 	}
 }

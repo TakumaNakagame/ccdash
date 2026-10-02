@@ -346,6 +346,13 @@ The **Apply secure preset** action flips all four to off in one shot.
   list (wheel down moves the selection up). The right pane is
   unaffected. Default off.
 
+### Update and restart
+
+**Update ccdash** (system section, above Restart) checks for a new
+release, shows its notes, installs it on `y`, and then opens the restart
+confirmation so the new binary runs right away. On a dev build it only
+explains how to update by hand.
+
 ### Restart
 
 **Restart ccdash** — the last row, in the **system** section at the bottom of the settings page next to the running version — stops the collector and relaunches ccdash with the
