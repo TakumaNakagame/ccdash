@@ -8,6 +8,7 @@ package tui
 // a second claude on a live session or yank the tmux client away).
 
 import (
+	"strconv"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -84,8 +85,17 @@ func (m *model) openSessionByClick() tea.Cmd {
 	if m.ptyAlive[s.SessionID] {
 		return nil // hosted here; the live screen is still connecting
 	}
-	if s.Pane != "" || s.Status == mdl.StatusActive || s.Status == mdl.StatusIdle {
-		m.flash = "running in another terminal — press enter to switch / attach"
+	if s.Pane != "" {
+		m.flash = "running in tmux pane " + s.Pane + " — press enter to switch to it"
+		return nil
+	}
+	if s.Status == mdl.StatusActive || s.Status == mdl.StatusIdle {
+		// Resuming here would run a second claude on the same session.
+		where := "another terminal"
+		if s.ProcPID != 0 {
+			where += " (pid " + strconv.Itoa(s.ProcPID) + ")"
+		}
+		m.flash = "running in " + where + " — can't be shown here; exit it there, then double-click to resume"
 		return nil
 	}
 	if !m.settings.AttachEnabled {
