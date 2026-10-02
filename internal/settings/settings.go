@@ -320,12 +320,14 @@ func AllSpecs() []Spec {
 		{Key: keyAttachEnabled, Label: "Attach (enter)", Help: "When OFF, Enter only shows session info — ccdash never spawns claude --resume or runs tmux switch-client", Kind: KindBool},
 		{Key: keyAutoInstallSync, Label: "Auto-rewrite settings.json", Help: "When OFF, server start does NOT silently rewrite ~/.claude/settings.json when the token rotates; you'll need to run install-hooks manually", Kind: KindBool},
 		{Key: keyPresetSecure, Label: "Apply secure preset", Help: "Observation-only mode: turns off approval blocking, summarize, attach, and auto-install sync in one go", Kind: KindAction, Apply: applySecurePreset},
-		{Key: KeyRestart, Label: "Restart ccdash", Help: "Stop the collector and relaunch ccdash so a newly installed binary takes effect. Live sessions hosted by ccdash are stopped (asks first).", Kind: KindAction},
 		// Numeric tunables
 		{Key: keyTailBudgetKB, Label: "Right-pane tail budget (KB)", Help: "Bytes of transcript loaded for the inline live tail; bigger == more context, slower", Kind: KindInt, Min: 32, Max: 8192},
 		{Key: keySummaryTimeoutSec, Label: "Summary timeout (s)", Help: "How long to wait for `claude -p` to produce a summary before giving up", Kind: KindInt, Min: 30, Max: 600},
 		{Key: keyRefreshIntervalMs, Label: "Refresh interval (ms)", Help: "How often the TUI re-queries the DB for new state", Kind: KindInt, Min: 250, Max: 10000},
 		{Key: keyNewSessionDir, Label: "New session directory", Help: "Where the 'n' directory picker starts (~/ allowed). Empty = home directory.", Kind: KindString, Path: true},
+		// System section (rendered under its own heading with the version;
+		// keep it last).
+		{Key: KeyRestart, Label: "Restart ccdash", Help: "Stop the collector and relaunch ccdash so a newly installed binary takes effect. Live sessions hosted by ccdash are stopped (asks first).", Kind: KindAction},
 	}
 }
 

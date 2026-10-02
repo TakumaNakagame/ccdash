@@ -3029,6 +3029,30 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// settingsSystemHeader opens the settings page's last section: a rule,
+// the running version, and any pending update, above "Restart ccdash".
+func (m *model) settingsSystemHeader() []string {
+	version := buildinfo.Version
+	if buildinfo.IsDev() {
+		if h := buildinfo.Hash(); h != "" {
+			version += " · " + h
+		}
+		if t := buildinfo.BuiltAt(); !t.IsZero() {
+			version += " · built " + t.Local().Format("01/02 15:04")
+		}
+	}
+	rule := "-- system " + strings.Repeat("-", max(0, min(m.width, 80)-10))
+	lines := []string{
+		subtitleStyle.Render(rule),
+		"",
+		fmt.Sprintf("  %-32s  %s", "Version", statusActive.Render(version)),
+	}
+	if m.updateAvailable != "" {
+		lines = append(lines, "  "+strings.Repeat(" ", 34)+pendingStyle.Render("update available: "+m.updateAvailable+" (press u on the dashboard)"))
+	}
+	return append(lines, "")
+}
+
 // settingsValueCol is where a settings row's value starts: marker (2) +
 // %-32s label + 2 spaces.
 const settingsValueCol = 36
@@ -3042,6 +3066,9 @@ func (m *model) renderSettingsBody(height int) string {
 		marker := "  "
 		if i == m.settingsSel {
 			marker = "▶ "
+		}
+		if s.Key == settings.KeyRestart {
+			rows = append(rows, m.settingsSystemHeader()...)
 		}
 		if i == m.settingsSel {
 			selStart = len(rows)

@@ -61,3 +61,24 @@ func TestRestartConfirm(t *testing.T) {
 		t.Fatal("y did not quit the program")
 	}
 }
+
+// TestRestartInSystemSection: "Restart ccdash" is the last setting, under
+// a "system" heading that shows the running version.
+func TestRestartInSystemSection(t *testing.T) {
+	specs := settings.AllSpecs()
+	if specs[len(specs)-1].Key != settings.KeyRestart {
+		t.Fatalf("last setting is %q, want restart", specs[len(specs)-1].Key)
+	}
+	m := newModel(context.Background(), nil, RemoteInfo{})
+	m.width, m.height = 100, 200
+	out := ansi.Strip(m.renderSettingsBody(0))
+	sys := strings.Index(out, "-- system")
+	ver := strings.Index(out, "Version")
+	rst := strings.Index(out, "Restart ccdash")
+	if sys < 0 || !(sys < ver && ver < rst) {
+		t.Fatalf("want system heading → Version → Restart, got indexes %d %d %d", sys, ver, rst)
+	}
+	if !strings.Contains(out[ver:rst], "dev") {
+		t.Fatalf("version line missing the build version:\n%s", out[ver:rst])
+	}
+}

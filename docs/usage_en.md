@@ -348,7 +348,7 @@ The **Apply secure preset** action flips all four to off in one shot.
 
 ### Restart
 
-**Restart ccdash** stops the collector and relaunches ccdash with the
+**Restart ccdash** — the last row, in the **system** section at the bottom of the settings page next to the running version — stops the collector and relaunches ccdash with the
 same arguments, so a freshly installed binary (`go install`, `ccdash
 update`) takes effect — quitting the TUI alone leaves the old collector
 running. A confirmation window first lists what it breaks: live sessions
