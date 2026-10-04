@@ -109,12 +109,13 @@ ccdash --version               # report the current version
 | `tab` / `shift+tab` | cycle project / user-named groups |
 | `R` | toggle "auto repo tabs" in the cycle |
 | `T` | edit the user-named group for this session |
-| `t` | rename the session (operator override of auto title) |
+| `t` | rename the session (operator override of auto / generated title) |
 | `f` | toggle ★ favorite (favorites pin to the top) |
 | `x` | archive / unarchive |
 | `X` | toggle archive view (operator-archived sessions) |
 | `o` | full-screen transcript viewer |
 | `s` | run `claude -p` and cache a 3–5 bullet summary |
+| `ctrl+t` | generate short titles with `claude -p` — `y` for the selected session, `a` for the recent batch in one call |
 | `n` | start a new claude session (directory picker) |
 | `S` | run a skill / slash command in a new session |
 | `<` / `>` | shrink / grow the session list by 5% (10–90%, saved as "Session list size") |

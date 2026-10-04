@@ -113,6 +113,12 @@ func (l *Local) Summarize(ctx context.Context, sessionID string) error {
 	return summarize.Kickoff(ctx, l.db, sessionID)
 }
 
+// GenerateTitles delegates to summarize.KickoffTitles, shared with the
+// server's POST /api/titles handler.
+func (l *Local) GenerateTitles(ctx context.Context, sessionIDs []string) error {
+	return summarize.KickoffTitles(ctx, l.db, sessionIDs)
+}
+
 func (l *Local) TranscriptStat(ctx context.Context, s model.Session) (time.Time, int64, error) {
 	if s.TranscriptPath == "" {
 		return time.Time{}, 0, fmt.Errorf("no transcript path recorded for this session")

@@ -188,6 +188,14 @@ func (r *Remote) Summarize(ctx context.Context, sessionID string) error {
 	return r.doJSON(ctx, 10*time.Second, http.MethodPost, sessionPath(sessionID, "summarize"), nil, nil, nil)
 }
 
+// GenerateTitles starts title generation on the collector host, which has
+// the claude binary and the transcripts; like Summarize it only waits for
+// the kickoff.
+func (r *Remote) GenerateTitles(ctx context.Context, sessionIDs []string) error {
+	return r.doJSON(ctx, 10*time.Second, http.MethodPost, "/api/titles", nil,
+		map[string]any{"sessionIds": sessionIDs}, nil)
+}
+
 func (r *Remote) TranscriptStat(ctx context.Context, s model.Session) (time.Time, int64, error) {
 	q := url.Values{"mode": {"stat"}}
 	var env transcriptEnvelope

@@ -59,6 +59,12 @@ type Store interface {
 	// poll, same as every other background update.
 	Summarize(ctx context.Context, sessionID string) error
 
+	// GenerateTitles kicks off claude -p title generation for up to
+	// summarize.MaxTitleBatch sessions in one batch (ctrl+t). Like
+	// Summarize it returns once title_status is "running"; the titles land
+	// in the rows (gen_title) and show up on a later ListSessions poll.
+	GenerateTitles(ctx context.Context, sessionIDs []string) error
+
 	// TranscriptStat reports the transcript's mtime/size cheaply, without
 	// parsing it — the "did anything change since I last tailed this"
 	// check the TUI runs on every tick before paying for a re-parse.

@@ -160,6 +160,13 @@ type model struct {
 	// shortcut; spawning claude -p costs an API round trip so we don't
 	// want it to fire on a typo.
 	awaitSummaryConfirm bool
+	// awaitTitleGenConfirm is the ctrl+t banner: y titles titleGenSel,
+	// a titles the titleGenRecent batch (see titlegen.go).
+	awaitTitleGenConfirm bool
+	titleGenSel          string
+	titleGenRecent       []string
+	// titleWatch is summaryWatch for ctrl+t batches (watchTitles).
+	titleWatch map[string]struct{}
 
 	// awaitMkdirConfirm guards the mkdir step when the operator hits
 	// Enter on a path that doesn't exist. y → create + start; anything
@@ -306,6 +313,7 @@ func newModel(ctx context.Context, st store.Store, remote RemoteInfo) *model {
 		settings:       settings.Defaults(),
 		pendingPTYKeys: map[int]string{},
 		summaryWatch:   map[string]struct{}{},
+		titleWatch:     map[string]struct{}{},
 		ptyAlive:       map[string]bool{},
 		liveCache:      map[string]*liveScreen{},
 	}
@@ -711,6 +719,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promotePTYKeys()
 		// Flash the footer when a summarize this TUI kicked off completes.
 		m.watchSummaries()
+		m.watchTitles()
 		// If the tab the operator was looking at vanished (its last
 		// session got archived, removed, or moved to a different tab),
 		// step onto the next available tab so the body isn't blank.
@@ -927,6 +936,12 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.live.sentCols, m.live.sentRows = 0, 0
 		}
 		return m, tea.Batch(tea.ClearScreen, m.refresh())
+	case titlesKickedMsg:
+		for _, id := range msg.sessionIDs {
+			m.titleWatch[id] = struct{}{}
+		}
+		m.flash = fmt.Sprintf("generating %d title(s)…", len(msg.sessionIDs))
+		return m, m.refresh()
 	case summaryKickedMsg:
 		// The store flipped summary_status to "running" before this fired,
 		// so registering the watch now can't mistake a stale done/error for
@@ -1068,6 +1083,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.flash = "group archive cancelled"
 			return m, nil
 		}
+	}
+	if m.awaitTitleGenConfirm {
+		return m.handleKeyTitleGenConfirm(msg)
 	}
 	if m.awaitSummaryConfirm {
 		m.awaitSummaryConfirm = false
@@ -1226,6 +1244,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.startTitleEdit()
 	case "T":
 		return m, m.startGroupEdit()
+	case "ctrl+t":
+		m.startTitleGen()
+		return m, nil
 	case "s":
 		if !m.settings.SummaryEnabled {
 			m.flash = "summarize is OFF (settings ',')"
@@ -1356,6 +1377,9 @@ func (m *model) applyGroupFilter() {
 // the human-readable fields of s. We don't search payloads or transcripts
 // to keep the per-keystroke cost predictable.
 func sessionMatchesQuery(s mdl.Session, q string) bool {
+	if ref := s.Ref(); ref != "" && (q == strings.ToLower(ref) || q == ref[1:]) {
+		return true
+	}
 	for _, f := range []string{
 		s.DisplayTitle(), s.UserGroup, s.Repo, s.Cwd, s.Branch,
 		s.Summary, s.SessionID,
@@ -2585,6 +2609,8 @@ func clampLines(s string, n int) string {
 var (
 	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
 	subtitleStyle = lipgloss.NewStyle().Faint(true)
+	// refStyle colors the "#N" session handle in front of each title.
+	refStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("109"))
 	// Black on bright orange — meant to be unmissable so a stale dev build
 	// stands out against a release binary's clean header.
 	devBadgeStyle         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("208")).Padding(0, 1)
@@ -2704,11 +2730,15 @@ func (m *model) renderHeader() string {
 }
 
 func (m *model) renderFooter() string {
-	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm {
+	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm || m.awaitTitleGenConfirm {
 		// y/n confirmation lands in a full-width yellow banner instead
 		// of the dim flash so operators don't miss the cue.
 		banner := confirmBannerStyle.Width(m.width).Render(m.flash)
-		hint := footerStyle.Render("y confirm · any other key cancels")
+		legend := "y confirm · any other key cancels"
+		if m.awaitTitleGenConfirm {
+			legend = m.titleGenFooterHint()
+		}
+		hint := footerStyle.Render(legend)
 		return banner + "\n" + hint
 	}
 	if m.editingSearch {
@@ -2739,7 +2769,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  S skill  </> resize  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/group  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
+	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  S skill  </> resize  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/group  ctrl+t auto-title  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
 	if m.pane == paneSessions {
 		if live := m.liveForCurrent(); live != nil && !live.exited {
 			if m.liveFocus {
@@ -3494,7 +3524,11 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if s.PendingCount > 0 {
 		title = "⚠ " + title
 	}
+	ref := s.Ref()
 	titleBudget := width - runewidth.StringWidth(indent)
+	if ref != "" {
+		titleBudget -= runewidth.StringWidth(ref) + 1
+	}
 	if titleBudget < 10 {
 		titleBudget = 10
 	}
@@ -3505,8 +3539,11 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		titleStyled = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(titleText)
 	case s.PendingCount > 0:
 		titleStyled = pendingRowStyle.Render(titleText)
-	case s.Title == "":
+	case s.DisplayTitle() == "":
 		titleStyled = subtitleStyle.Render(titleText)
+	}
+	if ref != "" {
+		titleStyled = refStyle.Render(ref) + " " + titleStyled
 	}
 	line1 := fmt.Sprintf("%s %s %s %s", marker, statusDot, subtitleStyle.Render(age), titleStyled)
 
@@ -3529,6 +3566,12 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		parts = append(parts, pendingStyle.Render("⏳ summarizing"))
 	case "error":
 		parts = append(parts, statusStop.Render("✗ summary error"))
+	}
+	switch s.TitleStatus {
+	case "running":
+		parts = append(parts, pendingStyle.Render("⏳ titling"))
+	case "error":
+		parts = append(parts, statusStop.Render("✗ title error"))
 	}
 	meta := strings.Join(parts, " · ")
 	metaBudget := width - runewidth.StringWidth(indent)
@@ -3571,7 +3614,13 @@ func (m *model) renderEventsList(width, height int) string {
 		return m.renderLivePane(m.livePlaceholder(key), width, height)
 	}
 
-	header := subtitleStyle.Render(fmt.Sprintf("transcript  (%s)", shortID(m.currentSessionID())))
+	hdrID := shortID(m.currentSessionID())
+	if len(m.sessions) > 0 {
+		if ref := m.sessions[m.selSess].Ref(); ref != "" {
+			hdrID = ref + " · " + hdrID
+		}
+	}
+	header := subtitleStyle.Render(fmt.Sprintf("transcript  (%s)", hdrID))
 
 	approvalSection, approvalH := m.approvalBlock(width, height)
 

@@ -114,6 +114,10 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN user_group TEXT`,
 		`ALTER TABLE approvals ADD COLUMN tool_use_id TEXT`,
 		`ALTER TABLE sessions ADD COLUMN account TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN num INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN gen_title TEXT`,
+		`ALTER TABLE sessions ADD COLUMN gen_title_at INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN title_status TEXT`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -137,7 +141,53 @@ func (d *DB) migrate() error {
 	if _, err := d.sql.Exec(`UPDATE sessions SET user_group = user_tab WHERE (user_group IS NULL OR user_group = '') AND user_tab IS NOT NULL AND user_tab <> ''`); err != nil {
 		return fmt.Errorf("migrate user_tab → user_group: %w", err)
 	}
+	if err := d.backfillNums(); err != nil {
+		return fmt.Errorf("backfill session numbers: %w", err)
+	}
+	if _, err := d.sql.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_num ON sessions(num)`); err != nil {
+		return fmt.Errorf("migrate num index: %w", err)
+	}
 	return nil
+}
+
+// backfillNums gives every row without a num the next numbers in
+// first-seen order, so pre-existing sessions get stable "#N" handles in the
+// order they appeared. New rows get theirs at insert (upsertSession).
+// Idempotent: only NULL rows are touched.
+func (d *DB) backfillNums() error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var next int64
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(num), 0) FROM sessions`).Scan(&next); err != nil {
+		return err
+	}
+	rows, err := tx.Query(`SELECT session_id FROM sessions WHERE num IS NULL ORDER BY first_seen, rowid`)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		return nil
+	}
+	for _, id := range ids {
+		next++
+		if _, err := tx.Exec(`UPDATE sessions SET num = ? WHERE session_id = ?`, next, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // UpsertSession inserts or merges a session row. last_seen only moves
@@ -181,8 +231,9 @@ func (d *DB) upsertSession(ctx context.Context, s *model.Session, mode lastSeenM
 		INSERT INTO sessions (session_id, cwd, repo, branch, commit_hash,
 		                     wrapper_pid, proc_pid, pane,
 		                     tmux_pane, tmux_session, transcript_path, model, title,
-		                     first_seen, last_seen, status, account)
-		VALUES (?, ?, ?, ?, ?,  ?, ?, ?,  ?, ?, ?, ?, ?,  ?, ?, ?, ?)
+		                     first_seen, last_seen, status, account, num)
+		VALUES (?, ?, ?, ?, ?,  ?, ?, ?,  ?, ?, ?, ?, ?,  ?, ?, ?, ?,
+		        (SELECT COALESCE(MAX(num), 0) + 1 FROM sessions))
 		ON CONFLICT(session_id) DO UPDATE SET
 			cwd = COALESCE(NULLIF(excluded.cwd,''), sessions.cwd),
 			repo = COALESCE(NULLIF(excluded.repo,''), sessions.repo),
@@ -325,7 +376,8 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.summary,''), COALESCE(s.summary_status,''), COALESCE(s.summary_at,0),
 		       s.first_seen, s.last_seen, s.status,
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
-		       COALESCE(s.account,'')
+		       COALESCE(s.account,''),
+		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,'')
 		FROM sessions s
 		WHERE COALESCE(s.archived,0) = ?
 		ORDER BY COALESCE(s.favorite,0) DESC, s.last_seen DESC
@@ -337,7 +389,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 	var out []model.Session
 	for rows.Next() {
 		var s model.Session
-		var first, last, sumAt int64
+		var first, last, sumAt, genAt int64
 		var status string
 		var arch, fav int
 		if err := rows.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -347,8 +399,12 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.Title, &s.CustomTitle, &s.UserGroup,
 			&arch, &fav,
 			&s.Summary, &s.SummaryStatus, &sumAt,
-			&first, &last, &status, &s.PendingCount, &s.Account); err != nil {
+			&first, &last, &status, &s.PendingCount, &s.Account,
+			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus); err != nil {
 			return nil, err
+		}
+		if genAt > 0 {
+			s.GenTitleAt = time.Unix(genAt, 0).UTC()
 		}
 		s.FirstSeen = time.Unix(first, 0).UTC()
 		s.LastSeen = time.Unix(last, 0).UTC()
@@ -377,12 +433,14 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
 		       COALESCE(s.summary,''), COALESCE(s.summary_status,''), COALESCE(s.summary_at,0),
 		       s.first_seen, s.last_seen, s.status,
-		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending
+		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
+		       COALESCE(s.account,''),
+		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,'')
 		FROM sessions s
 		WHERE s.session_id = ?
 	`, sessionID)
 	var s model.Session
-	var first, last, sumAt int64
+	var first, last, sumAt, genAt int64
 	var status string
 	var arch, fav int
 	err := row.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -392,7 +450,8 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&s.Title, &s.CustomTitle, &s.UserGroup,
 		&arch, &fav,
 		&s.Summary, &s.SummaryStatus, &sumAt,
-		&first, &last, &status, &s.PendingCount)
+		&first, &last, &status, &s.PendingCount, &s.Account,
+		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Session{}, false, nil
 	}
@@ -406,6 +465,9 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 	s.Favorite = fav != 0
 	if sumAt > 0 {
 		s.SummaryAt = time.Unix(sumAt, 0).UTC()
+	}
+	if genAt > 0 {
+		s.GenTitleAt = time.Unix(genAt, 0).UTC()
 	}
 	return s, true, nil
 }
@@ -516,6 +578,34 @@ func (d *DB) SweepRunningSummaries(ctx context.Context) error {
 		SET summary = 'summarize interrupted (collector restarted)', summary_status = 'error', summary_at = ?
 		WHERE summary_status = 'running'
 	`, time.Now().UTC().Unix())
+	return err
+}
+
+// SetTitleStatus marks title generation as running / error for the given
+// sessions without touching gen_title, so the rows can show progress.
+func (d *DB) SetTitleStatus(ctx context.Context, sessionIDs []string, status string) error {
+	for _, id := range sessionIDs {
+		if _, err := d.sql.ExecContext(ctx, `UPDATE sessions SET title_status = ? WHERE session_id = ?`, status, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SetGenTitle stores a generated title and marks generation done.
+func (d *DB) SetGenTitle(ctx context.Context, sessionID, title string) error {
+	_, err := d.sql.ExecContext(ctx, `
+		UPDATE sessions SET gen_title = ?, gen_title_at = ?, title_status = 'done'
+		WHERE session_id = ?
+	`, title, time.Now().UTC().Unix(), sessionID)
+	return err
+}
+
+// SweepRunningTitles is SweepRunningSummaries for title generation: a
+// 'running' row at collector startup belongs to a run that died with the
+// previous process.
+func (d *DB) SweepRunningTitles(ctx context.Context) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET title_status = 'error' WHERE title_status = 'running'`)
 	return err
 }
 

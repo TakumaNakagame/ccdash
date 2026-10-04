@@ -243,6 +243,25 @@ The `claude -p` spawn is isolated with `--setting-sources project` and
 cwd `/tmp` so it doesn't inherit ccdash's hooks (otherwise the spawn
 would create another session in the dashboard).
 
+### Session numbers and generated titles (`ctrl+t`)
+
+Every session gets a short sequential number shown in front of its title,
+e.g. `#4839 ccdash 改善`. Existing sessions are numbered in the order they
+first appeared; search accepts `#4839` (or `4839`) to jump to one.
+
+`ctrl+t` asks `claude -p` for a short, ticket-style title. The banner
+offers two targets:
+
+- `y` — the selected session only
+- `a` — the **recent batch**: sessions in the current view (tab / search /
+  account filter) active within the last 24 h that have no `t` rename and
+  either no generated title yet or new activity since it was generated —
+  newest first, at most 10. They all go to Claude in **one** call.
+
+The list row shows `⏳ titling` while it runs. Title precedence is: your
+`t` rename > generated title > first prompt. Generation shares the
+summary's gate (`summary_enabled`) and timeout.
+
 ## 8. Attach (`enter`) and the live right pane
 
 Pressing `enter` on a session attempts to bring it to you:

@@ -93,6 +93,9 @@ func New(d *db.DB, addr string) *Server {
 	if err := d.SweepRunningSummaries(context.Background()); err != nil {
 		log.Printf("summary sweep: %v", err)
 	}
+	if err := d.SweepRunningTitles(context.Background()); err != nil {
+		log.Printf("title sweep: %v", err)
+	}
 	s.routes()
 	return s
 }
@@ -136,6 +139,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/title", wrap(s.handleAPITitle))
 	s.mux.HandleFunc("POST /api/sessions/{id}/group", wrap(s.handleAPIGroup))
 	s.mux.HandleFunc("POST /api/sessions/{id}/summarize", wrap(s.handleAPISummarize))
+	s.mux.HandleFunc("POST /api/titles", wrap(s.handleAPITitles))
 	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
 	s.mux.HandleFunc("GET /api/settings", wrap(s.handleAPISettingsList))
 	s.mux.HandleFunc("PUT /api/settings/{key}", wrap(s.handleAPISettingSet))
@@ -1035,6 +1039,31 @@ func (s *Server) handleAPISummarize(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	case errors.Is(err, summarize.ErrNoTranscript):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSONStatus(w, http.StatusAccepted, nil)
+}
+
+// handleAPITitles is handleAPISummarize for batch title generation
+// (summarize.KickoffTitles). Body: {"sessionIds": ["...", ...]}.
+func (s *Server) handleAPITitles(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SessionIDs []string `json:"sessionIds"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	err := summarize.KickoffTitles(r.Context(), s.db, body.SessionIDs)
+	switch {
+	case errors.Is(err, summarize.ErrDisabled):
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	case errors.Is(err, summarize.ErrNoSessions):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	case err != nil:

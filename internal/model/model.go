@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -27,7 +28,11 @@ type Session struct {
 	TmuxSession    string        `json:"tmux_session,omitempty"`
 	TranscriptPath string        `json:"transcript_path,omitempty"`
 	Model          string        `json:"model,omitempty"`
-	Title          string        `json:"title,omitempty"`        // auto-derived from transcript
+	Num            int64         `json:"num,omitempty"`       // short sequential ID shown as "#N"; unique, assigned on insert
+	Title          string        `json:"title,omitempty"`     // auto-derived from transcript (first prompt)
+	GenTitle       string        `json:"gen_title,omitempty"` // claude -p generated title (ctrl+t); beats Title
+	GenTitleAt     time.Time     `json:"gen_title_at,omitempty"`
+	TitleStatus    string        `json:"title_status,omitempty"` // "", "running", "done", "error" for title generation
 	CustomTitle    string        `json:"custom_title,omitempty"` // operator override; takes precedence
 	UserGroup      string        `json:"user_group,omitempty"`   // operator-named group; overrides repo-based grouping. Rendered as a tab in the strip.
 	Account        string        `json:"account,omitempty"`      // account name from accounts.json (e.g. "personal", "enterprise")
@@ -42,28 +47,40 @@ type Session struct {
 	PendingCount   int           `json:"pending_count,omitempty"`
 }
 
-// DisplayTitle returns the operator-set title when present, otherwise the
-// auto-derived one from the transcript.
+// DisplayTitle returns the operator-set title when present, then the
+// generated one (ctrl+t), then the auto-derived first prompt.
 func (s Session) DisplayTitle() string {
 	if s.CustomTitle != "" {
 		return s.CustomTitle
 	}
+	if s.GenTitle != "" {
+		return s.GenTitle
+	}
 	return s.Title
+}
+
+// Ref is the short handle shown next to the title, e.g. "#42". Empty until
+// the row has a number (a TUI placeholder row for a fresh spawn has none).
+func (s Session) Ref() string {
+	if s.Num <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("#%d", s.Num)
 }
 
 type EventType string
 
 const (
-	EventSessionStart       EventType = "session_start"
-	EventSessionEnd         EventType = "session_end"
-	EventUserPrompt         EventType = "user_prompt"
-	EventPreTool            EventType = "pre_tool"
-	EventPostTool           EventType = "post_tool"
-	EventPostToolFailure    EventType = "post_tool_failure"
-	EventPermissionRequest  EventType = "permission_request"
-	EventStop               EventType = "stop"
-	EventNotification       EventType = "notification"
-	EventSubagentStop       EventType = "subagent_stop"
+	EventSessionStart      EventType = "session_start"
+	EventSessionEnd        EventType = "session_end"
+	EventUserPrompt        EventType = "user_prompt"
+	EventPreTool           EventType = "pre_tool"
+	EventPostTool          EventType = "post_tool"
+	EventPostToolFailure   EventType = "post_tool_failure"
+	EventPermissionRequest EventType = "permission_request"
+	EventStop              EventType = "stop"
+	EventNotification      EventType = "notification"
+	EventSubagentStop      EventType = "subagent_stop"
 )
 
 type Event struct {
