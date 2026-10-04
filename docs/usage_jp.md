@@ -28,7 +28,7 @@ Claude Code に hook を組み込むのは 1 度だけです。
 ccdash install-hooks
 ```
 
-`~/.claude/settings.json` に ccdash 用の HTTP hook エントリを追記します。冪等なので何度走らせても OK。既存の user hook は `X-Ccdash-Managed: true` マーカーで区別するので壊しません。
+`~/.claude/settings.json` に ccdash 用の hook エントリを追記します。冪等なので何度走らせても OK。既存の user hook は `X-Ccdash-Managed: true` マーカーで区別するので壊しません。PermissionRequest だけは許可/拒否を待つ HTTP hook、それ以外のイベントは `$XDG_STATE_HOME/ccdash/hook.sh` (バックグラウンドで `curl` 送信する転送スクリプト) を呼ぶので、ccdash が止まっていても claude が待たされることはありません。
 
 バージョンを確認します。
 
@@ -335,7 +335,7 @@ rm -rf ~/.local/state/ccdash # DB / token / ログを削除
 rm $(which ccdash)           # バイナリ削除
 ```
 
-`uninstall-hooks` は `X-Ccdash-Managed: true` マーカー付きエントリのみ削除。他の user hook は残ります。
+`uninstall-hooks` は ccdash のエントリ (`X-Ccdash-Managed: true` マーカー付き、または `ccdash/hook.sh` を呼ぶもの) と `hook.sh` だけを削除。他の user hook は残ります。
 
 ## 13. ファイル / ディレクトリ
 
@@ -344,6 +344,7 @@ rm $(which ccdash)           # バイナリ削除
 | `~/.claude/settings.json` | hook エントリ (`install-hooks` が管理) |
 | `$XDG_STATE_HOME/ccdash/ccdash.sqlite` | sessions / events / approvals / settings |
 | `$XDG_STATE_HOME/ccdash/token` | loopback 共有シークレット (0600) |
+| `$XDG_STATE_HOME/ccdash/hook.sh` | 非ブロッキング hook の転送スクリプト (`install-hooks` が生成) |
 | `$XDG_STATE_HOME/ccdash/ccdash.log` | TUI 経由起動の埋め込み collector ログ |
 | `/tmp/ccdash-server.log` | detached collector のログ (`-k` モード) |
 

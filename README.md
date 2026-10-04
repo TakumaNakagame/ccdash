@@ -340,8 +340,12 @@ mode) managing their own Claude Code sessions.
   existing auth token (see "Remote mode")
 - DB file at `$XDG_STATE_HOME/ccdash/ccdash.sqlite` with `0600` permissions
 - Hook entries in `~/.claude/settings.json` carry an `X-Ccdash-Managed`
-  marker so `install-hooks` and `uninstall-hooks` round-trip them
-  idempotently without disturbing other user hooks
+  marker (or, for the forwarder entries, point at `ccdash/hook.sh`) so
+  `install-hooks` and `uninstall-hooks` round-trip them idempotently
+  without disturbing other user hooks
+- Only PermissionRequest is a blocking HTTP hook. Every other event runs
+  `$XDG_STATE_HOME/ccdash/hook.sh`, which backgrounds a `curl` POST and
+  returns at once, so a stopped or hung ccdash never slows a session down
 - Random shared token at `$XDG_STATE_HOME/ccdash/token` (mode `0600`),
   compared with a constant-time check. Required on every hook, decision,
   and remote-mode API request — whether loopback or not — so other UNIX
@@ -399,8 +403,8 @@ install.sh                      curl-installable shell installer
   "Remote mode" above. The embedded/managed collector (plain `ccdash`,
   `-k`) always stays loopback-only.
 - ccdash hook entries are tagged with the `X-Ccdash-Managed: true`
-  header so install / uninstall are idempotent and don't collide with
-  user hooks
+  header (or point at `ccdash/hook.sh`) so install / uninstall are
+  idempotent and don't collide with user hooks
 
 ## Contributing
 

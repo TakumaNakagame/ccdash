@@ -254,7 +254,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // ~/.claude/settings.json with the live one we loaded at startup. When they
 // disagree (rotation, fresh state dir, install-hooks never ran, etc.) we
 // rewrite the hook entries automatically so the operator doesn't have to
-// remember to re-run install-hooks.
+// remember to re-run install-hooks. The same rewrite runs when the token
+// matches but the entries predate the hook.sh forwarder layout (see
+// hookcfg.NeedsResync), so upgrading ccdash migrates existing installs.
 //
 // Skipped silently when no hook entries are present yet — a brand new
 // install where the user hasn't run install-hooks at all should stay
@@ -286,13 +288,16 @@ func (s *Server) syncInstalledHooks() {
 		return
 	}
 	if have == s.token {
-		return
+		stale, err := hookcfg.NeedsResync(in.Path)
+		if err != nil || !stale {
+			return
+		}
 	}
 	if _, err := in.Apply(); err != nil {
 		log.Printf("hooks auto-resync: %v", err)
 		return
 	}
-	log.Printf("hooks: rewrote %s with current token", in.Path)
+	log.Printf("hooks: rewrote %s (current token / hook layout)", in.Path)
 }
 
 // discoveryLoop runs an initial transcript scan and then refreshes every 10s.

@@ -32,9 +32,13 @@ Wire ccdash into Claude Code once:
 ccdash install-hooks
 ```
 
-This appends ccdash's HTTP hook entries to `~/.claude/settings.json` —
+This appends ccdash's hook entries to `~/.claude/settings.json` —
 idempotently, so you can re-run it any time. Existing user hooks are
 preserved (they don't carry the `X-Ccdash-Managed: true` marker).
+PermissionRequest is an HTTP hook (it waits for your allow / deny); every
+other event runs a small forwarder script, `$XDG_STATE_HOME/ccdash/hook.sh`,
+that posts in the background via `curl`, so a stopped ccdash never slows
+claude down.
 
 Confirm:
 
@@ -402,8 +406,9 @@ rm -rf ~/.local/state/ccdash # remove DB, token, log
 rm $(which ccdash)           # remove the binary itself
 ```
 
-`uninstall-hooks` only removes entries tagged with `X-Ccdash-Managed:
-true`; any other hooks you added stay in place.
+`uninstall-hooks` only removes ccdash's own entries (tagged with
+`X-Ccdash-Managed: true` or pointing at `ccdash/hook.sh`) and deletes
+`hook.sh`; any other hooks you added stay in place.
 
 ## 13. Files and locations
 
@@ -412,6 +417,7 @@ true`; any other hooks you added stay in place.
 | `~/.claude/settings.json` | hook entries (managed by `install-hooks`) |
 | `$XDG_STATE_HOME/ccdash/ccdash.sqlite` | sessions, events, approvals, settings |
 | `$XDG_STATE_HOME/ccdash/token` | loopback shared-secret (mode 0600) |
+| `$XDG_STATE_HOME/ccdash/hook.sh` | fire-and-forget hook forwarder (written by `install-hooks`) |
 | `$XDG_STATE_HOME/ccdash/ccdash.log` | embedded-collector log when launched via the TUI |
 | `/tmp/ccdash-server.log` | detached collector log (`-k` mode) |
 

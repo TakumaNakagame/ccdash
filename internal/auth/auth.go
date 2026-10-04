@@ -70,9 +70,5 @@ func Load() (string, error) {
 }
 
 func tokenPath() (string, error) {
-	dir, err := paths.StateDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "token"), nil
+	return paths.TokenPath()
 }
