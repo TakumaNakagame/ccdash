@@ -102,9 +102,15 @@ func (h *Hub) vapidKeys(ctx context.Context) (pub, priv string, err error) {
 // says are gone.
 func (h *Hub) push(ctx context.Context, n notification) {
 	subs, err := h.st.listSubs(ctx)
-	if err != nil || len(subs) == 0 {
+	if err != nil {
+		log.Printf("hub: push %q: %v", n.Title, err)
 		return
 	}
+	if len(subs) == 0 {
+		log.Printf("hub: push %q: no subscriptions (turn on 🔔 in the portal)", n.Title)
+		return
+	}
+	log.Printf("hub: push %q to %d subscription(s)", n.Title, len(subs))
 	pub, priv, err := h.vapidKeys(ctx)
 	if err != nil {
 		log.Printf("hub: push: %v", err)
@@ -169,6 +175,9 @@ func (h *Hub) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 	if err := h.st.addSub(r.Context(), email, pushSub{Endpoint: sub.Endpoint, P256dh: sub.Keys.P256dh, Auth: sub.Keys.Auth}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if u, err := url.Parse(sub.Endpoint); err == nil {
+		log.Printf("hub: %s subscribed to push (%s)", email, u.Host)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
