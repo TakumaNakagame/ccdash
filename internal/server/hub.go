@@ -159,6 +159,17 @@ func (s *Server) hubHandler() http.Handler {
 			}
 			handleHubUpload(w, r)
 			return
+		case r.Method == http.MethodGet && r.URL.Path == "/hub/subagents":
+			s.handleHubSubagents(w, r)
+			return
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/hub/subagents/"):
+			sid, agent, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/hub/subagents/"), "/")
+			if !ok || sid == "" || strings.Contains(agent, "/") {
+				http.NotFound(w, r)
+				return
+			}
+			s.handleHubSubagentTranscript(w, r, sid, agent)
+			return
 		case r.Method == http.MethodGet && r.URL.Path == "/hub/settings":
 			handleHubSettings(w, cfg)
 			return

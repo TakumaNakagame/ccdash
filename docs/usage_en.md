@@ -522,6 +522,10 @@ machine never accepts inbound connections — its collector dials out.
 - **🔔** in the header turns on push notifications for this browser (the
   installed app on a phone): a new approval, a question or confirmation on
   a ccdash-hosted claude's screen, and a session finishing its turn.
+- **Subagents**: when a session has run subagents (the Agent tool), a bar
+  under the chat header shows how many are running; open it for each one's
+  type, description, elapsed time and latest tool call, and tap one for its
+  own transcript and, once done, its report.
 - The portal is a PWA: "Install app" / "Add to Home screen" gives it its own
   icon and window. Nothing is cached offline — it always talks to the hub.
 

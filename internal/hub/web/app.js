@@ -547,6 +547,17 @@ function md(text) {
       out.push(`<pre class="code"><code>${esc(buf.join("\n"))}</code></pre>`);
       continue;
     }
+    // Tables: consecutive "| a | b |" lines; the |---| row is dropped.
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      closeList();
+      const rows = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(lines[i++]);
+      const cells = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map((c) => inlineMd(esc(c.trim())));
+      const body = rows.filter((r) => !/^\s*\|[\s:|-]+\|\s*$/.test(r)).map(cells);
+      const head = rows.length > 1 && /^\s*\|[\s:|-]+\|\s*$/.test(rows[1]) ? body.shift() : null;
+      out.push(`<div class="md-table"><table>${head ? `<thead><tr>${head.map((c) => `<th>${c}</th>`).join("")}</tr></thead>` : ""}<tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+      continue;
+    }
     const e = esc(line);
     let m;
     if ((m = e.match(/^(#{1,4})\s+(.*)$/))) {
@@ -585,7 +596,7 @@ function decodeEntries(b64) {
   return out;
 }
 
-function parseTranscript(entries) {
+function parseTranscript(entries, opts = {}) {
   const items = [];
   const tools = new Map(); // tool_use id → item
   for (const e of entries) {
@@ -593,14 +604,14 @@ function parseTranscript(entries) {
     // queued_command attachment, not a user turn.
     // Only human-sent ones: background-task notifications use the same
     // attachment type (origin.kind "task-notification").
-    if (e.type === "attachment" && e.attachment?.type === "queued_command" && !e.isSidechain) {
+    if (e.type === "attachment" && e.attachment?.type === "queued_command" && (!e.isSidechain || opts.sidechain)) {
       if ((e.attachment.origin?.kind ?? "human") !== "human") continue;
       const q = e.attachment.prompt;
       const t = typeof q === "string" ? q : Array.isArray(q) ? q.map((x) => x.text || "").join("") : "";
       if (t.trim()) items.push({ kind: "user", text: t.trim(), queued: true });
       continue;
     }
-    if ((e.type !== "user" && e.type !== "assistant") || !e.message || e.isSidechain) continue;
+    if ((e.type !== "user" && e.type !== "assistant") || !e.message || (e.isSidechain && !opts.sidechain)) continue;
     const c = e.message.content;
     const parts = typeof c === "string" ? [{ type: "text", text: c }] : Array.isArray(c) ? c : [];
     for (const p of parts) {
@@ -738,6 +749,8 @@ function renderItem(it, ctx) {
         body.push(h("pre", {}, JSON.stringify(it.input, null, 2).slice(0, 4000)));
       }
       if (it.result != null) body.push(h("pre", { class: it.error ? "err" : "" }, it.result.length > 6000 ? it.result.slice(0, 6000) + "\n…" : it.result));
+      const agent = (it.name === "Agent" || it.name === "Task") && ctx?.agentFor?.(it.id);
+      if (agent) body.unshift(h("button", { type: "button", class: "btn small", onclick: (e) => { e.preventDefault(); ctx.openAgent(agent); } }, "サブエージェントの記録を見る"));
       return h("details", { class: "tool" + (it.error ? " error" : "") },
         h("summary", {}, h("span", { class: "tstate" }, state), h("b", {}, it.name), " ", h("span", { class: "targ" }, toolArg(it.name, it.input))),
         ...body);
@@ -914,6 +927,53 @@ function sessionMenu(id, s, groups, refresh) {
   });
 }
 
+// ---- subagents ----
+
+function elapsed(from, to) {
+  const s = Math.max(0, Math.round(((to ? new Date(to) : new Date()) - new Date(from)) / 1000));
+  if (s < 60) return `${s}秒`;
+  if (s < 3600) return `${Math.floor(s / 60)}分`;
+  return `${Math.floor(s / 3600)}時間${Math.floor((s % 3600) / 60)}分`;
+}
+
+const AGENT_STATE = { running: "実行中", done: "完了", stale: "応答なし" };
+
+function agentRow(a, open) {
+  return h("div", { class: "agent " + a.status, onclick: () => open(a) },
+    h("span", { class: "agent-dot" }),
+    h("div", { class: "grow" },
+      h("div", { class: "row" },
+        h("b", { class: "grow agent-desc" }, a.description || a.agentId),
+        h("span", { class: "chip" }, a.agentType || "agent"),
+        a.background ? h("span", { class: "chip" }, "bg") : null),
+      h("div", { class: "sub" }, `${AGENT_STATE[a.status] || a.status} · ${a.status === "running" ? elapsed(a.startedAt) : elapsed(a.startedAt, a.updatedAt)} · ツール ${a.tools}${a.activity ? " · " + a.activity : ""}`)));
+}
+
+// openAgent shows one subagent's own transcript (it lives in a separate
+// file; entries are isSidechain) and, once it handed back, its report.
+function openAgent(id, sid, a) {
+  dialog(async (body, close) => {
+    const log = h("div", { class: "chat-log agent-log" }, h("div", { class: "muted" }, "読み込み中…"));
+    const reload = async () => {
+      try {
+        const t = await dev(id).get(`/hub/subagents/${encodeURIComponent(sid)}/${encodeURIComponent(a.agentId)}?bytes=524288`);
+        const items = parseTranscript(decodeEntries(t.data), { sidechain: true });
+        log.replaceChildren(...(items.length ? items.map((it) => renderItem(it)).filter(Boolean) : [h("div", { class: "muted" }, "まだ記録がありません")]));
+        log.scrollTop = log.scrollHeight;
+      } catch (e) { log.replaceChildren(h("div", { class: "muted" }, e.message)); }
+    };
+    body.append(
+      h("div", { class: "row" }, h("h1", { class: "grow" }, a.description || a.agentId), h("span", { class: "chip" }, a.agentType || "agent")),
+      h("div", { class: "muted small" }, `${AGENT_STATE[a.status] || a.status} · 開始 ${a.startedAt ? new Date(a.startedAt).toLocaleTimeString() : "?"} · ツール ${a.tools}`),
+      a.report ? h("details", { class: "summary-card", open: true }, h("summary", {}, "報告"), h("div", {}, a.report)) : null,
+      log,
+      h("div", { class: "actions" },
+        h("button", { type: "button", class: "btn", onclick: reload }, "更新"),
+        h("button", { class: "btn primary" }, "閉じる")));
+    reload();
+  });
+}
+
 // ---- the page ----
 
 async function chatPage(id, { sid, key }) {
@@ -951,6 +1011,23 @@ async function chatPage(id, { sid, key }) {
   const log = h("div", { class: "chat-log" });
   const scroller = h("div", { class: "chat" }, log);
   const approvalsEl = h("div", { class: "chat-dock" });
+  // Subagents: a bar under the header when the session has any; the list
+  // opens below it.
+  let agents = [], agentsOpen = false, agentTick = 0;
+  const agentList = h("div", { class: "agent-list", hidden: true });
+  const agentBar = h("button", { class: "agent-bar", hidden: true, onclick: () => { agentsOpen = !agentsOpen; paintAgents(); } });
+  const openThisAgent = (a) => openAgent(id, sid, a);
+  const paintAgents = () => {
+    const running = agents.filter((a) => a.status === "running").length;
+    agentBar.hidden = !agents.length;
+    agentBar.classList.toggle("busy", running > 0);
+    agentBar.replaceChildren(h("span", { class: "agent-dot" + (running ? " spin" : "") }),
+      running ? `サブエージェント ${running} 件実行中` : `サブエージェント ${agents.length} 件`,
+      h("span", { class: "muted small" }, running && agents.length > running ? `（全 ${agents.length} 件）` : ""),
+      h("span", { class: "grow" }), agentsOpen ? "▲" : "▼");
+    agentList.hidden = !agentsOpen || !agents.length;
+    if (!agentList.hidden) agentList.replaceChildren(...agents.map((a) => agentRow(a, openThisAgent)));
+  };
   const promptEl = h("div", { class: "chat-dock" });
   const input = h("textarea", { rows: 1, placeholder: "メッセージ", enterkeyhint: "send", title: "Enter で送信 / Shift+Enter で改行" });
   const sendBtn = h("button", { class: "btn primary" }, "送信");
@@ -990,7 +1067,7 @@ async function chatPage(id, { sid, key }) {
       if (ev === "drop") addFiles([...e.dataTransfer.files]);
     });
   }
-  view.append(h("div", { class: "chat-wrap" }, bar, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, composer)));
+  view.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, composer)));
 
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
   input.addEventListener("input", autosize);
@@ -1010,6 +1087,8 @@ async function chatPage(id, { sid, key }) {
   // several questions a review step follows; its "1" submits.
   const askCtx = {
     askCards: new Map(),
+    agentFor: (toolUseId) => agents.find((a) => a.toolUseId === toolUseId),
+    openAgent: (a) => openAgent(id, sid, a),
     hosted: () => hosted,
     answer: async (qs, state) => {
       if (!hosted) throw new Error("ccdash 上で動いていないため回答できません");
@@ -1177,6 +1256,12 @@ async function chatPage(id, { sid, key }) {
     // approvals for this session
     renderApprovals(approvalsEl, id, sid ? aps.filter((a) => a.session_id === sid) : [], sessions);
     approvalsEl.querySelector("h2")?.remove();
+
+    // subagents (every third poll: it reads a directory of transcripts)
+    if (sid && agentTick++ % 3 === 0) {
+      const list = await d.get(`/hub/subagents?session=${encodeURIComponent(sid)}`).catch(() => null);
+      if (Array.isArray(list)) { agents = list; paintAgents(); }
+    }
 
     // transcript
     if (sid) {
