@@ -543,7 +543,10 @@ function parseTranscript(entries) {
   for (const e of entries) {
     // A message sent while Claude was working is recorded as a
     // queued_command attachment, not a user turn.
+    // Only human-sent ones: background-task notifications use the same
+    // attachment type (origin.kind "task-notification").
     if (e.type === "attachment" && e.attachment?.type === "queued_command" && !e.isSidechain) {
+      if ((e.attachment.origin?.kind ?? "human") !== "human") continue;
       const q = e.attachment.prompt;
       const t = typeof q === "string" ? q : Array.isArray(q) ? q.map((x) => x.text || "").join("") : "";
       if (t.trim()) items.push({ kind: "user", text: t.trim(), queued: true });
@@ -556,6 +559,7 @@ function parseTranscript(entries) {
       if (p.type === "text" && p.text?.trim()) {
         let t = p.text.trim();
         if (e.type === "user") {
+          if ((e.origin?.kind ?? "human") !== "human") continue;
           if (e.isMeta || /^<(local-command|system-reminder)/.test(t)) continue;
           const cmd = t.match(/<command-name>([^<]*)<\/command-name>/);
           if (cmd) {
