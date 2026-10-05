@@ -8,10 +8,15 @@ require (
 	github.com/charmbracelet/ultraviolet v0.0.0-20260703014108-f5a850f9c2b7
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/vt v0.0.0-20260906004030-3986e9119cf9
+	github.com/coder/websocket v1.8.15
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/creack/pty v1.1.24
+	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/hashicorp/yamux v0.1.2
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/mod v0.35.0
+	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.42.0
 	modernc.org/sqlite v1.50.0

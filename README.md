@@ -175,8 +175,11 @@ can dial back ccdash's reach when they want pure observation:
   spawns `claude --resume` or runs `tmux switch-client`.
 - **Auto-rewrite settings.json** — when off, server boot does *not*
   silently update `~/.claude/settings.json` even after a token rotation.
+- **Hub connection** — when off, the collector does not dial the hub
+  joined via `ccdash hub join` (and drops a live tunnel within ~10 s), so
+  the machine is unreachable from the web portal.
 
-The **"Apply secure preset"** action flips all four to off in one shot
+The **"Apply secure preset"** action flips all five to off in one shot
 for a fully observation-only deployment.
 
 ## Remote mode
@@ -292,6 +295,82 @@ unreachable, the UI can stall for up to the 3-second mutation timeout on
 that keypress. Reads (session list, transcript tail) are asynchronous and
 don't block the UI.
 
+## Hub mode (web portal)
+
+Hub mode puts every machine's ccdash behind one web page: a portal lists
+your devices, and picking one shows its sessions as chats you can read and
+reply to from a browser or phone, start new sessions in, resume stopped
+ones from, and answer approvals in.
+
+```
+ browser ──https──▶ ccdash hub (home server, OIDC login)
+                        ▲          ▲
+            WebSocket tunnel (dialed OUT by each device, device token)
+                        │          │
+                   device A     device B      ← no inbound ports
+                   ccdash server / ccdash -k
+```
+
+- **Devices are never dialed.** Each device's collector connects out to the
+  hub and keeps a WebSocket open (yamux-multiplexed); the hub forwards
+  portal requests through it to the device's own collector API.
+- **Sessions open as a chat.** The transcript is rendered as messages and
+  tool calls; what you type is delivered to the claude that ccdash hosts in
+  a PTY on the device (multi-line text as a bracketed paste). A stopped
+  session is resumed with your message as its first prompt. Approvals show
+  as cards (with ccdash's hooks installed), and TUI-only prompts — a
+  permission dialog without hooks, a menu, the folder-trust question — show
+  as a screen excerpt with one-tap answers. Claude's own multiple-choice
+  questions (AskUserQuestion) become a form — single / multi select and
+  free text — driven by the same keys you'd press in the terminal. Images
+  (picked, pasted, or from a phone camera) are uploaded to the device and
+  pasted into the prompt as attachments. Older history loads on demand. A
+  **Terminal** button switches to a full xterm.js view of the same PTY.
+- The session list mirrors the TUI: a newest-first view with date
+  sections, plus one tab per group.
+
+**On the server** (the image is `ghcr.io/takumanakagame/ccdash`, entrypoint
+`ccdash hub serve`; TLS terminates in front of it):
+
+```sh
+ccdash hub serve --listen :8080 --data-dir /data \
+  --public-url https://ccdash.example.net \
+  --oidc-issuer https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<client-id> \
+  --oidc-client-id <client-id> --oidc-client-secret-file /run/secrets/oidc \
+  --allowed-email you@example.com
+```
+
+Every flag also reads an env var (`CCDASH_HUB_PUBLIC_URL`,
+`CCDASH_HUB_OIDC_ISSUER`, `CCDASH_HUB_OIDC_CLIENT_ID`,
+`CCDASH_HUB_OIDC_CLIENT_SECRET`, `CCDASH_HUB_ALLOWED_EMAILS`, …; see
+`ccdash hub serve --help`). Without an OIDC provider, `--tailscale-auth`
+(loopback `--listen` only) trusts the `Tailscale-User-Login` header that
+`tailscale serve` adds, against the same `--allowed-email` list — handy for
+running the hub on a workstation reached over your tailnet. Any OIDC provider works; the redirect URI to
+register is `<public-url>/auth/callback`. The hub refuses to start without
+at least one allowed email. Proxies in front of it must pass WebSocket
+upgrades and allow long-lived connections (the tunnel pings every 20 s).
+
+**On each device:** open the portal, **Add device**, then
+
+```sh
+ccdash hub join --url https://ccdash.example.net   # paste the token when asked
+ccdash server                                      # or ccdash -k; keep a collector running
+```
+
+`ccdash hub status` shows the join state, `ccdash hub leave` removes it.
+The collector re-reads the join file and the **Hub connection** setting on
+every attempt, so no restart is needed.
+
+**What the hub may do on a device** is fixed by an allowlist in the
+device's collector (`internal/server/hub.go`): read sessions, approvals and
+transcripts; rename/group/archive sessions; start, type into, resize and
+stop ccdash-hosted PTYs (only while **Attach** is on); decide approvals
+(only while **Approval blocking** is on); list directories for the
+new-session picker (attach on). It can never reach the hook endpoints,
+`/shutdown`, or settings writes — so a compromised hub cannot switch the
+device's own safety toggles back on.
+
 ## Threat model
 
 ccdash is built for a single user (or a small trusted team, via remote
@@ -363,6 +442,15 @@ mode) managing their own Claude Code sessions.
 - The remote-mode transcript API resolves the file path from the
   session's DB row only — never from anything the client sends — so a
   remote TUI can't ask the collector to read an arbitrary path.
+- Hub mode: the hub is effectively a remote operator for every joined
+  device, so it is gated by OIDC login + an email allowlist, signed
+  HttpOnly/SameSite cookies, Go's cross-origin protection on state-changing
+  API calls, and a same-origin check on the terminal WebSocket. Device
+  tokens are stored only as SHA-256 hashes on the hub and 0600 on the
+  device; rotating or deleting a device in the portal cuts its tunnel
+  immediately. The device-side allowlist (see "Hub mode") bounds what a
+  compromised hub could do, and the **Hub connection** toggle (part of the
+  secure preset) takes a device off the hub entirely.
 
 ## Layout
 
@@ -387,6 +475,10 @@ internal/paths/                 state dir / db / settings paths
 internal/gitinfo/               git repo / branch / commit lookup
 internal/store/                 Store seam (Local: *db.DB + files; Remote: HTTP client for -r remote mode)
 internal/clientcfg/             client-side remote config (~/.config/ccdash/config.json) for -r
+internal/hub/                   `ccdash hub serve`: web portal, OIDC login, device registry, tunnel endpoint, embedded SPA (web/)
+internal/hubcfg/                device-side hub join state ($XDG_STATE_HOME/ccdash/hub.json)
+internal/tunnel/                device ⇄ hub WebSocket + yamux tunnel
+Dockerfile                      hub container image (published by .github/workflows/image.yml)
 docs/usage_en.md                hands-on usage guide (English)
 docs/usage_jp.md                hands-on usage guide (Japanese)
 install.sh                      curl-installable shell installer
@@ -397,6 +489,7 @@ install.sh                      curl-installable shell installer
 
 - DB: `$XDG_STATE_HOME/ccdash/ccdash.sqlite` (default `~/.local/state/ccdash/`), `0600`
 - Token: `$XDG_STATE_HOME/ccdash/token`, `0600`
+- Hub join state (device token): `$XDG_STATE_HOME/ccdash/hub.json`, `0600`
 - Server bind: `127.0.0.1:9123` by default (loopback only). `ccdash server
   --listen <addr>` opts a standalone collector into a non-default bind for
   remote mode — a non-loopback `--listen` keeps a second listener on

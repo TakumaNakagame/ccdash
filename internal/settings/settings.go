@@ -49,6 +49,7 @@ type Settings struct {
 	SummaryEnabled  bool // s key + claude -p spawn
 	AttachEnabled   bool // Enter spawns claude --resume / tmux switch
 	AutoInstallSync bool // server boot rewrites settings.json on token mismatch
+	HubEnabled      bool // collector dials the hub joined via `ccdash hub join`
 
 	TailBudgetKB      int
 	SummaryTimeoutSec int
@@ -89,6 +90,7 @@ const (
 	keySummaryEnabled       = "summary_enabled"
 	keyAttachEnabled        = "attach_enabled"
 	keyAutoInstallSync      = "auto_install_sync"
+	keyHubEnabled           = "hub_enabled"
 	keyPresetSecure         = "preset_secure"
 	// KeyRestart is the "Restart ccdash" action row. It has no Apply:
 	// the TUI intercepts it to show a confirmation modal and then exits
@@ -121,6 +123,7 @@ func Defaults() Settings {
 		SummaryEnabled:   true,
 		AttachEnabled:    true,
 		AutoInstallSync:  true,
+		HubEnabled:       true,
 
 		TailBudgetKB:      256,
 		SummaryTimeoutSec: 180,
@@ -158,6 +161,7 @@ func loadPairs(out *Settings) []loadPair {
 		{keySummaryEnabled, func(v string) { out.SummaryEnabled = parseBool(v, out.SummaryEnabled) }},
 		{keyAttachEnabled, func(v string) { out.AttachEnabled = parseBool(v, out.AttachEnabled) }},
 		{keyAutoInstallSync, func(v string) { out.AutoInstallSync = parseBool(v, out.AutoInstallSync) }},
+		{keyHubEnabled, func(v string) { out.HubEnabled = parseBool(v, out.HubEnabled) }},
 		{keyTailBudgetKB, func(v string) { out.TailBudgetKB = parseInt(v, out.TailBudgetKB) }},
 		{keySummaryTimeoutSec, func(v string) { out.SummaryTimeoutSec = parseInt(v, out.SummaryTimeoutSec) }},
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
@@ -322,7 +326,8 @@ func AllSpecs() []Spec {
 		{Key: keySummaryEnabled, Label: "Summarize via claude -p", Help: "When OFF, the 's' key is disabled and ccdash never spawns claude -p (no transcript digests sent over the network)", Kind: KindBool},
 		{Key: keyAttachEnabled, Label: "Attach (enter)", Help: "When OFF, Enter only shows session info — ccdash never spawns claude --resume or runs tmux switch-client", Kind: KindBool},
 		{Key: keyAutoInstallSync, Label: "Auto-rewrite settings.json", Help: "When OFF, server start does NOT silently rewrite ~/.claude/settings.json when the token rotates; you'll need to run install-hooks manually", Kind: KindBool},
-		{Key: keyPresetSecure, Label: "Apply secure preset", Help: "Observation-only mode: turns off approval blocking, summarize, attach, and auto-install sync in one go", Kind: KindAction, Apply: applySecurePreset},
+		{Key: keyHubEnabled, Label: "Hub connection", Help: "When OFF, the collector does not connect to the hub joined via `ccdash hub join`, so this machine is unreachable from the web portal", Kind: KindBool},
+		{Key: keyPresetSecure, Label: "Apply secure preset", Help: "Observation-only mode: turns off approval blocking, summarize, attach, auto-install sync, and the hub connection in one go", Kind: KindAction, Apply: applySecurePreset},
 		// Numeric tunables
 		{Key: keyTailBudgetKB, Label: "Right-pane tail budget (KB)", Help: "Bytes of transcript loaded for the inline live tail; bigger == more context, slower", Kind: KindInt, Min: 32, Max: 8192},
 		{Key: keySummaryTimeoutSec, Label: "Summary timeout (s)", Help: "How long to wait for `claude -p` to produce a summary before giving up", Kind: KindInt, Min: 30, Max: 600},
@@ -339,7 +344,7 @@ func AllSpecs() []Spec {
 // Convenience for operators who want pure observation without auditing each
 // flag individually.
 func applySecurePreset(ctx context.Context, st Store, s Settings) (Settings, error) {
-	for _, k := range []string{keyApproveEnabled, keySummaryEnabled, keyAttachEnabled, keyAutoInstallSync} {
+	for _, k := range []string{keyApproveEnabled, keySummaryEnabled, keyAttachEnabled, keyAutoInstallSync, keyHubEnabled} {
 		next, err := Set(ctx, st, s, k, false)
 		if err != nil {
 			return s, err
@@ -382,6 +387,8 @@ func Get(s Settings, key string) any {
 		return s.AttachEnabled
 	case keyAutoInstallSync:
 		return s.AutoInstallSync
+	case keyHubEnabled:
+		return s.HubEnabled
 	case keyTailBudgetKB:
 		return s.TailBudgetKB
 	case keySummaryTimeoutSec:
@@ -432,6 +439,8 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.AttachEnabled = value.(bool)
 	case keyAutoInstallSync:
 		s.AutoInstallSync = value.(bool)
+	case keyHubEnabled:
+		s.HubEnabled = value.(bool)
 	case keyTailBudgetKB:
 		s.TailBudgetKB = value.(int)
 	case keySummaryTimeoutSec:

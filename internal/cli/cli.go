@@ -118,6 +118,7 @@ spawns a collector — everything goes over HTTP.`,
 	root.AddCommand(uninstallHooksCmd())
 	root.AddCommand(tuiCmd(rf))
 	root.AddCommand(remoteCmd())
+	root.AddCommand(hubCmd())
 	root.AddCommand(updateCmd(version))
 	return root
 }

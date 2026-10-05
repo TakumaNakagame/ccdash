@@ -353,8 +353,11 @@ These let you scale ccdash's reach down to "observation only":
   spawns subprocesses, and the live right pane stays disconnected.
 - **Auto-rewrite settings.json** — when off, server start does not
   silently update `~/.claude/settings.json` even after a token rotation.
+- **Hub connection** — when off, the collector does not connect to the
+  hub joined via `ccdash hub join` (see §15), so the web portal can't
+  reach this machine.
 
-The **Apply secure preset** action flips all four to off in one shot.
+The **Apply secure preset** action flips all five to off in one shot.
 
 ### Layout
 
@@ -437,6 +440,7 @@ rm $(which ccdash)           # remove the binary itself
 | `$XDG_STATE_HOME/ccdash/ccdash.sqlite` | sessions, events, approvals, settings |
 | `$XDG_STATE_HOME/ccdash/token` | loopback shared-secret (mode 0600) |
 | `$XDG_STATE_HOME/ccdash/hook.sh` | fire-and-forget hook forwarder (written by `install-hooks`) |
+| `$XDG_STATE_HOME/ccdash/hub.json` | hub URL + device token from `ccdash hub join` (mode 0600) |
 | `$XDG_STATE_HOME/ccdash/ccdash.log` | embedded-collector log when launched via the TUI |
 | `/tmp/ccdash-server.log` | detached collector log (`-k` mode) |
 
@@ -455,3 +459,58 @@ rm $(which ccdash)           # remove the binary itself
 
 For anything more specific, the embedded-collector log
 (`~/.local/state/ccdash/ccdash.log`) is the first place to look.
+
+## 15. Web portal (hub)
+
+The hub is a web page that lists your machines and lets you use each one's
+ccdash from a browser or phone. It runs on a home server
+(`ccdash hub serve`, normally the `ghcr.io/takumanakagame/ccdash` container
+behind your reverse proxy, with OIDC login — see README "Hub mode").
+
+**Joining a machine**
+
+1. In the portal: **Add device**, give it a name. A one-time token is shown.
+2. On the machine:
+
+   ```sh
+   ccdash hub join --url https://ccdash.example.net   # paste the token
+   ```
+
+3. Keep a collector running there — `ccdash server` (e.g. a systemd user
+   unit / launchd agent) or `ccdash -k`. It dials the hub within ~30 s; the
+   dot in the device list turns green.
+
+`ccdash hub status` / `ccdash hub leave` show and remove the join. The
+machine never accepts inbound connections — its collector dials out.
+
+**Using it**
+
+- Pick a device → its sessions, grouped like the TUI's tabs, plus pending
+  approvals with Allow / Always allow / Deny.
+- Opening a session shows it as a **chat**: your prompts, Claude's replies,
+  and tool calls (tap to expand). Type at the bottom and send (Enter on a
+  keyboard, the button on a phone). If the session isn't running under
+  ccdash, sending resumes it there with your message.
+- When Claude shows a menu in its terminal (a permission dialog, plan
+  approval, the "trust this folder?" question), a card with the relevant
+  part of the screen and answer buttons appears above the input.
+- **Terminal** switches to a full terminal view of the same claude (useful
+  for anything the chat can't express); **Chat** goes back. **Stop**
+  (`中断`) sends Esc while Claude is working; **End** (`終了`) stops the
+  claude process — the session can be resumed later.
+- **New session** picks a directory on the device and starts `claude` there.
+- The session list has a **Latest** tab (everything, newest first, with
+  date sections) and one tab per group, like the TUI's strip.
+- **↑ Load older history** at the top of a chat reads further back.
+- **＋** next to the input attaches images (camera on a phone); pasting or
+  dropping an image works too. They're saved on the device under
+  `$XDG_STATE_HOME/ccdash/uploads/` (kept 7 days) and attached to the prompt.
+- When Claude asks a multiple-choice question, a **question card** appears:
+  tap an option (single choice moves on by itself), toggle options and press
+  **Next** for multi-select, or type into **Other**. A review step confirms
+  multi-question sets.
+- An open portal tab reloads itself when the hub is upgraded.
+
+What the portal may do is limited by the device's own settings: with
+**Attach** off it can only read; with **Approval blocking** off it can't
+decide approvals; with **Hub connection** off the device is offline.

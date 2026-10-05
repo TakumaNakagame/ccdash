@@ -234,6 +234,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}()
 	s.syncInstalledHooks()
 	go s.discoveryLoop(ctx)
+	go s.hubLoop(ctx)
 	errCh := make(chan error, len(lns))
 	for _, ln := range lns {
 		go func(l net.Listener) { errCh <- s.srv.Serve(l) }(ln)

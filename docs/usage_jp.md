@@ -290,8 +290,9 @@ ccdash の介入度合いを「観察のみ」まで下げられます。
 - **Summarize via claude -p** — OFF で `s` 無効化、ダイジェストの外部送信ゼロ
 - **Attach (enter)** — OFF で `enter` はセッション情報表示のみ、サブプロセス起動無し。右ペインのライブ表示も接続しない
 - **Auto-rewrite settings.json** — OFF でサーバ起動時の `~/.claude/settings.json` 自動書き換えを停止 (token rotate 時も)
+- **Hub connection** — OFF で `ccdash hub join` したハブへ接続しない（§15）。Web ポータルからこの端末に届かなくなる
 
-**Apply secure preset** アクションで上 4 つを一括 OFF にして「観察のみ」モードへ。
+**Apply secure preset** アクションで上 5 つを一括 OFF にして「観察のみ」モードへ。
 
 ### レイアウト
 
@@ -356,6 +357,7 @@ rm $(which ccdash)           # バイナリ削除
 | `$XDG_STATE_HOME/ccdash/ccdash.sqlite` | sessions / events / approvals / settings |
 | `$XDG_STATE_HOME/ccdash/token` | loopback 共有シークレット (0600) |
 | `$XDG_STATE_HOME/ccdash/hook.sh` | 非ブロッキング hook の転送スクリプト (`install-hooks` が生成) |
+| `$XDG_STATE_HOME/ccdash/hub.json` | `ccdash hub join` で保存したハブ URL と端末トークン (0600) |
 | `$XDG_STATE_HOME/ccdash/ccdash.log` | TUI 経由起動の埋め込み collector ログ |
 | `/tmp/ccdash-server.log` | detached collector のログ (`-k` モード) |
 
@@ -373,3 +375,36 @@ rm $(which ccdash)           # バイナリ削除
 | Pending カウントが減らない | 承認の自動 resolve が失敗。discovery loop が 45 秒経過したものを `timeout` に倒すので server を再起動 |
 
 それでも分からない場合、まず埋め込み collector ログ (`~/.local/state/ccdash/ccdash.log`) を見るのが近道。
+
+## 15. Web ポータル (hub)
+
+ハブは、端末の一覧から選んでその端末の ccdash をブラウザやスマホで使える Web ページです。
+自宅サーバで動かします（`ccdash hub serve`。通常は `ghcr.io/takumanakagame/ccdash` コンテナをリバースプロキシの後ろに置き、OIDC でログイン。README「Hub mode」参照）。
+
+**端末の登録**
+
+1. ポータルで **端末を追加** → 名前を入力。トークンが一度だけ表示される
+2. 端末側で:
+
+   ```sh
+   ccdash hub join --url https://ccdash.example.net   # トークンを聞かれたら貼り付け
+   ```
+
+3. 端末で collector を常駐させる — `ccdash server`（systemd user unit / launchd など）か `ccdash -k`。30 秒以内にハブへ接続し、一覧の丸が緑になる
+
+`ccdash hub status` / `ccdash hub leave` で状態確認・解除。端末はポートを開けず、collector が外向きに接続するだけ。
+
+**使い方**
+
+- 端末を選ぶとセッション一覧（TUI のタブと同じグループ分け）と承認待ち（許可 / 常に許可 / 拒否）が出る
+- セッションを開くと **チャット** 表示。自分の発言・Claude の返答・ツール実行（タップで展開）が並ぶ。下の入力欄から送信（キーボードなら Enter、スマホは送信ボタン）。ccdash 上で動いていないセッションは、送信するとそのメッセージで再開する
+- Claude がターミナル側でメニューを出したとき（権限確認、プラン承認、「このフォルダを信頼しますか？」など）は、画面の該当部分と回答ボタンのカードが入力欄の上に出る
+- **ターミナル** で同じ claude のターミナル表示に切り替え、**チャット** で戻る。作業中は **中断**（Esc を送る）、**終了** で claude プロセスを止める（後から再開可）
+- **新規セッション** で端末上のディレクトリを選んで `claude` を起動
+- セッション一覧は **最新** タブ（全件・新しい順・日付見出し付き）と、TUI と同じグループ別タブで切り替え
+- チャット上部の **↑ 古い履歴を読み込む** でさらに遡れる
+- 入力欄の **＋** で画像を添付（スマホならカメラも可）。貼り付け・ドロップも可。端末の `$XDG_STATE_HOME/ccdash/uploads/` に保存（7 日で削除）され、プロンプトに添付される
+- Claude が選択肢で質問してきたら **質問カード** が出る。単一選択はタップで次へ、複数選択は選んで **次へ →**、**その他** に自由入力も可。複数問は最後に確認画面
+- 開いているポータルは、ハブが更新されると自動で再読み込みされる
+
+ポータルにできることは端末側の設定で制限される: **Attach** OFF なら閲覧のみ、**Approval blocking** OFF なら承認不可、**Hub connection** OFF なら端末はオフライン扱い。

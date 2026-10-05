@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/takumanakagame/ccmanage/internal/attach"
 	"github.com/takumanakagame/ccmanage/internal/procmap"
 )
@@ -32,6 +34,8 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 	//   GET    /pty/{id}/screen      → handlePTYScreen  (emulated frames, right pane)
 	//   POST   /pty/{id}/resize      → handlePTYResize
 	//   POST   /pty/{id}/register    → handlePTYRegister
+	//   POST   /pty/{id}/input       → handlePTYInput   (text / keys, no exclusive attach)
+	//   GET    /pty/{id}/text        → handlePTYText    (plain-text screen snapshot)
 	//   DELETE /pty/{id}             → handlePTYClose
 	path := strings.TrimPrefix(r.URL.Path, "/pty/")
 	path = strings.TrimSuffix(path, "/")
@@ -66,6 +70,10 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 		s.handlePTYResize(w, r, id)
 	case action == "register" && r.Method == http.MethodPost:
 		s.handlePTYRegister(w, r, id)
+	case action == "input" && r.Method == http.MethodPost:
+		s.handlePTYInput(w, r, id)
+	case action == "text" && r.Method == http.MethodGet:
+		s.handlePTYText(w, r, id)
 	case action == "" && r.Method == http.MethodDelete:
 		s.handlePTYClose(w, r, id)
 	default:
@@ -247,6 +255,71 @@ func (s *Server) handlePTYStream(w http.ResponseWriter, r *http.Request, id stri
 	case <-entry.sess.ChildExit():
 	case <-copyDone:
 	}
+}
+
+// handlePTYInput writes to the PTY without taking the exclusive raw stream,
+// so the portal's chat view can type while a terminal (TUI live pane, a
+// fullscreen attach) is also watching. Body: {"text":"...","submit":bool,
+// "keys":"..."}. text is delivered as a bracketed paste when it spans lines
+// (Claude Code keeps it as one message instead of submitting at the first
+// newline); submit presses Enter after it; keys are raw bytes (Esc, arrows,
+// digits for a menu) written as-is.
+func (s *Server) handlePTYInput(w http.ResponseWriter, r *http.Request, id string) {
+	entry := s.lookupPTY(id)
+	if entry == nil {
+		http.Error(w, "pty not found", http.StatusNotFound)
+		return
+	}
+	var req struct {
+		Text   string `json:"text"`
+		Submit bool   `json:"submit"`
+		Keys   string `json:"keys"`
+		Paste  bool   `json:"paste"` // force bracketed paste (e.g. an image path to attach)
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	f := entry.sess.Pty()
+	if f == nil || !entry.sess.Alive() {
+		http.Error(w, "pty session exited", http.StatusGone)
+		return
+	}
+	if req.Keys != "" {
+		_, _ = f.Write([]byte(req.Keys))
+	}
+	if req.Text != "" {
+		text := strings.ReplaceAll(req.Text, "\r\n", "\n")
+		if req.Paste || strings.Contains(text, "\n") {
+			text = "\x1b[200~" + text + "\x1b[201~"
+		}
+		_, _ = f.Write([]byte(text))
+	}
+	if req.Submit {
+		if req.Text != "" {
+			// Let the TUI finish ingesting the text first; an Enter that
+			// lands mid-paste is swallowed as a literal newline.
+			time.Sleep(120 * time.Millisecond)
+		}
+		_, _ = f.Write([]byte("\r"))
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePTYText returns the emulated screen as plain text rows (styles
+// stripped) plus the cursor, for the portal to show a TUI prompt (a
+// permission dialog, a menu) that has no transcript representation.
+func (s *Server) handlePTYText(w http.ResponseWriter, r *http.Request, id string) {
+	entry := s.lookupPTY(id)
+	if entry == nil {
+		http.Error(w, "pty not found", http.StatusNotFound)
+		return
+	}
+	rows, cols, height, cur := entry.snapshot()
+	for i, row := range rows {
+		rows[i] = strings.TrimRight(ansi.Strip(row), " ")
+	}
+	writeOK(w, map[string]any{"rows": rows, "cols": cols, "height": height, "cursorX": cur.X, "cursorY": cur.Y, "alive": entry.sess.Alive()})
 }
 
 // handlePTYResize updates the PTY + emulator window size.
