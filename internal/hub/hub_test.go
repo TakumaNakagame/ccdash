@@ -186,3 +186,18 @@ func TestTailscaleServeAuth(t *testing.T) {
 		t.Errorf("no header = %d, want 403", w.Code)
 	}
 }
+
+func TestPWAFilesArePublic(t *testing.T) {
+	h := newTestHub(t, false).Handler()
+	for _, p := range []string{"/manifest.webmanifest", "/sw.js", "/icon.svg", "/icon-192.png"} {
+		if w := serve(h, "GET", p, "", nil); w.Code != http.StatusOK {
+			t.Errorf("%s without login = %d, want 200", p, w.Code)
+		}
+	}
+	if w := serve(h, "GET", "/manifest.webmanifest", "", nil); w.Header().Get("Content-Type") != "application/manifest+json" {
+		t.Errorf("manifest content type = %q", w.Header().Get("Content-Type"))
+	}
+	if w := serve(h, "GET", "/app.js", "", nil); w.Code != http.StatusFound {
+		t.Errorf("/app.js without login = %d, want redirect to login", w.Code)
+	}
+}

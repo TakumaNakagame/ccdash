@@ -510,6 +510,8 @@ machine never accepts inbound connections — its collector dials out.
   **Next** for multi-select, or type into **Other**. A review step confirms
   multi-question sets.
 - An open portal tab reloads itself when the hub is upgraded.
+- The portal is a PWA: "Install app" / "Add to Home screen" gives it its own
+  icon and window. Nothing is cached offline — it always talks to the hub.
 
 What the portal may do is limited by the device's own settings: with
 **Attach** off it can only read; with **Approval blocking** off it can't

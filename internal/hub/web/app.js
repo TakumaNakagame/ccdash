@@ -1257,6 +1257,8 @@ function terminal(id, key, title, chatHref) {
     } catch {}
   };
   setInterval(checkUpdate, 30000);
+  // Installable as an app (PWA); the worker caches nothing.
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
   window.addEventListener("hashchange", route);
   route();

@@ -168,6 +168,18 @@ func (h *Hub) Handler() http.Handler {
 
 	static, _ := fs.Sub(webFS, "web")
 	files := http.FileServerFS(static)
+	// The PWA files are fetched by the browser without the session cookie
+	// (manifest requests are credential-less), so they stay outside login.
+	// None of them carries data.
+	for _, p := range []string{"/manifest.webmanifest", "/sw.js", "/icon.svg", "/icon-192.png", "/icon-512.png"} {
+		mux.Handle("GET "+p, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-cache")
+			if strings.HasSuffix(r.URL.Path, ".webmanifest") {
+				w.Header().Set("Content-Type", "application/manifest+json")
+			}
+			files.ServeHTTP(w, r)
+		}))
+	}
 	mux.Handle("/", h.requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("X-Frame-Options", "DENY")
