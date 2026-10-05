@@ -265,3 +265,4 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .ask-other { width: 100%; }
 .ask-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 .chat-dock .ask { margin-bottom: 0; max-height: 55vh; overflow-y: auto; }
+.bubble.user.queued { border: 1px dashed color-mix(in srgb, var(--accent-text) 50%, transparent); }

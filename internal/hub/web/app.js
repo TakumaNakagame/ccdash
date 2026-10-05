@@ -541,6 +541,14 @@ function parseTranscript(entries) {
   const items = [];
   const tools = new Map(); // tool_use id → item
   for (const e of entries) {
+    // A message sent while Claude was working is recorded as a
+    // queued_command attachment, not a user turn.
+    if (e.type === "attachment" && e.attachment?.type === "queued_command" && !e.isSidechain) {
+      const q = e.attachment.prompt;
+      const t = typeof q === "string" ? q : Array.isArray(q) ? q.map((x) => x.text || "").join("") : "";
+      if (t.trim()) items.push({ kind: "user", text: t.trim(), queued: true });
+      continue;
+    }
     if ((e.type !== "user" && e.type !== "assistant") || !e.message || e.isSidechain) continue;
     const c = e.message.content;
     const parts = typeof c === "string" ? [{ type: "text", text: c }] : Array.isArray(c) ? c : [];
@@ -654,7 +662,7 @@ function renderItem(it, ctx) {
   if (it.kind === "tool" && it.name === "AskUserQuestion" && ctx) return askCard(it, ctx);
   switch (it.kind) {
     case "user":
-      return h("div", { class: "bubble user" }, it.text);
+      return h("div", { class: "bubble user" + (it.queued ? " queued" : ""), title: it.queued ? "作業中に送信" : null }, it.text);
     case "image":
       return h("a", { class: "chat-img " + it.role, href: it.src, target: "_blank", rel: "noopener" }, h("img", { src: it.src, alt: "画像", loading: "lazy" }));
     case "assistant": {
@@ -972,7 +980,8 @@ async function chatPage(id, { sid, key }) {
       nodes.unshift(h("button", { class: "btn older", disabled: loadingOlder, onclick: loadOlder },
         loadingOlder ? "読み込み中…" : "↑ 古い履歴を読み込む"));
     }
-    for (const p of pendingSends) nodes.push(h("div", { class: "bubble user pending" }, p));
+    pendingSends = pendingSends.filter((p) => Date.now() - p.at < 120000);
+    for (const p of pendingSends) nodes.push(h("div", { class: "bubble user pending" }, p.text));
     if (!nodes.length) nodes.push(h("div", { class: "empty" }, ptyKey && !sid ? "claude を起動しました。メッセージを送って始めましょう。" : "まだメッセージがありません。"));
     if (session?.status === "active") nodes.push(h("div", { class: "typing" }, h("span"), h("span"), h("span")));
     log.replaceChildren(...nodes);
@@ -989,6 +998,13 @@ async function chatPage(id, { sid, key }) {
     e.preventDefault();
     const text = input.value.replace(/\s+$/, "");
     if (!text && !attachments.length) return;
+    if (hosted && promptEl.childElementCount) {
+      // Keystrokes would land in the dialog (or linger in claude's input
+      // and merge into the next message) — answer it first.
+      toast("Claude が選択を待っています。先に上のカードで回答するか、キャンセルしてください", 4000);
+      promptEl.scrollIntoView({ block: "nearest" });
+      return;
+    }
     sendBtn.disabled = true;
     try {
       if (attachments.length && !info?.attachEnabled) throw new Error("この端末は attach が OFF のため画像を送れません");
@@ -1018,7 +1034,7 @@ async function chatPage(id, { sid, key }) {
         ptyKey = r.ptyKey;
         hosted = true;
       }
-      pendingSends.push([attachments.length ? `🖼 ×${attachments.length}` : "", text].filter(Boolean).join(" "));
+      pendingSends.push({ text: [attachments.length ? `🖼 ×${attachments.length}` : "", text].filter(Boolean).join(" "), match: text.trim(), at: Date.now() });
       attachments.forEach((a) => URL.revokeObjectURL(a.url));
       attachments = [];
       renderThumbs();
@@ -1085,7 +1101,10 @@ async function chatPage(id, { sid, key }) {
         }
         items = parseTranscript(entries);
         const users = items.filter((x) => x.kind === "user").map((x) => x.text);
-        pendingSends = pendingSends.filter((p) => !users.includes(p.trim()));
+        // Drop a placeholder once its text shows up in any user turn (it may
+        // be merged with other text, e.g. after an image or a queued line),
+        // and after 2 minutes regardless.
+        pendingSends = pendingSends.filter((p) => Date.now() - p.at < 120000 && !(p.match && users.some((u) => u.includes(p.match))));
         render(stick);
       } else {
         render(atBottom());
