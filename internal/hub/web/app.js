@@ -283,15 +283,29 @@ async function devicePage(id) {
   const list = h("div", { class: "list" }, h("div", { class: "empty" }, "読み込み中…"));
   const more = h("div");
   const filter = h("input", { placeholder: "絞り込み（タイトル・パス・#番号）", class: "grow" });
+  let showArchived = false;
+  const archBtn = h("button", { class: "btn small", onclick: () => { showArchived = !showArchived; archBtn.classList.toggle("on", showArchived); archBtn.textContent = showArchived ? "アーカイブ表示中" : "アーカイブ"; refreshNow(); } }, "アーカイブ");
   const status = h("div", { class: "muted small" });
+  const settingsBox = h("details", { class: "settings-box" }, h("summary", {}, "端末の設定（閲覧のみ）"));
+  settingsBox.addEventListener("toggle", async () => {
+    if (!settingsBox.open || settingsBox.dataset.loaded) return;
+    try {
+      const rows = await dev(id).get("/hub/settings");
+      settingsBox.dataset.loaded = "1";
+      settingsBox.append(h("div", { class: "list" }, rows.map((r) => h("div", { class: "item", style: "cursor:default", title: r.help },
+        h("div", { class: "grow" }, h("div", {}, r.label), h("div", { class: "sub" }, r.help)),
+        h("span", { class: "chip" + (r.value === true ? " idle" : "") }, r.value === true ? "ON" : r.value === false ? "OFF" : String(r.value ?? "")))),
+        h("p", { class: "muted small" }, "変更は端末の TUI（, キー）から。ハブからは変更できません。")));
+    } catch (e) { toast(e.message); }
+  });
   view.append(h("div", { class: "page" },
     h("div", { class: "row" },
       h("h1", { class: "grow" }, name),
       h("button", { class: "btn primary", onclick: () => newSession(id) }, "＋ 新規セッション")),
     status, approvals, spawns,
     tabs,
-    h("div", { class: "row", style: "margin-bottom:8px" }, filter),
-    list, more));
+    h("div", { class: "row", style: "margin-bottom:8px" }, filter, archBtn),
+    list, more, settingsBox));
 
   let last = null, tab = loadTab(id), limit = 100;
   const render = () => {
@@ -345,10 +359,11 @@ async function devicePage(id) {
   };
   filter.addEventListener("input", render);
 
-  every(3000, async () => {
+  const refreshNow = () => tick();
+  const tick = async () => {
     const d = dev(id);
     const [sessions, aps, ptys, info] = await Promise.all([
-      d.get("/api/sessions").then((x) => x || []), d.get("/api/approvals").then((x) => x || []),
+      d.get(showArchived ? "/api/sessions?archived=1" : "/api/sessions").then((x) => x || []), d.get("/api/approvals").then((x) => x || []),
       d.get("/pty/").then((x) => x || []).catch(() => []), deviceInfo(id),
     ]);
     last = { sessions, ptys, info };
@@ -356,13 +371,15 @@ async function devicePage(id) {
       (info.attachEnabled ? "" : " · attach OFF（閲覧のみ）") + (info.approveEnabled ? "" : " · 承認 OFF");
     renderApprovals(approvals, id, aps, sessions);
     render();
-  });
+  };
+  every(3000, tick);
 }
 
 function sessionRow(id, s, live, info, showGroup) {
   const chips = [];
   if (live) chips.push(h("span", { class: "chip live" }, "live"));
   if (s.pending_count) chips.push(h("span", { class: "chip pend" }, `承認待ち ${s.pending_count}`));
+  if (s.account && s.account !== "default") chips.unshift(h("span", { class: "chip" }, s.account));
   chips.push(h("span", { class: "chip " + s.status }, s.status));
   const sub = [showGroup ? groupOf(s) : null, shortPath(s.cwd, info?.home), s.branch, rel(s.last_seen)].filter(Boolean).join(" · ");
   return h("div", { class: "item", onclick: () => (location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`) },
@@ -394,18 +411,45 @@ function renderApprovals(el, id, aps, sessions) {
   }));
 }
 
-function newSession(id) {
+// newSession picks a directory and starts claude there — optionally with a
+// first message, e.g. a skill / slash command like the TUI's skill picker
+// (S). A project skill only loads inside its project, so picking one moves
+// the directory there.
+function newSession(id, preset = {}) {
   dialog(async (body, close) => {
     const info = await deviceInfo(id).catch(() => null);
     if (info && !info.attachEnabled) {
       body.append(h("p", {}, "この端末は attach が OFF のため、新規セッションを起動できません。"), h("div", { class: "actions" }, h("button", { class: "btn" }, "閉じる")));
       return;
     }
-    const path = h("input", { class: "grow mono", value: info?.newSessionDir || "" });
+    const path = h("input", { class: "grow mono", value: preset.cwd || info?.newSessionDir || "" });
     const dirs = h("div", { class: "dirlist" });
+    const prompt = h("textarea", { rows: 2, class: "grow", placeholder: "最初の指示（任意）。/ でスキル・コマンドを選べます", value: preset.prompt || "" });
+    const skillBox = h("div", { class: "dirlist skills", hidden: true });
+    let skillList = null;
+    const loadSkills = async () => {
+      try { skillList = (await dev(id).get(`/hub/skills?dir=${encodeURIComponent(path.value)}`)) || []; } catch { skillList = []; }
+    };
+    const showSkills = async () => {
+      const v = prompt.value;
+      if (!v.startsWith("/") || /\s/.test(v)) { skillBox.hidden = true; return; }
+      if (!skillList) await loadSkills();
+      const q = v.slice(1).toLowerCase();
+      const hits = skillList.filter((k) => k.name.toLowerCase().includes(q) || (k.description || "").toLowerCase().includes(q)).slice(0, 40);
+      skillBox.hidden = !hits.length;
+      skillBox.replaceChildren(...hits.map((k) => h("div", { onclick: () => {
+        prompt.value = "/" + k.name + " ";
+        if (k.dir) { path.value = k.dir; load(k.dir); }
+        skillBox.hidden = true;
+        prompt.focus();
+      } }, h("b", {}, "/" + k.name), k.source === "project" ? h("span", { class: "chip" }, "project") : null,
+        k.description ? h("div", { class: "muted small" }, k.description) : null)));
+    };
+    prompt.addEventListener("input", showSkills);
     const load = async (p) => {
       try {
         const r = await dev(id).get(`/hub/dirs?path=${encodeURIComponent(p)}`);
+        if (path.value !== r.path) skillList = null;
         path.value = r.path;
         dirs.replaceChildren(
           h("div", { onclick: () => load(r.parent) }, "../"),
@@ -415,8 +459,10 @@ function newSession(id) {
     path.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); load(path.value); } });
     const start = async (e) => {
       e.preventDefault();
+      let first = prompt.value.trim();
+      if (first.startsWith("-")) first = " " + first;
       try {
-        const r = await dev(id).post("/pty/start", { cwd: path.value, cols: 120, rows: 36 });
+        const r = await dev(id).post("/pty/start", { cwd: path.value, cols: 120, rows: 36, prompt: first });
         close();
         location.hash = `#/d/${id}/p/${encodeURIComponent(r.ptyKey)}`;
       } catch (err) { toast(err.message); }
@@ -424,10 +470,12 @@ function newSession(id) {
     body.append(h("h1", {}, "新規セッション"),
       h("div", { class: "row" }, path, h("button", { type: "button", class: "btn", onclick: () => load(path.value) }, "移動")),
       dirs,
+      h("div", { class: "col" }, prompt, skillBox),
       h("div", { class: "actions" },
         h("button", { class: "btn", value: "cancel" }, "キャンセル"),
         h("button", { class: "btn primary", onclick: start }, "ここで claude を起動")));
     load(path.value);
+    if (preset.prompt) showSkills();
   });
 }
 
@@ -833,13 +881,44 @@ function askScreenCard(a, keys, d, ptyKey) {
     a.multi ? h("div", { class: "row" }, h("button", { type: "button", class: "btn primary", onclick: () => keys("\x1b[C") }, "次へ →")) : null);
 }
 
+// sessionMenu: the TUI's per-session keys (t rename, T group, f favorite,
+// x archive, s summarize, ctrl+t title) as one dialog.
+function sessionMenu(id, s, groups, refresh) {
+  const sid = s.session_id;
+  const d = dev(id);
+  const post = async (path, json, done) => {
+    try { await d.post(`/api/sessions/${encodeURIComponent(sid)}${path}`, json); toast(done); refresh(); }
+    catch (e) { toast(e.message); }
+  };
+  dialog((body, close) => {
+    const title = h("input", { class: "grow", value: s.custom_title || "", placeholder: s.gen_title || s.title || "タイトル" });
+    const group = h("input", { class: "grow", value: s.user_group || "", placeholder: s.repo || base(s.cwd) || "グループ", list: "group-names" });
+    body.append(
+      h("h1", {}, (s.num ? `#${s.num} ` : "") + sessionTitle(s)),
+      h("datalist", { id: "group-names" }, groups.map((g) => h("option", { value: g }))),
+      h("label", {}, "タイトル（空にすると自動のものに戻す）"),
+      h("div", { class: "row" }, title, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/title", { title: title.value.trim() }, "タイトルを保存しました"); } }, "保存")),
+      h("label", {}, "グループ（空にすると repo 名に戻す）"),
+      h("div", { class: "row" }, group, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/group", { group: group.value.trim() }, "グループを保存しました"); } }, "保存")),
+      h("div", { class: "menu-grid" },
+        h("button", { type: "button", class: "btn", onclick: () => { close(); post("/favorite", { favorite: !s.favorite }, s.favorite ? "お気に入りを外しました" : "お気に入りにしました"); } }, s.favorite ? "☆ お気に入りを外す" : "★ お気に入り"),
+        h("button", { type: "button", class: "btn", onclick: () => { close(); post("/archive", { archived: !s.archived }, s.archived ? "アーカイブを解除しました" : "アーカイブしました"); } }, s.archived ? "アーカイブを解除" : "アーカイブ"),
+        h("button", { type: "button", class: "btn", onclick: () => { close(); post("/summarize", {}, "要約を作成しています（claude -p）"); } }, "要約を作成"),
+        h("button", { type: "button", class: "btn", onclick: async () => {
+          close();
+          try { await d.post("/api/titles", { sessionIds: [sid] }); toast("タイトルを生成しています（claude -p）"); refresh(); } catch (e) { toast(e.message); }
+        } }, "タイトルを自動生成")),
+      h("div", { class: "actions" }, h("button", { class: "btn primary" }, "閉じる")));
+  });
+}
+
 // ---- the page ----
 
 async function chatPage(id, { sid, key }) {
   const name = await deviceName(id);
   const d = dev(id);
   let session = null, ptyKey = key || null, hosted = false, info = null;
-  let lastStat = "", items = [], pendingSends = [];
+  let lastStat = "", items = [], pendingSends = [], summaryOpen = false;
   // History window: the poll reads only the last TAIL bytes and splices
   // them onto what's loaded (by entry uuid), so "older history" loaded
   // once stays without re-downloading megabytes on every update.
@@ -863,8 +942,10 @@ async function chatPage(id, { sid, key }) {
     if (!confirm("このセッションの claude を終了しますか？（後から再開できます）")) return;
     try { await d.del(`/pty/${encodeURIComponent(ptyKey)}`); toast("終了しました"); } catch (e) { toast(e.message); }
   } }, "終了");
+  let allGroups = [];
+  const menuBtn = h("button", { class: "btn small", title: "セッションの操作", onclick: () => session ? sessionMenu(id, session, allGroups, poll) : toast("まだセッションが登録されていません") }, "⋯");
   const bar = h("div", { class: "term-bar" },
-    h("a", { class: "btn small", href: `#/d/${id}` }, "←"), titleEl, statusEl, termBtn, endBtn);
+    h("a", { class: "btn small", href: `#/d/${id}` }, "←"), titleEl, statusEl, termBtn, endBtn, menuBtn);
   const log = h("div", { class: "chat-log" });
   const scroller = h("div", { class: "chat" }, log);
   const approvalsEl = h("div", { class: "chat-dock" });
@@ -980,6 +1061,12 @@ async function chatPage(id, { sid, key }) {
 
   const render = (stick) => {
     const nodes = items.map((it) => renderItem(it, askCtx)).filter(Boolean);
+    if (session?.summary_status === "running") nodes.unshift(h("div", { class: "note" }, "要約を作成中…"));
+    else if (session?.summary) {
+      const det = h("details", { class: "summary-card", open: summaryOpen }, h("summary", {}, "要約"), h("div", {}, session.summary));
+      det.addEventListener("toggle", () => (summaryOpen = det.open));
+      nodes.unshift(det);
+    }
     if (hasOlder && nodes.length) {
       nodes.unshift(h("button", { class: "btn older", disabled: loadingOlder, onclick: loadOlder },
         loadingOlder ? "読み込み中…" : "↑ 古い履歴を読み込む"));
@@ -1057,13 +1144,15 @@ async function chatPage(id, { sid, key }) {
       d.get("/api/approvals").then((x) => x || []).catch(() => []),
     ]);
     info = info || (await deviceInfo(id));
+    allGroups = uniqueGroups(sessions, true).filter(Boolean);
     if (!sid && ptyKey) {
       const a = aliasOf(ptys, ptyKey);
       if (a) { sid = a; history.replaceState(null, "", `#/d/${id}/s/${encodeURIComponent(sid)}`); }
     }
     if (sid) {
       if (ptys.some((p) => p.key === sid && p.alive)) ptyKey = sid;
-      session = sessions.find((s) => s.session_id === sid) || session;
+      session = sessions.find((s) => s.session_id === sid) ||
+        (await d.get("/api/sessions?archived=1").catch(() => []))?.find((s) => s.session_id === sid) || session;
     }
     hosted = !!ptyKey && ptys.some((p) => p.key === ptyKey && p.alive);
 
@@ -1233,6 +1322,58 @@ function terminal(id, key, title, chatHref) {
   });
 }
 
+// ---------- notifications (Web Push) ----------
+
+function b64urlToBytes(s) {
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const raw = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+
+async function pushSubscription() {
+  const reg = await navigator.serviceWorker?.ready;
+  return reg ? reg.pushManager.getSubscription() : null;
+}
+
+function notifyButton() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return null;
+  const btn = h("button", { class: "btn small bell", title: "通知" }, "🔕");
+  const paint = async () => {
+    const on = Notification.permission === "granted" && !!(await pushSubscription().catch(() => null));
+    btn.textContent = on ? "🔔" : "🔕";
+    btn.title = on ? "通知 ON（タップで設定）" : "通知 OFF（タップで ON）";
+    btn.dataset.on = on ? "1" : "";
+  };
+  btn.addEventListener("click", async () => {
+    try {
+      if (btn.dataset.on) {
+        dialog((body, close) => body.append(
+          h("h1", {}, "通知"),
+          h("p", {}, "承認待ち・Claude からの質問や確認・作業の完了を、このブラウザに通知します。"),
+          h("div", { class: "actions" },
+            h("button", { type: "button", class: "btn", onclick: async () => { await api("/api/push/test", { method: "POST" }); toast("テスト通知を送りました"); } }, "テスト通知"),
+            h("button", { type: "button", class: "btn danger", onclick: async () => {
+              const sub = await pushSubscription();
+              if (sub) { await api("/api/push/unsubscribe", { method: "POST", json: { endpoint: sub.endpoint } }); await sub.unsubscribe(); }
+              close(); paint(); toast("通知を OFF にしました");
+            } }, "OFF にする"),
+            h("button", { class: "btn primary" }, "閉じる"))));
+        return;
+      }
+      if ((await Notification.requestPermission()) !== "granted") { toast("通知が許可されませんでした（ブラウザの設定を確認してください）", 5000); return; }
+      const { publicKey } = await api("/api/push/key");
+      const reg = await navigator.serviceWorker.ready;
+      const sub = (await reg.pushManager.getSubscription()) ||
+        await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToBytes(publicKey) });
+      await api("/api/push/subscribe", { method: "POST", json: sub.toJSON() });
+      toast("通知を ON にしました");
+      paint();
+    } catch (e) { toast("通知を設定できませんでした: " + e.message, 5000); }
+  });
+  paint();
+  return btn;
+}
+
 // ---------- boot ----------
 
 (async function boot() {
@@ -1242,7 +1383,7 @@ function terminal(id, key, title, chatHref) {
   } catch {}
   try {
     me = await api("/api/me");
-    $("#me").replaceChildren(h("span", {}, h("span", { class: "email" }, me.email), me.noAuth ? null : h("a", { href: "/auth/logout" }, "ログアウト")));
+    $("#me").replaceChildren(h("span", {}, notifyButton(), h("span", { class: "email" }, me.email), me.noAuth ? null : h("a", { href: "/auth/logout" }, "ログアウト")));
   } catch {}
   // Reload into a new hub build: a single-page app otherwise keeps running
   // the JS it loaded, however long the tab stays open. Wait while the user
@@ -1259,6 +1400,10 @@ function terminal(id, key, title, chatHref) {
   setInterval(checkUpdate, 30000);
   // Installable as an app (PWA); the worker caches nothing.
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+  // A tapped notification asks an open window to show its session.
+  navigator.serviceWorker?.addEventListener("message", (e) => {
+    if (e.data?.type === "open" && e.data.url) location.href = e.data.url;
+  });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
   window.addEventListener("hashchange", route);
   route();

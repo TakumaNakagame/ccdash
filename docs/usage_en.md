@@ -510,6 +510,18 @@ machine never accepts inbound connections — its collector dials out.
   **Next** for multi-select, or type into **Other**. A review step confirms
   multi-question sets.
 - An open portal tab reloads itself when the hub is upgraded.
+- **⋯** in a chat does what the TUI's per-session keys do: rename (`t`),
+  set the group (`T`), favorite (`f`), archive (`x`), summarize (`s`) and
+  generate a title (`ctrl+t`). **Archive** on the session list shows the
+  archived ones. The summary appears at the top of the chat.
+- **New session** takes an optional first message; typing `/` lists the
+  device's skills and slash commands (project ones move the directory to
+  their project), like the TUI's `S`.
+- The device's settings are shown read-only at the bottom of its page —
+  the hub can't change them.
+- **🔔** in the header turns on push notifications for this browser (the
+  installed app on a phone): a new approval, a question or confirmation on
+  a ccdash-hosted claude's screen, and a session finishing its turn.
 - The portal is a PWA: "Install app" / "Add to Home screen" gives it its own
   icon and window. Nothing is cached offline — it always talks to the hub.
 

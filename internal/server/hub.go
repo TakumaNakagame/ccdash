@@ -23,6 +23,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/hubcfg"
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/takumanakagame/ccmanage/internal/skills"
 	"github.com/takumanakagame/ccmanage/internal/tunnel"
 )
 
@@ -158,6 +159,16 @@ func (s *Server) hubHandler() http.Handler {
 			}
 			handleHubUpload(w, r)
 			return
+		case r.Method == http.MethodGet && r.URL.Path == "/hub/settings":
+			handleHubSettings(w, cfg)
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/hub/skills":
+			if !cfg.AttachEnabled {
+				http.Error(w, "attach is OFF on this device", http.StatusForbidden)
+				return
+			}
+			handleHubSkills(w, r, cfg)
+			return
 		case r.Method == http.MethodGet && r.URL.Path == "/hub/dirs":
 			if !cfg.AttachEnabled {
 				http.Error(w, "attach is OFF on this device", http.StatusForbidden)
@@ -178,6 +189,9 @@ func (s *Server) hubHandler() http.Handler {
 var (
 	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|sessions/[^/]+/transcript)$`)
 	hubSessionEdit = regexp.MustCompile(`^/api/sessions/[^/]+/(archive|favorite|title|group)$`)
+	// claude -p runs; summarize.Kickoff / KickoffTitles refuse them
+	// themselves while summary_enabled is off.
+	hubSummarize   = regexp.MustCompile(`^/api/(sessions/[^/]+/summarize|titles)$`)
 	hubDecideRoute = regexp.MustCompile(`^/approvals/\d+/decide$`)
 )
 
@@ -188,6 +202,8 @@ func hubAllowed(r *http.Request, cfg settings.Settings) (bool, string) {
 	case r.Method == http.MethodGet && hubReadRoute.MatchString(p):
 		return true, ""
 	case r.Method == http.MethodPost && hubSessionEdit.MatchString(p):
+		return true, ""
+	case r.Method == http.MethodPost && hubSummarize.MatchString(p):
 		return true, ""
 	case r.Method == http.MethodGet && (p == "/pty/" || p == "/pty"):
 		return true, ""
@@ -261,6 +277,56 @@ func (s *Server) handleHubDirs(w http.ResponseWriter, r *http.Request, cfg setti
 	}
 	sort.Strings(dirs)
 	writeOK(w, map[string]any{"path": p, "parent": filepath.Dir(p), "home": home, "dirs": dirs})
+}
+
+// handleHubSettings shows the device's settings to the portal, read-only:
+// the hub may see the toggles but never change them (settings writes are
+// not in hubAllowed).
+func handleHubSettings(w http.ResponseWriter, cfg settings.Settings) {
+	type row struct {
+		Key   string `json:"key"`
+		Label string `json:"label"`
+		Help  string `json:"help"`
+		Value any    `json:"value"`
+	}
+	out := []row{}
+	for _, sp := range settings.AllSpecs() {
+		if sp.Kind == settings.KindAction {
+			continue
+		}
+		out = append(out, row{Key: sp.Key, Label: sp.Label, Help: sp.Help, Value: settings.Get(cfg, sp.Key)})
+	}
+	writeOK(w, out)
+}
+
+// handleHubSkills lists the skills / slash commands a new session could
+// start with, like the TUI's skill picker (S): project skills found from
+// ?dir= (and the new-session directory) first, then the user-level ones.
+func handleHubSkills(w http.ResponseWriter, r *http.Request, cfg settings.Settings) {
+	home, _ := os.UserHomeDir()
+	var dirs []string
+	if d := r.URL.Query().Get("dir"); d != "" {
+		dirs = append(dirs, expandHome(d, home))
+	}
+	if cfg.NewSessionDir != "" {
+		dirs = append(dirs, expandHome(cfg.NewSessionDir, home))
+	}
+	out := []skills.Skill{}
+	for _, root := range skills.ProjectRoots(dirs, home) {
+		out = append(out, skills.ListProject(root)...)
+	}
+	out = append(out, skills.List(filepath.Join(home, ".claude"))...)
+	type row struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Source      string `json:"source"`
+		Dir         string `json:"dir,omitempty"`
+	}
+	rows := make([]row, 0, len(out))
+	for _, s := range out {
+		rows = append(rows, row{s.Name, s.Description, s.Source, s.Dir})
+	}
+	writeOK(w, rows)
 }
 
 // maxUpload bounds one portal image upload.

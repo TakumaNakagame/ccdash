@@ -159,6 +159,10 @@ func (h *Hub) Handler() http.Handler {
 	api.HandleFunc("POST /api/devices/{id}/rotate", h.handleRotateDevice)
 	api.HandleFunc("POST /api/devices/{id}/rename", h.handleRenameDevice)
 	api.HandleFunc("DELETE /api/devices/{id}", h.handleDeleteDevice)
+	api.HandleFunc("GET /api/push/key", h.handlePushKey)
+	api.HandleFunc("POST /api/push/subscribe", h.handlePushSubscribe)
+	api.HandleFunc("POST /api/push/unsubscribe", h.handlePushUnsubscribe)
+	api.HandleFunc("POST /api/push/test", h.handlePushTest)
 	api.HandleFunc("GET /api/d/{id}/ws/pty/{key}", h.handlePTYSocket)
 	api.HandleFunc("/api/d/{id}/{rest...}", h.handleDeviceProxy)
 	// Go 1.25's cross-origin guard rejects non-GET requests a browser
@@ -440,6 +444,9 @@ func (h *Hub) handleAgent(w http.ResponseWriter, r *http.Request) {
 		_ = old.sess.Close()
 	}
 	log.Printf("hub: device %q connected from %s (%s, ccdash %s)", d.Name, dc.remote, hostname, version)
+	watchCtx, stopWatch := context.WithCancel(context.Background())
+	defer stopWatch()
+	go h.watchDevice(watchCtx, d, dc)
 
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()

@@ -33,7 +33,9 @@ func TestHubAllowed(t *testing.T) {
 		{"GET", "/api/approvals", on, true},
 		{"GET", "/api/sessions/abc/transcript", on, true},
 		{"POST", "/api/sessions/abc/title", on, true},
-		{"POST", "/api/sessions/abc/summarize", on, false},
+		{"POST", "/api/sessions/abc/summarize", on, true},
+		{"POST", "/api/titles", on, true},
+		{"POST", "/api/sessions/abc/delete", on, false},
 		{"GET", "/api/settings", on, false},
 		{"PUT", "/api/settings/approve_enabled", on, false},
 		{"POST", "/hooks/stop", on, false},
@@ -106,6 +108,12 @@ func TestHubTunnelEndToEnd(t *testing.T) {
 
 	if code, body := get("GET", "/api/sessions"); code != http.StatusOK {
 		t.Fatalf("GET /api/sessions through tunnel = %d %s", code, body)
+	}
+	if code, body := get("GET", "/hub/settings"); code != http.StatusOK || !strings.Contains(body, `"key":"approve_enabled"`) {
+		t.Fatalf("GET /hub/settings = %d %s", code, body)
+	}
+	if code, _ := get("GET", "/hub/skills"); code != http.StatusOK {
+		t.Fatalf("GET /hub/skills = %d", code)
 	}
 	if code, body := get("GET", "/hub/info"); code != http.StatusOK || !strings.Contains(body, `"attachEnabled":true`) {
 		t.Fatalf("GET /hub/info = %d %s", code, body)

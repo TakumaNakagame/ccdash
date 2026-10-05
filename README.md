@@ -327,7 +327,13 @@ ones from, and answer approvals in.
   pasted into the prompt as attachments. Older history loads on demand. A
   **Terminal** button switches to a full xterm.js view of the same PTY.
 - The session list mirrors the TUI: a newest-first view with date
-  sections, plus one tab per group.
+  sections, plus one tab per group; rename / group / favorite / archive /
+  summarize / title generation from a session's menu; skills and a first
+  message for new sessions; the device's settings read-only.
+- **Push notifications** (Web Push, VAPID keys kept in hub.sqlite): the hub
+  polls each connected device through its tunnel and notifies subscribed
+  browsers of new approvals, questions / confirmations on a hosted claude's
+  screen, and finished turns. The portal is installable as a PWA.
 
 **On the server** (the image is `ghcr.io/takumanakagame/ccdash`, entrypoint
 `ccdash hub serve`; TLS terminates in front of it):
