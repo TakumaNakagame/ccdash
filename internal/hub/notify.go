@@ -198,6 +198,7 @@ func (h *Hub) handlePushTest(w http.ResponseWriter, r *http.Request) {
 type watchState struct {
 	first     bool
 	status    map[string]model.SessionStatus
+	lastSeen  map[string]time.Time
 	approvals map[int64]bool
 	prompts   map[string]string // pty key → prompt signature
 	lastSent  map[string]time.Time
@@ -305,13 +306,22 @@ func watchOnce(ctx context.Context, c *http.Client, d Device, st *watchState) ([
 	}
 	st.approvals = live
 
-	// Turns that finished.
+	// Turns that finished. A short turn can start and end between two
+	// polls, so "was active, now isn't" misses it; a session that is idle
+	// (alive, waiting for input) and whose last activity moved since the
+	// previous look has finished a turn too — including a brand-new session
+	// finishing its first one.
 	for _, s := range sessions {
 		prev, seen := st.status[s.SessionID]
-		if seen && prev == model.StatusActive && s.Status != model.StatusActive {
+		prevSeen := st.lastSeen[s.SessionID]
+		switch {
+		case seen && prev == model.StatusActive && s.Status != model.StatusActive:
+			send(s.SessionID, s.SessionID+":done", "完了", label(s.SessionID))
+		case s.Status == model.StatusIdle && s.LastSeen.After(prevSeen) && (seen || time.Since(s.LastSeen) < 2*watchInterval+10*time.Second):
 			send(s.SessionID, s.SessionID+":done", "完了", label(s.SessionID))
 		}
 		st.status[s.SessionID] = s.Status
+		st.lastSeen[s.SessionID] = s.LastSeen
 	}
 
 	// Questions / confirmations on hosted claudes' screens. One key per
@@ -360,7 +370,7 @@ func watchOnce(ctx context.Context, c *http.Client, d Device, st *watchState) ([
 }
 
 func newWatchState() *watchState {
-	return &watchState{first: true, status: map[string]model.SessionStatus{}, approvals: map[int64]bool{}, prompts: map[string]string{}, lastSent: map[string]time.Time{}}
+	return &watchState{first: true, status: map[string]model.SessionStatus{}, lastSeen: map[string]time.Time{}, approvals: map[int64]bool{}, prompts: map[string]string{}, lastSent: map[string]time.Time{}}
 }
 
 var (
@@ -394,6 +404,42 @@ func screenPromptKind(rows []string) (kind, text string) {
 		for j := i - 1; j >= 0 && j >= i-12; j-- {
 			t := unbox(rows[j])
 			if strings.HasSuffix(t, "?") || strings.HasSuffix(t, "？") {
+				return "confirm", t
+			}
+		}
+		return "confirm", ""
+	}
+	// Unnumbered list (the folder-trust question, the theme picker): the
+	// cursor row has siblings in the column after the "❯". A lone "❯" row
+	// is claude's input prompt, not a menu.
+	// Only the bottom-most "❯" row counts: higher ones are past prompts in
+	// the scrollback, and an empty one is the input box (no dialog open).
+	for i := len(rows) - 1; i >= 0; i-- {
+		r := unbox(rows[i])
+		col := strings.Index(r, "❯")
+		if col < 0 {
+			continue
+		}
+		if strings.TrimSpace(r[col+len("❯"):]) == "" {
+			return "", ""
+		}
+		raw := rows[i]
+		c := strings.Index(raw, "❯")
+		sib := func(l string) bool {
+			return len(l) > c+len("❯") && strings.TrimSpace(l[:c]) == "" && strings.TrimSpace(l[c:]) != "" && !strings.Contains(l, "─")
+		}
+		n := 0
+		for j := i - 1; j >= 0 && sib(rows[j]); j-- {
+			n++
+		}
+		for j := i + 1; j < len(rows) && sib(rows[j]); j++ {
+			n++
+		}
+		if n == 0 {
+			return "", ""
+		}
+		for j := i - 1; j >= 0 && j >= i-12; j-- {
+			if t := unbox(rows[j]); strings.HasSuffix(t, "?") || strings.HasSuffix(t, "？") || strings.Contains(t, "?") {
 				return "confirm", t
 			}
 		}

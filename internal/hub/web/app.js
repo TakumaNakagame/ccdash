@@ -797,9 +797,11 @@ function screenPrompt(rows) {
   const clean = (r) => r.replace(/^\s*[│|]/, " ").replace(/[│|]\s*$/, "");
   const lines = rows.map(clean);
   const opt = /^\s*(?:❯\s*)?(\d{1,2})[.)]\s+(.+?)\s*$/;
+  // Only the bottom-most "❯" row counts: higher ones are past prompts in
+  // the scrollback, and an empty one is claude's input box (no dialog).
   let sel = -1;
-  for (let i = lines.length - 1; i >= 0; i--) if (/^\s*❯\s*\S/.test(lines[i])) { sel = i; break; }
-  if (sel < 0) return null;
+  for (let i = lines.length - 1; i >= 0; i--) if (/^\s*❯/.test(lines[i])) { sel = i; break; }
+  if (sel < 0 || !/^\s*❯\s*\S/.test(lines[sel])) return null;
   let start = sel, end = sel, options = [];
   if (opt.test(lines[sel])) {
     // Numbered menu (permission dialogs, plan approval, AskUserQuestion…):

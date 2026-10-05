@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestScreenPromptKind(t *testing.T) {
@@ -22,6 +23,15 @@ func TestScreenPromptKind(t *testing.T) {
 	perm := []string{"╭────╮", "│ Bash command │", "│ rm -rf build │", "│ Do you want to proceed? │", "│ ❯ 1. Yes │", "│   2. No │", "╰────╯"}
 	if k, q := screenPromptKind(perm); k != "confirm" || q != "Do you want to proceed?" {
 		t.Errorf("permission dialog = %q %q", k, q)
+	}
+	trust := []string{" Quick safety check: Is this a project you created or one you trust?", "", " ❯ No, exit", "   Yes, I trust this folder", "", " Enter to confirm · Esc to cancel"}
+	if k, q := screenPromptKind(trust); k != "confirm" || !strings.Contains(q, "trust") {
+		t.Errorf("unnumbered trust menu = %q %q", k, q)
+	}
+	// A wrapped past prompt above the (empty) input box is not a menu.
+	scrollback := []string{"❯ テストです。何も調べず、AskUserQuestion を使って", "  1問目「好きな果物」を聞いて", "● はい", "────", "❯ ", "────"}
+	if k, _ := screenPromptKind(scrollback); k != "" {
+		t.Errorf("past prompt detected as %q", k)
 	}
 	idle := []string{"● done", "────", "❯ ", "────", "  ⏵⏵ auto mode on"}
 	if k, _ := screenPromptKind(idle); k != "" {
@@ -86,6 +96,18 @@ func TestWatchOnce(t *testing.T) {
 	// Same question again: no repeat.
 	if ns, _ := watchOnce(ctx, c, d, st); len(ns) != 0 {
 		t.Fatalf("repeat question notified: %+v", ns)
+	}
+
+	// A session that ran a whole short turn between two polls (never seen
+	// active) still counts as finished.
+	f.mu.Lock()
+	f.sessions = strings.Replace(f.sessions, `]`, `,{"session_id":"s3","num":9,"title":"quick","status":"idle","first_seen":"2026-10-05T00:00:00Z","last_seen":"`+time.Now().UTC().Format(time.RFC3339)+`"}]`, 1)
+	f.mu.Unlock()
+	if ns, _ := watchOnce(ctx, c, d, st); len(ns) != 1 || !strings.Contains(ns[0].Title, "完了") || !strings.Contains(ns[0].Body, "#9") {
+		t.Fatalf("short turn = %+v", ns)
+	}
+	if ns, _ := watchOnce(ctx, c, d, st); len(ns) != 0 {
+		t.Fatalf("idle session re-notified: %+v", ns)
 	}
 
 	// The turn ends and an approval for another session arrives.
