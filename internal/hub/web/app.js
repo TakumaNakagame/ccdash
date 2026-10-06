@@ -415,7 +415,7 @@ async function devicePage(id, opts = {}) {
     for (let i = 6; i >= 0; i--) {
       const dt = new Date(Date.now() - i * 86400000);
       const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-      days.push([key.slice(5), u.by_day?.[key]?.cost || 0]);
+      days.push([`${dt.getMonth() + 1}/${dt.getDate()}`, u.by_day?.[key]?.cost || 0]);
     }
     const max = Math.max(...days.map((x) => x[1]), 0.01);
     usageCard.hidden = !u.range?.messages;
@@ -423,8 +423,9 @@ async function devicePage(id, opts = {}) {
       h("div", { class: "row" },
         h("div", { class: "grow" }, h("div", { class: "muted small" }, "今日（API 換算）"), h("b", { class: "big" }, fmtUSD(u.today?.cost || 0))),
         h("div", {}, h("div", { class: "muted small" }, "7 日間"), h("b", {}, fmtUSD(u.range?.cost || 0)), h("span", { class: "muted small" }, ` · ${fmtTok(tokTotal(u.range || {}))} tok`))),
-      h("div", { class: "bars", title: "日別" }, days.map(([d, v]) => h("div", { class: "bar", title: `${d} ${fmtUSD(v)}` },
-        h("span", { style: `height:${Math.max(2, Math.round((v / max) * 40))}px` }), h("small", {}, d.slice(3))))));
+      h("div", { class: "bars", title: "日別（API 換算）" }, days.map(([d, v]) => h("div", { class: "bar", title: `${d} ${fmtUSD(v)}` },
+        h("em", {}, v > 0 ? fmtUSD(v) : ""),
+        h("span", { style: `height:${Math.max(2, Math.round((v / max) * 40))}px` }), h("small", {}, d)))));
   };
   loadUsage();
   const usageTimer = setInterval(loadUsage, 60000);

@@ -373,10 +373,11 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .btn.cost { font-variant-numeric: tabular-nums; }
 .usage-card { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 10px 14px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .usage-card .big { font-size: 20px; }
-.bars { display: flex; gap: 6px; align-items: flex-end; height: 56px; }
+.bars { display: flex; gap: 6px; align-items: flex-end; height: 76px; }
 .bar { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; }
 .bar span { width: 100%; max-width: 28px; background: var(--accent); border-radius: 3px 3px 0 0; opacity: .8; }
 .bar small { font-size: 10px; color: var(--muted); }
+.bar em { font-style: normal; font-size: 10px; color: var(--text); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* wide screens: TUI-style two panes (session list | session) */
 .split { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--list-w, 34%) 12px 1fr; }
