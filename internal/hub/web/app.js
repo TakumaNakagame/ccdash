@@ -1245,14 +1245,37 @@ function gridTile(c) {
     h("div", { class: "tile-resize", title: "ドラッグで大きさを変更" }));
   title.addEventListener("dblclick", () => el.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   closeBtn.addEventListener("click", () => el.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })));
-  let session = c.session, sig = "";
+  let session = c.session, sig = "", shown = null, pending = [];
+  // Sent text shows as a pending bubble (like the chat view) until it turns
+  // up as a user turn in the transcript — Claude may still be busy and
+  // hold it in its input queue — or after 2 minutes.
+  const paint = () => {
+    if (!shown) return;
+    if (selectingIn(log)) return; // the next refresh repaints
+    pending = pending.filter((p) => Date.now() - p.at < 120000);
+    const nodes = shown.map((it) => renderItem(it)).filter(Boolean);
+    for (const p of pending) nodes.push(h("div", { class: "bubble user pending" }, p.text));
+    const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    log.replaceChildren(...(nodes.length ? nodes : [h("div", { class: "muted small" }, "まだメッセージがありません")]));
+    if (stick || pending.length) log.scrollTop = log.scrollHeight;
+  };
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = input.value.trim();
     if (!text) return;
     if (session.attention === "needs_you") { toast("Claude が回答を待っています。開いて質問カードから答えてください"); location.hash = chatHref; return; }
-    try { await sendToSession(id, sid, text); input.value = ""; toast("送信しました"); }
-    catch (err) { toast(err.message); }
+    input.value = "";
+    const p = { text, at: Date.now() };
+    pending.push(p);
+    if (!shown) shown = [];
+    paint();
+    try { await sendToSession(id, sid, text); }
+    catch (err) {
+      toast(err.message);
+      pending = pending.filter((x) => x !== p);
+      if (!input.value) input.value = text;
+      paint();
+    }
   });
   return {
     el,
@@ -1283,6 +1306,7 @@ function gridTile(c) {
       try {
         stat = await d.get(`/api/sessions/${encodeURIComponent(sid)}/transcript?mode=stat`);
       } catch (e) {
+        if (pending.length) { shown = []; sig = ""; paint(); return; }
         if (sig !== "missing") {
           sig = "missing";
           log.replaceChildren(h("div", { class: "muted small" }, e.status === 404 || e.status === 500
@@ -1291,14 +1315,18 @@ function gridTile(c) {
         return;
       }
       const next = `${stat.mtime}/${stat.size}`;
-      if (next === sig) return;
+      if (next === sig) {
+        if (pending.some((p) => Date.now() - p.at >= 120000)) paint(); // expire
+        return;
+      }
       sig = next;
       const t = await d.get(`/api/sessions/${encodeURIComponent(sid)}/transcript?mode=tail&bytes=98304`);
-      const items = parseTranscript(decodeEntries(t.data)).filter((x) => x.kind !== "thinking").slice(-8);
+      const all = parseTranscript(decodeEntries(t.data));
+      const users = all.filter((x) => x.kind === "user").map((x) => x.text);
+      pending = pending.filter((p) => !users.some((u) => u.includes(p.text)));
+      shown = all.filter((x) => x.kind !== "thinking").slice(-8);
       if (selectingIn(log)) { sig = ""; return; } // retry after the copy
-      const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-      log.replaceChildren(...(items.length ? items.map((it) => renderItem(it)).filter(Boolean) : [h("div", { class: "muted small" }, "まだメッセージがありません")]));
-      if (stick) log.scrollTop = log.scrollHeight;
+      paint();
     },
   };
 }
