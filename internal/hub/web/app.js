@@ -95,6 +95,26 @@ function every(ms, fn, bucket = cleanup) {
   bucket.push(() => { stopped = true; clearTimeout(timer); });
 }
 
+// Polling re-renders replace DOM nodes, which drops a text selection the
+// operator is making for copy. deferWhileSelecting holds one render of el
+// while a selection lives inside it and runs fn once it's cleared.
+const selHolds = new Map(); // element → deferred render
+const selectingIn = (el) => {
+  const sel = getSelection();
+  return !!sel && !sel.isCollapsed && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).commonAncestorContainer);
+};
+document.addEventListener("selectionchange", () => {
+  for (const [el, fn] of selHolds) {
+    if (!el.isConnected) { selHolds.delete(el); continue; }
+    if (!selectingIn(el)) { selHolds.delete(el); fn(); }
+  }
+});
+function deferWhileSelecting(el, fn) {
+  if (!selectingIn(el)) return false;
+  selHolds.set(el, fn);
+  return true;
+}
+
 function crumbs(...parts) {
   const nav = $("#crumbs");
   nav.replaceChildren();
@@ -420,7 +440,7 @@ async function devicePage(id, opts = {}) {
   const more = h("div");
   const filter = h("input", { placeholder: "絞り込み（タイトル・パス・#番号）", class: "grow" });
   let showArchived = false;
-  const archBtn = h("button", { class: "btn small", onclick: () => { showArchived = !showArchived; archBtn.classList.toggle("on", showArchived); archBtn.textContent = showArchived ? "アーカイブ表示中" : "アーカイブ"; refreshNow(); } }, "アーカイブ");
+  const archBtn = h("button", { class: "btn small", onclick: () => { showArchived = !showArchived; selected.clear(); paintSel(); archBtn.classList.toggle("on", showArchived); archBtn.textContent = showArchived ? "アーカイブ表示中" : "アーカイブ"; refreshNow(); } }, "アーカイブ");
   const status = h("div", { class: "muted small" });
   const settingsBox = h("details", { class: "settings-box" }, h("summary", {}, "端末の設定（閲覧のみ）"));
   const usageCard = h("div", { class: "usage-card", hidden: true });
@@ -457,6 +477,61 @@ async function devicePage(id, opts = {}) {
         h("p", { class: "muted small" }, "変更は端末の TUI（, キー）から。ハブからは変更できません。")));
     } catch (e) { toast(e.message); }
   });
+  // Checkboxes on the rows select sessions for bulk actions: put them on
+  // the grid, archive (or unarchive), or generate titles with claude -p.
+  const selected = new Set();
+  const selBar = h("div", { class: "sel-bar", hidden: true });
+  const sel = {
+    set: selected,
+    toggle(sid, on) { on ? selected.add(sid) : selected.delete(sid); paintSel(); render(); },
+  };
+  const bulk = async (label, fn) => {
+    const ids = [...selected];
+    let ok = 0, ng = 0, lastErr = "";
+    for (const sid of ids) {
+      try { await fn(sid); ok++; } catch (e) { ng++; lastErr = e.message; }
+    }
+    toast(`${label}: ${ok} 件` + (ng ? `（失敗 ${ng} 件: ${lastErr}）` : ""));
+    selected.clear();
+    paintSel();
+    refreshNow();
+  };
+  const genTitles = async () => {
+    const ids = [...selected];
+    let ok = 0, lastErr = "";
+    for (let i = 0; i < ids.length; i += 10) {
+      try { await dev(id).post("/api/titles", { sessionIds: ids.slice(i, i + 10) }); ok += Math.min(10, ids.length - i); }
+      catch (e) { lastErr = e.message; }
+    }
+    toast(ok ? `タイトルを生成しています（claude -p, ${ok} 件）` : "生成できませんでした: " + lastErr);
+    selected.clear();
+    paintSel();
+    render();
+  };
+  const paintSel = () => {
+    selBar.hidden = !selected.size;
+    if (!selected.size) return;
+    const keys = [...selected].map((sid) => id + ":" + sid);
+    selBar.replaceChildren(
+      h("b", {}, `${selected.size} 件選択`),
+      h("button", { class: "btn small", onclick: () => {
+        const cur = gridList.get() || [];
+        gridList.set([...cur, ...keys.filter((k) => !cur.includes(k))]);
+        toast("グリッドに追加しました"); selected.clear(); paintSel(); render();
+      } }, "▦ グリッドに追加"),
+      h("button", { class: "btn small", onclick: () => {
+        gridList.set((gridList.get() || []).filter((k) => !keys.includes(k)));
+        toast("グリッドから外しました"); selected.clear(); paintSel(); render();
+      } }, "グリッドから外す"),
+      h("button", { class: "btn small", onclick: () => bulk(showArchived ? "アーカイブ解除" : "アーカイブ",
+        (sid) => dev(id).post(`/api/sessions/${encodeURIComponent(sid)}/archive`, { archived: !showArchived })) },
+        showArchived ? "アーカイブ解除" : "アーカイブ"),
+      h("button", { class: "btn small", title: "claude -p でタイトルを生成", onclick: genTitles }, "タイトル生成"),
+      h("span", { class: "grow" }),
+      h("button", { class: "btn small", onclick: () => { for (const sid of visible) selected.add(sid); paintSel(); render(); } }, "表示中を全選択"),
+      h("button", { class: "btn small", onclick: () => { selected.clear(); paintSel(); render(); } }, "選択解除"));
+  };
+  let visible = [];
   mount.append(h("div", { class: "page" + (opts.compact ? " compact" : "") },
     h("div", { class: "row" },
       h("h1", { class: "grow" }, name),
@@ -464,11 +539,12 @@ async function devicePage(id, opts = {}) {
     status, usageCard, approvals, spawns,
     tabs,
     h("div", { class: "row", style: "margin-bottom:8px" }, filter, archBtn),
-    list, more, settingsBox));
+    selBar, list, more, settingsBox));
 
   let last = null, tab = loadTab(id), limit = 100;
   const render = () => {
     if (!last) return;
+    if (deferWhileSelecting(list, render)) return;
     const { sessions, ptys, info } = last;
     const live = new Set(ptys.filter((p) => p.alive).map((p) => p.key));
     const groups = uniqueGroups(sessions, info.autoRepoTabs !== false);
@@ -492,13 +568,14 @@ async function devicePage(id, opts = {}) {
       .sort((a, b) => (!!b.favorite - !!a.favorite) || (new Date(b.last_seen) - new Date(a.last_seen)));
     const out = [];
     let bucket = null;
+    visible = rows.slice(0, limit).map((s) => s.session_id);
     for (const s of rows.slice(0, limit)) {
       const b = dateBucket(s);
       if (b !== bucket) {
         bucket = b;
         out.push(h("div", { class: "bucket" }, b));
       }
-      out.push(sessionRow(id, s, live.has(s.session_id), info, !tab));
+      out.push(sessionRow(id, s, live.has(s.session_id), info, !tab, sel));
     }
     list.replaceChildren(...(out.length ? out : [h("div", { class: "empty" }, q ? "該当なし" : "セッションがありません")]));
     more.replaceChildren(...(rows.length > limit
@@ -534,7 +611,7 @@ async function devicePage(id, opts = {}) {
   every(3000, tick, bucket);
 }
 
-function sessionRow(id, s, live, info, showGroup) {
+function sessionRow(id, s, live, info, showGroup, sel = null) {
   const chips = [];
   if (live) chips.push(h("span", { class: "chip live" }, "live"));
   if (s.attention === "needs_you") chips.push(h("span", { class: "chip pend", title: s.attention_reason || "" }, "要対応"));
@@ -543,13 +620,31 @@ function sessionRow(id, s, live, info, showGroup) {
   chips.push(h("span", { class: "chip " + s.status }, s.status));
   const sub = [s.attention === "needs_you" && s.attention_reason ? "? " + s.attention_reason : null,
     showGroup ? groupOf(s) : null, shortPath(s.cwd, info?.home), s.branch, rel(s.last_seen)].filter(Boolean).join(" · ");
-  const sel = decodeURIComponent(location.hash).startsWith(`#/d/${id}/s/${s.session_id}`);
-  return h("div", { class: "item" + (sel ? " selected" : ""), "data-sid": s.session_id, onclick: () => (location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`) },
+  const here = decodeURIComponent(location.hash).startsWith(`#/d/${id}/s/${s.session_id}`);
+  const gk = id + ":" + s.session_id;
+  const mark = h("button", { class: "grid-mark" + (gridList.has(gk) ? " on" : ""), type: "button", title: "グリッドに表示する／外す" }, "▦");
+  mark.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const on = gridList.toggle(gk);
+    mark.classList.toggle("on", on);
+    toast(on ? "グリッドに追加しました" : "グリッドから外しました");
+  });
+  const check = sel && h("input", { type: "checkbox", class: "row-check", title: "選択してまとめて操作" });
+  if (check) {
+    check.checked = sel.set.has(s.session_id);
+    check.addEventListener("click", (e) => e.stopPropagation());
+    check.addEventListener("change", () => sel.toggle(s.session_id, check.checked));
+  }
+  return h("div", { class: "item" + (here ? " selected" : "") + (check?.checked ? " checked" : ""), "data-sid": s.session_id, onclick: (e) => {
+    if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
+    location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`;
+  } },
+    check || null,
     h("span", { class: "num" }, s.num ? `#${s.num}` : ""),
     h("div", { class: "grow" },
       h("div", { class: "title" }, (s.favorite ? "★ " : "") + sessionTitle(s)),
       h("div", { class: "sub" }, sub)),
-    ...chips);
+    ...chips, mark);
 }
 
 function renderApprovals(el, id, aps, sessions) {
@@ -1100,6 +1195,21 @@ function sessionMenu(id, s, groups, refresh) {
 }
 
 // ---- grid view ----
+
+// The grid shows an operator-chosen list of "device:session" keys, kept
+// per browser. null = never chosen: the grid seeds it with what's running.
+// Session lists mark entries onto it directly.
+const gridList = {
+  get() { try { const v = JSON.parse(localStorage.getItem("ccdash.gridItems")); return Array.isArray(v) ? v : null; } catch { return null; } },
+  set(v) { try { localStorage.setItem("ccdash.gridItems", JSON.stringify(v)); } catch {} },
+  has(k) { return (this.get() || []).includes(k); },
+  toggle(k) {
+    const cur = this.get() || [];
+    const on = !cur.includes(k);
+    this.set(on ? [...cur, k] : cur.filter((x) => x !== k));
+    return on;
+  },
+};
 //
 // Every running session across devices on one screen: a tile each with its
 // state, why it wants you, the latest exchange (live), and a one-line reply.
@@ -1110,13 +1220,28 @@ function gridTile(c) {
   const title = h("span", { class: "tile-title", title: "ダブルクリックで全画面 / 元に戻す" });
   const openBtn = h("a", { class: "btn small", href: chatHref, title: "チャット画面で開く" }, "↗");
   const closeBtn = h("button", { class: "btn small tile-close", type: "button", title: "グリッドから外す" }, "×");
+  const resumeBtn = h("button", { class: "btn small primary", type: "button", title: "claude --resume で再開", hidden: true }, "▶ 再開");
+  let resumingUntil = 0;
+  resumeBtn.addEventListener("click", async () => {
+    resumeBtn.disabled = true;
+    resumeBtn.textContent = "再開中…";
+    try {
+      const started = await resumeSession(id, sid);
+      toast(started ? "再開しました" : "すでに動いています");
+      resumingUntil = Date.now() + 60000;
+    } catch (err) {
+      toast(err.message);
+      resumeBtn.disabled = false;
+      resumeBtn.textContent = "▶ 再開";
+    }
+  });
   const status = h("span", { class: "chip" });
   const reason = h("div", { class: "tile-reason" });
   const log = h("div", { class: "tile-log" }, h("div", { class: "muted small" }, "読み込み中…"));
   const input = h("input", { placeholder: "返信（Enter で送信）", enterkeyhint: "send" });
   const form = h("form", { class: "tile-reply" }, input, h("button", { class: "btn small primary" }, "送信"));
   const el = h("div", { class: "tile" },
-    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, openBtn, closeBtn), reason, log, form,
+    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, resumeBtn, openBtn, closeBtn), reason, log, form,
     h("div", { class: "tile-resize", title: "ドラッグで大きさを変更" }));
   title.addEventListener("dblclick", () => el.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   closeBtn.addEventListener("click", () => el.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })));
@@ -1144,6 +1269,13 @@ function gridTile(c) {
         ? [h("span", {}, "? " + (session.attention_reason || "要対応")), h("a", { class: "btn small", href: chatHref }, "開いて回答")]
         : []));
       reason.hidden = session.attention !== "needs_you";
+      const running = session.status === "active" || session.status === "idle";
+      if (running) resumingUntil = 0;
+      const waiting = Date.now() < resumingUntil;
+      resumeBtn.hidden = running;
+      resumeBtn.disabled = waiting;
+      resumeBtn.textContent = waiting ? "再開中…" : "▶ 再開";
+      input.placeholder = running ? "返信（Enter で送信）" : "送信すると再開します";
     },
     async refresh() {
       const d = dev(id);
@@ -1163,6 +1295,7 @@ function gridTile(c) {
       sig = next;
       const t = await d.get(`/api/sessions/${encodeURIComponent(sid)}/transcript?mode=tail&bytes=98304`);
       const items = parseTranscript(decodeEntries(t.data)).filter((x) => x.kind !== "thinking").slice(-8);
+      if (selectingIn(log)) { sig = ""; return; } // retry after the copy
       const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
       log.replaceChildren(...(items.length ? items.map((it) => renderItem(it)).filter(Boolean) : [h("div", { class: "muted small" }, "まだメッセージがありません")]));
       if (stick) log.scrollTop = log.scrollHeight;
@@ -1218,8 +1351,7 @@ function gridPage() {
   // off, ＋ places any session that isn't on it yet. Kept per browser as
   // "device:session" keys in order; the first visit starts from whatever is
   // running.
-  const itemsStore = { get() { try { const v = JSON.parse(localStorage.getItem("ccdash.gridItems")); return Array.isArray(v) ? v : null; } catch { return null; } },
-    set(v) { try { localStorage.setItem("ccdash.gridItems", JSON.stringify(v)); } catch {} } };
+  const itemsStore = gridList;
   let items = itemsStore.get();
   let all = []; // every session the hub knows, from the last poll
   const keyOf = (c) => c.device_id + ":" + c.session.session_id;
@@ -1389,7 +1521,10 @@ function gridPage() {
       let t = tiles.get(k);
       if (!t) { t = gridTile(c); tiles.set(k, t); }
       t.update(c);
-      grid.append(t.el); // re-append keeps the list order
+      // Keep list order, but only move a tile that is out of place: moving
+      // a node blurs the reply box you are typing in.
+      const at = grid.children[shown.length];
+      if (at !== t.el) grid.insertBefore(t.el, at || null);
       shown.push(c);
     }
     for (const [k, t] of tiles) if (!byKey.has(k) || !items.includes(k)) { t.el.remove(); tiles.delete(k); }
@@ -1402,6 +1537,7 @@ function gridPage() {
   };
   const tick = async () => {
     all = await api("/api/active?all=1");
+    items = itemsStore.get(); // marks made in a session list (another tab) count too
     if (!items) {
       items = all.filter((c) => c.session.status === "active" || c.session.status === "idle" || c.session.attention === "needs_you").map(keyOf);
       itemsStore.set(items);
@@ -1542,6 +1678,20 @@ function reviewPrompt(notes, general) {
 
 // sendToSession types text into the session's claude, resuming it with the
 // text as the first prompt when it isn't running under ccdash.
+// resumeSession starts `claude --resume` for a stopped session in a hosted
+// PTY, as sending a message would, but without a prompt.
+async function resumeSession(id, sid) {
+  const d = dev(id);
+  const ptys = (await d.get("/pty/").catch(() => [])) || [];
+  if (ptys.some((p) => p.key === sid && p.alive)) return false;
+  const sessions = (await d.get("/api/sessions").catch(() => [])) || [];
+  const s = sessions.find((x) => x.session_id === sid);
+  if (s && (s.status === "active" || s.status === "idle") &&
+    !confirm("このセッションは ccdash 管理外のターミナルで実行中のようです。ここで別インスタンスとして再開しますか？")) throw new Error("キャンセルしました");
+  await d.post("/pty/start", { sessionId: sid, resumeId: sid, cwd: s?.cwd || "", cols: 120, rows: 40 });
+  return true;
+}
+
 async function sendToSession(id, sid, text) {
   const d = dev(id);
   const ptys = (await d.get("/pty/").catch(() => [])) || [];
@@ -1905,6 +2055,7 @@ async function chatPage(id, { sid, key }) {
   }
 
   const render = (stick) => {
+    if (deferWhileSelecting(log, () => render(atBottom()))) return;
     const nodes = items.map((it) => renderItem(it, askCtx)).filter(Boolean);
     if (session?.summary_status === "running") nodes.unshift(h("div", { class: "note" }, "要約を作成中…"));
     else if (session?.summary) {

@@ -399,6 +399,12 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 #gridlink:hover { border-color: var(--muted); }
 #gridlink.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .tile-close { padding: 0 8px; line-height: 1.6; }
+.grid-mark { flex: none; font: inherit; font-size: 15px; line-height: 1; padding: 5px 7px; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--muted); opacity: .45; cursor: pointer; }
+.grid-mark:hover { opacity: 1; border-color: var(--line); }
+.row-check { flex: none; width: 16px; height: 16px; margin: 0 2px 0 0; accent-color: var(--accent); cursor: pointer; }
+.item.checked { border-color: var(--accent); }
+.sel-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--accent); border-radius: 10px; background: var(--panel); }
+.grid-mark.on { opacity: 1; color: var(--accent); border-color: var(--accent); }
 .pick-list { max-height: 55vh; overflow: auto; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
 .pick-item { text-align: left; width: 100%; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
 .pick-item > * { width: 100%; text-align: left; justify-content: flex-start; }

@@ -530,7 +530,9 @@ machine never accepts inbound connections — its collector dials out.
 - **Grid** (header button toggles it on/off): the sessions you choose on
   one screen. It starts with every running session; × on a tile takes it
   off, **＋ 追加** places any session not already there (stopped ones too);
-  the selection is remembered per browser. Each tile shows its state, the
+  the selection is remembered per browser; ▦ on a session-list row toggles
+  it too. A stopped session's tile has **▶ 再開** (`claude --resume`;
+  replying resumes as well). Each tile shows its state, the
   reason it wants you, the latest exchange (live) and a one-line reply.
   Tiles fill the screen (the column count is picked for the largest tiles;
   more sessions → smaller tiles); double-click a tile's title to maximize
@@ -538,6 +540,11 @@ machine never accepts inbound connections — its collector dials out.
   placement) turns tiles into windows: drag a title bar to move, the
   bottom-right corner to resize; positions are remembered per browser.
   **並べ直す** tiles them again, **整列** returns to the automatic grid.
+- **List checkboxes**: tick sessions to put them on / take them off the
+  grid, archive (or unarchive) them, or generate titles (claude -p, ten per
+  call) in one go.
+- Auto-refresh holds while you have text selected inside the chat, list or a
+  tile, so drag-to-copy works.
 - **Front page board**: 要対応 (needs you — approval, question, menu on
   screen) / 作業中 (working) / 未確認 (finished, not yet looked at), across
   all devices; opening a session marks it read. The app icon badge shows the
