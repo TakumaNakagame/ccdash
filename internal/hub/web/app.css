@@ -419,3 +419,19 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .tile-reply { display: flex; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--line); }
 .tile-reply input { flex: 1; min-width: 0; }
 @media (max-width: 640px) { .grid-page { padding: 8px; } }
+
+/* grid: free placement (draggable, resizable windows) */
+.seg { display: inline-flex; }
+.seg .btn { border-radius: 0; }
+.seg .btn:first-child { border-radius: 8px 0 0 8px; }
+.seg .btn:last-child { border-radius: 0 8px 8px 0; border-left: 0; }
+.seg .btn.on, .grid-top .btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.grid.free { display: block; position: relative; }
+.grid.free > .tile { position: absolute; box-shadow: 0 6px 24px rgb(0 0 0 / .25); }
+.grid.free .tile-head { cursor: grab; }
+.grid.free.moving, .grid.free.moving .tile-head { cursor: grabbing; user-select: none; }
+.tile-resize { display: none; }
+.grid.free .tile-resize { display: block; position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--muted) 50%, var(--muted) 60%, transparent 60%, transparent 72%, var(--muted) 72%, var(--muted) 82%, transparent 82%); opacity: .7; }
+.tile { position: relative; }
+.grid.free.has-max > .tile.max { left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; z-index: 1000 !important; }

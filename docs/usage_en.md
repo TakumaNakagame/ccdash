@@ -532,7 +532,10 @@ machine never accepts inbound connections — its collector dials out.
   reason it wants you, the latest exchange (live) and a one-line reply.
   Tiles fill the screen (the column count is picked for the largest tiles;
   more sessions → smaller tiles); double-click a tile's title to maximize
-  it (again or Esc to restore); ↗ opens the full chat.
+  it (again or Esc to restore); ↗ opens the full chat. **自由配置** (free
+  placement) turns tiles into windows: drag a title bar to move, the
+  bottom-right corner to resize; positions are remembered per browser.
+  **並べ直す** tiles them again, **整列** returns to the automatic grid.
 - **Front page board**: 要対応 (needs you — approval, question, menu on
   screen) / 作業中 (working) / 未確認 (finished, not yet looked at), across
   all devices; opening a session marks it read. The app icon badge shows the

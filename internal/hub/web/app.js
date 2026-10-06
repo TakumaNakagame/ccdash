@@ -1098,7 +1098,8 @@ function gridTile(c) {
   const input = h("input", { placeholder: "返信（Enter で送信）", enterkeyhint: "send" });
   const form = h("form", { class: "tile-reply" }, input, h("button", { class: "btn small primary" }, "送信"));
   const el = h("div", { class: "tile" },
-    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, openBtn), reason, log, form);
+    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, openBtn), reason, log, form,
+    h("div", { class: "tile-resize", title: "ドラッグで大きさを変更" }));
   title.addEventListener("dblclick", () => el.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   let session = c.session, sig = "";
   form.addEventListener("submit", async (e) => {
@@ -1155,6 +1156,7 @@ function gridTile(c) {
 // the count grows; below the minimum size the grid scrolls instead.
 function layoutGrid(grid, n) {
   if (!n) return;
+  if (grid.classList.contains("free")) { grid.style.gridTemplateColumns = ""; grid.style.gridAutoRows = ""; return; }
   if (grid.classList.contains("has-max")) {
     grid.style.gridTemplateColumns = "minmax(0, 1fr)";
     grid.style.gridAutoRows = `${Math.max(200, grid.clientHeight)}px`;
@@ -1186,9 +1188,88 @@ function layoutGrid(grid, n) {
 
 function gridPage() {
   const mount = mainMount;
+  const tiles = new Map();
   crumbs({ text: "グリッド" });
   const grid = h("div", { class: "grid" });
-  const relayout = () => layoutGrid(grid, grid.childElementCount);
+  const relayout = () => { layoutGrid(grid, grid.childElementCount); if (free) placeFree(); };
+  // Free placement: tiles become windows you drag by the header and resize
+  // from the corner. Rects are kept as fractions of the grid area (so they
+  // follow window resizes) in localStorage; a tile without one starts where
+  // the auto layout would put it.
+  const store = { get() { try { return JSON.parse(localStorage.getItem("ccdash.gridRects") || "{}"); } catch { return {}; } },
+    set(v) { try { localStorage.setItem("ccdash.gridRects", JSON.stringify(v)); } catch {} } };
+  let free = false;
+  try { free = localStorage.getItem("ccdash.gridMode") === "free"; } catch {}
+  let rects = store.get(), zTop = 10;
+  const autoRect = (i, n) => {
+    // Where the auto layout would put tile i, as fractions.
+    const W = grid.clientWidth || 1, H = grid.clientHeight || 1;
+    const cols = Math.max(1, Math.round(Math.sqrt(n * (W / H) / 1.4))) , rows = Math.ceil(n / cols);
+    const c = i % cols, r = Math.floor(i / cols);
+    return { x: c / cols, y: r / rows, w: 1 / cols, h: 1 / rows };
+  };
+  const placeFree = () => {
+    const W = grid.clientWidth, H = grid.clientHeight, n = tiles.size;
+    let i = 0;
+    for (const [k, t] of tiles) {
+      const r = rects[k] || autoRect(i, n);
+      Object.assign(t.el.style, { left: r.x * W + "px", top: r.y * H + "px", width: Math.max(220, r.w * W - 8) + "px", height: Math.max(160, r.h * H - 8) + "px" });
+      i++;
+    }
+  };
+  const setMode = (m) => {
+    free = m;
+    try { localStorage.setItem("ccdash.gridMode", m ? "free" : "auto"); } catch {}
+    grid.classList.toggle("free", m);
+    for (const [, t] of tiles) if (!m) Object.assign(t.el.style, { left: "", top: "", width: "", height: "", zIndex: "" });
+    modeAuto.classList.toggle("on", !m);
+    modeFree.classList.toggle("on", m);
+    resetBtn.hidden = !m;
+    relayout();
+  };
+  const modeAuto = h("button", { class: "btn small", onclick: () => setMode(false) }, "整列");
+  const modeFree = h("button", { class: "btn small", onclick: () => setMode(true) }, "自由配置");
+  const resetBtn = h("button", { class: "btn small", title: "全部を整列の位置に戻す", onclick: () => { rects = {}; store.set(rects); relayout(); } }, "並べ直す");
+  const keyOfEl = (el) => [...tiles].find(([, t]) => t.el === el)?.[0];
+  const saveRect = (el) => {
+    const k = keyOfEl(el);
+    if (!k) return;
+    const W = grid.clientWidth, H = grid.clientHeight;
+    rects[k] = { x: el.offsetLeft / W, y: el.offsetTop / H, w: (el.offsetWidth + 8) / W, h: (el.offsetHeight + 8) / H };
+    store.set(rects);
+  };
+  grid.addEventListener("pointerdown", (e) => {
+    if (!free) return;
+    const el = e.target.closest(".tile");
+    if (!el || el.classList.contains("max")) return;
+    el.style.zIndex = String(++zTop);
+    const resizing = e.target.closest(".tile-resize");
+    const dragging = !resizing && e.target.closest(".tile-head") && !e.target.closest("a, button, input");
+    if (!resizing && !dragging) return;
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY;
+    const ox = el.offsetLeft, oy = el.offsetTop, ow = el.offsetWidth, oh = el.offsetHeight;
+    const W = grid.clientWidth, H = grid.scrollHeight;
+    grid.classList.add("moving");
+    const move = (ev) => {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      if (resizing) {
+        el.style.width = Math.min(W - ox, Math.max(220, ow + dx)) + "px";
+        el.style.height = Math.max(160, oh + dy) + "px";
+      } else {
+        el.style.left = Math.min(Math.max(0, ox + dx), Math.max(0, W - ow)) + "px";
+        el.style.top = Math.min(Math.max(0, oy + dy), Math.max(0, H - 40)) + "px";
+      }
+    };
+    const up = () => {
+      grid.classList.remove("moving");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      saveRect(el);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  });
   // Double-clicking a tile's title maximizes it over the grid; again (or
   // Esc) restores. The choice survives the 4 s refresh.
   let maxKey = null;
@@ -1218,8 +1299,9 @@ function gridPage() {
   const count = h("span", { class: "muted small" });
   const empty = h("div", { class: "empty", hidden: true }, "動いているセッションはありません");
   mount.append(h("div", { class: "grid-page" },
-    h("div", { class: "row grid-top" }, h("h1", { class: "grow" }, "グリッド"), count), empty, grid));
-  const tiles = new Map();
+    h("div", { class: "row grid-top" }, h("h1", { class: "grow" }, "グリッド"), count,
+      h("div", { class: "seg" }, modeAuto, modeFree), resetBtn), empty, grid));
+  setMode(free);
   every(4000, async () => {
     const list = await api("/api/active");
     const keep = new Set();
