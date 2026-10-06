@@ -138,23 +138,50 @@ function openSplit(id) {
   view.replaceChildren();
   const left = h("div", { class: "split-list" });
   const right = h("div", { class: "split-main" });
-  const handle = h("div", { class: "split-handle", title: "ドラッグで幅を変更" });
+  const handle = h("div", { class: "split-handle", title: "ドラッグで幅を変更（ダブルクリックで初期値、← → キーでも調整）", tabindex: "0", role: "separator", "aria-orientation": "vertical" });
   const box = h("div", { class: "split" }, left, handle, right);
-  let w = 34;
-  try { w = +localStorage.getItem("ccdash.listWidth") || 34; } catch {}
-  const setW = (v) => { w = Math.min(70, Math.max(18, v)); box.style.setProperty("--list-w", w + "%"); };
-  setW(w);
+  // Width of the list in percent: what the operator dragged to, else the
+  // device's own TUI preference (Session list size %), else 34.
+  let w = 34, saved = null, fallback = 34;
+  try { saved = +localStorage.getItem("ccdash.listWidth") || null; } catch {}
+  const setW = (v) => { w = Math.min(75, Math.max(15, v)); box.style.setProperty("--list-w", w + "%"); handle.setAttribute("aria-valuenow", String(Math.round(w))); };
+  const save = () => { try { localStorage.setItem("ccdash.listWidth", String(Math.round(w))); } catch {} };
+  setW(saved || fallback);
+  if (!saved) {
+    dev(id).get("/hub/settings").then((rows) => {
+      const pct = rows?.find?.((r) => r.key === "pane_list_pct")?.value;
+      if (typeof pct === "number" && pct > 0) { fallback = pct; if (!saved) setW(pct); }
+    }).catch(() => {});
+  }
   handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
     handle.setPointerCapture(e.pointerId);
+    box.classList.add("dragging");
     const rect = box.getBoundingClientRect();
     const move = (ev) => setW(((ev.clientX - rect.left) / rect.width) * 100);
     const up = () => {
+      box.classList.remove("dragging");
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
-      try { localStorage.setItem("ccdash.listWidth", String(Math.round(w))); } catch {}
+      handle.removeEventListener("pointercancel", up);
+      saved = w;
+      save();
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  });
+  handle.addEventListener("dblclick", () => {
+    saved = null;
+    try { localStorage.removeItem("ccdash.listWidth"); } catch {}
+    setW(fallback);
+  });
+  handle.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    setW(w + (e.key === "ArrowLeft" ? -2 : 2));
+    saved = w;
+    save();
   });
   view.append(box);
   split = { dev: id, left, right, cleanup: [] };
@@ -367,6 +394,12 @@ async function devicePage(id, opts = {}) {
   const approvals = h("div");
   const spawns = h("div");
   const tabs = h("div", { class: "tabs" });
+  tabs.addEventListener("wheel", (e) => {
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && tabs.scrollWidth > tabs.clientWidth) {
+      e.preventDefault();
+      tabs.scrollLeft += e.deltaY;
+    }
+  }, { passive: false });
   const list = h("div", { class: "list" }, h("div", { class: "empty" }, "読み込み中…"));
   const more = h("div");
   const filter = h("input", { placeholder: "絞り込み（タイトル・パス・#番号）", class: "grow" });
@@ -1379,7 +1412,7 @@ async function chatPage(id, { sid, key }) {
   const menuBtn = h("button", { class: "btn small", title: "セッションの操作", onclick: () => session ? sessionMenu(id, session, allGroups, poll) : toast("まだセッションが登録されていません") }, "⋯");
   const bar = h("div", { class: "term-bar" },
     h("a", { class: "btn small", href: `#/d/${id}` }, "←"), titleEl, statusEl, costBtn, diffBtn, termBtn, endBtn, menuBtn);
-  const log = h("div", { class: "chat-log" });
+  const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, "読み込み中…"));
   const scroller = h("div", { class: "chat" }, log);
   const approvalsEl = h("div", { class: "chat-dock" });
   // Subagents: a bar under the header when the session has any; the list
@@ -1661,31 +1694,6 @@ async function chatPage(id, { sid, key }) {
     renderApprovals(approvalsEl, id, sid ? aps.filter((a) => a.session_id === sid) : [], sessions);
     approvalsEl.querySelector("h2")?.remove();
 
-    // usage (every seventh poll)
-    if (sid && agentTick % 7 === 0) {
-      const u = await d.get(`/api/sessions/${encodeURIComponent(sid)}/usage`).catch(() => null);
-      if (u?.total?.messages) {
-        lastUsage = u;
-        costBtn.hidden = false;
-        costBtn.textContent = fmtUSD(u.total.cost);
-      }
-    }
-
-    // git changes (every fifth poll)
-    if (sid && agentTick % 5 === 0) {
-      const g = await d.get(`/hub/git/status?session=${encodeURIComponent(sid)}`).catch(() => null);
-      const n = g?.files?.length || 0;
-      diffBtn.hidden = !g?.repo;
-      diffBtn.textContent = n ? `差分 ${n}` : "差分";
-      diffBtn.href = `#/d/${id}/s/${encodeURIComponent(sid)}/diff`;
-    }
-
-    // subagents (every third poll: it reads a directory of transcripts)
-    if (sid && agentTick++ % 3 === 0) {
-      const list = await d.get(`/hub/subagents?session=${encodeURIComponent(sid)}`).catch(() => null);
-      if (Array.isArray(list)) { agents = list; paintAgents(); }
-    }
-
     // transcript
     if (sid) {
       const stat = await d.get(`/api/sessions/${encodeURIComponent(sid)}/transcript?mode=stat`).catch(() => null);
@@ -1714,6 +1722,31 @@ async function chatPage(id, { sid, key }) {
       }
     } else {
       render(atBottom());
+    }
+
+    // usage (every seventh poll)
+    if (sid && agentTick % 7 === 0) {
+      const u = await d.get(`/api/sessions/${encodeURIComponent(sid)}/usage`).catch(() => null);
+      if (u?.total?.messages) {
+        lastUsage = u;
+        costBtn.hidden = false;
+        costBtn.textContent = fmtUSD(u.total.cost);
+      }
+    }
+
+    // git changes (every fifth poll)
+    if (sid && agentTick % 5 === 0) {
+      const g = await d.get(`/hub/git/status?session=${encodeURIComponent(sid)}`).catch(() => null);
+      const n = g?.files?.length || 0;
+      diffBtn.hidden = !g?.repo;
+      diffBtn.textContent = n ? `差分 ${n}` : "差分";
+      diffBtn.href = `#/d/${id}/s/${encodeURIComponent(sid)}/diff`;
+    }
+
+    // subagents (every third poll: it reads a directory of transcripts)
+    if (sid && agentTick++ % 3 === 0) {
+      const list = await d.get(`/hub/subagents?session=${encodeURIComponent(sid)}`).catch(() => null);
+      if (Array.isArray(list)) { agents = list; paintAgents(); }
     }
 
     // TUI prompt on the screen

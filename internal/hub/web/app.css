@@ -21,6 +21,7 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #0d1013;
     --panel: #161a1f;
     --line: #2a3038;
@@ -35,6 +36,7 @@
   }
 }
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --bg: #0d1013; --panel: #161a1f; --line: #2a3038; --text: #e6e8eb; --muted: #8b95a1;
   --accent: #f97316; --accent-text: #111418; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --chip: #222830;
 }
@@ -43,6 +45,15 @@
 /* The hidden attribute must win over component display rules (.agent-bar,
    .usage-card, … set display: flex). */
 [hidden] { display: none !important; }
+
+/* Scrollbars: thin, theme-coloured, no white track in dark mode. */
+:root { color-scheme: light; }
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 40%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--muted) 70%, transparent); }
+::-webkit-scrollbar-corner { background: transparent; }
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -225,7 +236,8 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 
 /* session tabs (mirror the TUI strip) */
-.tabs { display: flex; gap: 6px; overflow-x: auto; margin: 18px 0 10px; padding-bottom: 4px; scrollbar-width: thin; }
+.tabs { display: flex; gap: 6px; overflow-x: auto; margin: 18px 0 10px; padding-bottom: 2px; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
 .tab {
   display: inline-flex; align-items: center; gap: 6px; flex: none;
   border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
@@ -367,12 +379,15 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .bar small { font-size: 10px; color: var(--muted); }
 
 /* wide screens: TUI-style two panes (session list | session) */
-.split { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--list-w, 34%) 6px 1fr; }
+.split { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--list-w, 34%) 12px 1fr; }
 .split-list { min-height: 0; overflow-y: auto; background: var(--bg); }
 .split-list .page { max-width: none; padding: 12px; }
 .split-list .page.compact h1 { font-size: 16px; }
-.split-handle { cursor: col-resize; background: var(--line); opacity: .6; }
-.split-handle:hover { background: var(--accent); opacity: .7; }
+.split-handle { cursor: col-resize; position: relative; background: transparent; touch-action: none; outline: none; }
+.split-handle::before { content: ""; position: absolute; top: 0; bottom: 0; left: 5px; width: 2px; background: var(--line); transition: background .15s; }
+.split-handle::after { content: ""; position: absolute; top: 50%; left: 3px; width: 6px; height: 36px; margin-top: -18px; border-radius: 4px; background: var(--line); transition: background .15s; }
+.split-handle:hover::before, .split-handle:hover::after, .split-handle:focus-visible::before, .split-handle:focus-visible::after, .split.dragging .split-handle::before, .split.dragging .split-handle::after { background: var(--accent); }
+.split.dragging { cursor: col-resize; user-select: none; }
 .split-main { min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
 .split-main > .page { overflow-y: auto; }
 .split-empty { margin: auto; }
