@@ -390,12 +390,15 @@ func (h *Hub) handleBoard(w http.ResponseWriter, r *http.Request) {
 // handleActive lists, across connected devices, the sessions that are
 // running (a live claude: active or idle) or want the operator — the grid
 // view. Needs-you first, then working, then idle; newest first within.
+// ?all=1 lists every session the devices report (the grid's "add" picker
+// and tiles the operator placed on stopped sessions).
 func (h *Hub) handleActive(w http.ResponseWriter, r *http.Request) {
+	all := r.URL.Query().Get("all") == "1"
 	out := []boardCard{}
 	h.mu.Lock()
 	for _, snap := range h.snapshots {
 		for _, s := range snap.Sessions {
-			if s.Status == model.StatusActive || s.Status == model.StatusIdle || s.Attention == model.AttentionNeedsYou {
+			if all || s.Status == model.StatusActive || s.Status == model.StatusIdle || s.Attention == model.AttentionNeedsYou {
 				out = append(out, boardCard{DeviceID: snap.Device.ID, DeviceName: snap.Device.Name, Session: s})
 			}
 		}

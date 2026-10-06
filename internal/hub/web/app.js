@@ -188,10 +188,25 @@ function openSplit(id) {
   devicePage(id, { mount: left, bucket: split.cleanup, compact: true });
 }
 
+let beforeGrid = "#/";
+
 function route() {
   cleanup.forEach((f) => { try { f(); } catch {} });
   cleanup = [];
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  // The header's グリッド is a toggle: on the grid it leads back to where
+  // you were before opening it.
+  const gl = $("#gridlink");
+  if (parts[0] === "grid") {
+    gl.classList.add("on");
+    gl.href = beforeGrid;
+    gl.title = "グリッド表示をやめる";
+  } else {
+    beforeGrid = location.hash || "#/";
+    gl.classList.remove("on");
+    gl.href = "#/grid";
+    gl.title = "セッションをまとめて表示（グリッド）";
+  }
   const inDevice = parts[0] === "d" && parts[1];
   if (inDevice && wideQuery.matches) {
     if (split?.dev !== parts[1]) openSplit(parts[1]);
@@ -1094,15 +1109,17 @@ function gridTile(c) {
   const chatHref = `#/d/${id}/s/${encodeURIComponent(sid)}`;
   const title = h("span", { class: "tile-title", title: "ダブルクリックで全画面 / 元に戻す" });
   const openBtn = h("a", { class: "btn small", href: chatHref, title: "チャット画面で開く" }, "↗");
+  const closeBtn = h("button", { class: "btn small tile-close", type: "button", title: "グリッドから外す" }, "×");
   const status = h("span", { class: "chip" });
   const reason = h("div", { class: "tile-reason" });
   const log = h("div", { class: "tile-log" }, h("div", { class: "muted small" }, "読み込み中…"));
   const input = h("input", { placeholder: "返信（Enter で送信）", enterkeyhint: "send" });
   const form = h("form", { class: "tile-reply" }, input, h("button", { class: "btn small primary" }, "送信"));
   const el = h("div", { class: "tile" },
-    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, openBtn), reason, log, form,
+    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, openBtn, closeBtn), reason, log, form,
     h("div", { class: "tile-resize", title: "ドラッグで大きさを変更" }));
   title.addEventListener("dblclick", () => el.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
+  closeBtn.addEventListener("click", () => el.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })));
   let session = c.session, sig = "";
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1118,7 +1135,7 @@ function gridTile(c) {
     update(c2) {
       session = c2.session;
       title.textContent = (session.num ? `#${session.num} ` : "") + sessionTitle(session);
-      const st = session.attention === "needs_you" ? "要対応" : session.status === "active" ? "作業中" : session.attention === "done" ? "未確認" : "待機中";
+      const st = gridState(session);
       status.textContent = st;
       status.className = "chip " + (session.attention === "needs_you" ? "pend" : session.attention === "done" && session.status !== "active" ? "done" : session.status);
       el.classList.toggle("needs", session.attention === "needs_you");
@@ -1151,6 +1168,11 @@ function gridTile(c) {
       if (stick) log.scrollTop = log.scrollHeight;
     },
   };
+}
+
+function gridState(s) {
+  return s.attention === "needs_you" ? "要対応" : s.status === "active" ? "作業中" : s.attention === "done" ? "未確認"
+    : s.status === "idle" ? "待機中" : "停止";
 }
 
 // layoutGrid picks the column count that makes tiles largest for this many
@@ -1192,6 +1214,15 @@ function gridPage() {
   const mount = mainMount;
   const tiles = new Map();
   crumbs({ text: "グリッド" });
+  // Which sessions are on the grid is the operator's choice: × takes a tile
+  // off, ＋ places any session that isn't on it yet. Kept per browser as
+  // "device:session" keys in order; the first visit starts from whatever is
+  // running.
+  const itemsStore = { get() { try { const v = JSON.parse(localStorage.getItem("ccdash.gridItems")); return Array.isArray(v) ? v : null; } catch { return null; } },
+    set(v) { try { localStorage.setItem("ccdash.gridItems", JSON.stringify(v)); } catch {} } };
+  let items = itemsStore.get();
+  let all = []; // every session the hub knows, from the last poll
+  const keyOf = (c) => c.device_id + ":" + c.session.session_id;
   const grid = h("div", { class: "grid" });
   const relayout = () => { layoutGrid(grid, grid.childElementCount); if (free) placeFree(); };
   // Free placement: tiles become windows you drag by the header and resize
@@ -1287,6 +1318,43 @@ function gridPage() {
     relayout();
     if (maxKey) tiles.get(maxKey)?.scrollLog?.();
   };
+  grid.addEventListener("tile-close", (e) => {
+    const k = keyOfEl(e.target);
+    if (!k) return;
+    items = items.filter((x) => x !== k);
+    itemsStore.set(items);
+    delete rects[k];
+    store.set(rects);
+    if (maxKey === k) maxKey = null;
+    tiles.get(k)?.el.remove();
+    tiles.delete(k);
+    render();
+  });
+  const pick = () => dialog((body, close) => {
+    const placed = new Set(items);
+    const rest = all.filter((c) => !placed.has(keyOf(c)));
+    const q = h("input", { placeholder: "絞り込み（タイトル・端末・#番号）" });
+    const list = h("div", { class: "list pick-list" });
+    const draw = () => {
+      const f = q.value.trim().toLowerCase();
+      const rows = rest.filter((c) => !f || `${c.device_name} #${c.session.num} ${sessionTitle(c.session)} ${c.session.cwd || ""}`.toLowerCase().includes(f));
+      list.replaceChildren(...(rows.length ? rows.map((c) => h("button", { class: "pick-item", type: "button", onclick: () => {
+        items = [...items, keyOf(c)];
+        itemsStore.set(items);
+        close();
+        tick();
+      } },
+        h("div", { class: "row" }, h("span", { class: "chip dev" }, c.device_name), h("span", { class: "chip" }, gridState(c.session)),
+          h("span", { class: "grow" }), h("span", { class: "muted small" }, rel(c.session.last_seen))),
+        h("div", { class: "card-title" }, (c.session.num ? `#${c.session.num} ` : "") + sessionTitle(c.session))))
+        : [h("div", { class: "muted small" }, rest.length ? "一致するセッションはありません" : "追加できるセッションはありません（すべて配置済み）")]));
+    };
+    q.addEventListener("input", draw);
+    body.append(h("h1", {}, "グリッドに追加"), q, list,
+      h("div", { class: "row" }, h("span", { class: "grow" }), h("button", { class: "btn", type: "button", onclick: close }, "閉じる")));
+    draw();
+    setTimeout(() => q.focus(), 0);
+  });
   grid.addEventListener("tile-max", (e) => {
     const k = [...tiles].find(([, t]) => t.el === e.target)?.[0];
     maxKey = maxKey === k ? null : k;
@@ -1299,30 +1367,49 @@ function gridPage() {
   ro.observe(grid);
   cleanup.push(() => ro.disconnect());
   const count = h("span", { class: "muted small" });
-  const empty = h("div", { class: "empty", hidden: true }, "動いているセッションはありません");
+  const addBtn = h("button", { class: "btn small primary", title: "セッションをグリッドに置く", onclick: () => pick() }, "＋ 追加");
+  const empty = h("div", { class: "empty", hidden: true }, h("p", {}, "グリッドにセッションがありません"),
+    h("button", { class: "btn primary", onclick: () => pick() }, "＋ セッションを追加"));
   mount.append(h("div", { class: "grid-page" },
-    h("div", { class: "row grid-top" }, h("h1", { class: "grow" }, "グリッド"), count,
+    h("div", { class: "row grid-top" }, h("h1", { class: "grow" }, "グリッド"), count, addBtn,
       h("div", { class: "seg" }, modeAuto, modeFree), resetBtn), empty, grid));
   setMode(free);
-  every(4000, async () => {
-    const list = await api("/api/active");
-    const keep = new Set();
-    for (const c of list) {
-      const k = c.device_id + ":" + c.session.session_id;
-      keep.add(k);
+  // render places a tile for each listed key the hub knows, in list order.
+  // A key whose device is offline stays listed (it comes back with the
+  // device); one whose device answered without it (deleted) is dropped.
+  const render = () => {
+    const byKey = new Map(all.map((c) => [keyOf(c), c]));
+    const online = new Set(all.map((c) => c.device_id));
+    const kept = items.filter((k) => byKey.has(k) || !online.has(k.split(":")[0]));
+    if (kept.length !== items.length) { items = kept; itemsStore.set(items); }
+    const shown = [];
+    for (const k of items) {
+      const c = byKey.get(k);
+      if (!c) continue;
       let t = tiles.get(k);
       if (!t) { t = gridTile(c); tiles.set(k, t); }
       t.update(c);
-      grid.append(t.el); // re-append keeps the server's order
+      grid.append(t.el); // re-append keeps the list order
+      shown.push(c);
     }
-    for (const [k, t] of tiles) if (!keep.has(k)) { t.el.remove(); tiles.delete(k); }
+    for (const [k, t] of tiles) if (!byKey.has(k) || !items.includes(k)) { t.el.remove(); tiles.delete(k); }
     empty.hidden = tiles.size > 0;
     applyMax();
-    const needs = list.filter((c) => c.session.attention === "needs_you").length;
-    const working = list.filter((c) => c.session.status === "active").length;
-    count.textContent = `${list.length} 件 · 要対応 ${needs} · 作業中 ${working}`;
+    const needs = shown.filter((c) => c.session.attention === "needs_you").length;
+    const working = shown.filter((c) => c.session.status === "active").length;
+    const hidden = items.length - shown.length;
+    count.textContent = `${shown.length} 件 · 要対応 ${needs} · 作業中 ${working}` + (hidden ? ` · オフライン ${hidden}` : "");
+  };
+  const tick = async () => {
+    all = await api("/api/active?all=1");
+    if (!items) {
+      items = all.filter((c) => c.session.status === "active" || c.session.status === "idle" || c.session.attention === "needs_you").map(keyOf);
+      itemsStore.set(items);
+    }
+    render();
     await Promise.all([...tiles.values()].map((t) => t.refresh().catch(() => {})));
-  });
+  };
+  every(4000, tick);
 }
 
 // ---- usage (API-price estimate) ----

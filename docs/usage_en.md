@@ -527,8 +527,10 @@ machine never accepts inbound connections — its collector dials out.
   or diff) on the right. Drag the divider (or focus it and use ← →) to resize; the width is
   remembered, and a double-click resets it to the device's TUI "Session
   list size".
-- **Grid** (header): every running session across devices on one screen —
-  needs-you first, then working, then idle — each tile with its state, the
+- **Grid** (header button toggles it on/off): the sessions you choose on
+  one screen. It starts with every running session; × on a tile takes it
+  off, **＋ 追加** places any session not already there (stopped ones too);
+  the selection is remembered per browser. Each tile shows its state, the
   reason it wants you, the latest exchange (live) and a one-line reply.
   Tiles fill the screen (the column count is picked for the largest tiles;
   more sessions → smaller tiles); double-click a tile's title to maximize
