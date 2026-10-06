@@ -555,6 +555,22 @@ machine never accepts inbound connections — its collector dials out.
 - The portal is a PWA: "Install app" / "Add to Home screen" gives it its own
   icon and window. Nothing is cached offline — it always talks to the hub.
 
+**Read tokens for bots.** A machine client (e.g. an alert-triage bot) can
+read the hub without logging in: start the hub with
+`CCDASH_HUB_READ_TOKENS=<token>[,<token>…]` or `--read-token-file <file>`
+(tokens ≥ 32 characters) and send `Authorization: Bearer <token>`. Only
+these GETs work: `/api/board`, `/api/active`, `/api/devices`,
+`/api/d/{id}/api/sessions`, `/api/d/{id}/api/sessions/{sid}/transcript`
+(`?lines=20` for the last 20 JSONL records; tail only). Everything else is
+403. Response shapes are in README "Hub mode".
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" https://ccdash.example.net/api/board
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://ccdash.example.net/api/d/$DEV/api/sessions/$SID/transcript?lines=20" \
+  | jq -r .data | base64 -d
+```
+
 What the portal may do is limited by the device's own settings: with
 **Attach** off it can only read; with **Approval blocking** off it can't
 decide approvals; with **Hub connection** off the device is offline.

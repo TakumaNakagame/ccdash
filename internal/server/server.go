@@ -1143,6 +1143,13 @@ func (s *Server) handleAPITranscript(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
+		// ?lines=N keeps only the last N JSONL records of that tail (a
+		// machine reader that wants "the latest few messages").
+		if v := r.URL.Query().Get("lines"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				data = transcript.LastLines(data, n)
+			}
+		}
 		writeOK(w, transcriptEnvelope{
 			Mtime: mtime.UTC().Format(time.RFC3339Nano),
 			Size:  size,
