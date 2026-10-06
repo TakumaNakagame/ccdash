@@ -530,6 +530,9 @@ machine never accepts inbound connections — its collector dials out.
 - **Grid** (header): every running session across devices on one screen —
   needs-you first, then working, then idle — each tile with its state, the
   reason it wants you, the latest exchange (live) and a one-line reply.
+  Tiles fill the screen (the column count is picked for the largest tiles;
+  more sessions → smaller tiles); double-click a tile's title to maximize
+  it (again or Esc to restore); ↗ opens the full chat.
 - **Front page board**: 要対応 (needs you — approval, question, menu on
   screen) / 作業中 (working) / 未確認 (finished, not yet looked at), across
   all devices; opening a session marks it read. The app icon badge shows the

@@ -1090,14 +1090,16 @@ function sessionMenu(id, s, groups, refresh) {
 function gridTile(c) {
   const id = c.device_id, sid = c.session.session_id;
   const chatHref = `#/d/${id}/s/${encodeURIComponent(sid)}`;
-  const title = h("a", { class: "tile-title", href: chatHref });
+  const title = h("span", { class: "tile-title", title: "ダブルクリックで全画面 / 元に戻す" });
+  const openBtn = h("a", { class: "btn small", href: chatHref, title: "チャット画面で開く" }, "↗");
   const status = h("span", { class: "chip" });
   const reason = h("div", { class: "tile-reason" });
   const log = h("div", { class: "tile-log" }, h("div", { class: "muted small" }, "読み込み中…"));
   const input = h("input", { placeholder: "返信（Enter で送信）", enterkeyhint: "send" });
   const form = h("form", { class: "tile-reply" }, input, h("button", { class: "btn small primary" }, "送信"));
   const el = h("div", { class: "tile" },
-    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status), reason, log, form);
+    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, openBtn), reason, log, form);
+  title.addEventListener("dblclick", () => el.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   let session = c.session, sig = "";
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1109,6 +1111,7 @@ function gridTile(c) {
   });
   return {
     el,
+    scrollLog() { requestAnimationFrame(() => (log.scrollTop = log.scrollHeight)); },
     update(c2) {
       session = c2.session;
       title.textContent = (session.num ? `#${session.num} ` : "") + sessionTitle(session);
@@ -1124,7 +1127,17 @@ function gridTile(c) {
     },
     async refresh() {
       const d = dev(id);
-      const stat = await d.get(`/api/sessions/${encodeURIComponent(sid)}/transcript?mode=stat`);
+      let stat;
+      try {
+        stat = await d.get(`/api/sessions/${encodeURIComponent(sid)}/transcript?mode=stat`);
+      } catch (e) {
+        if (sig !== "missing") {
+          sig = "missing";
+          log.replaceChildren(h("div", { class: "muted small" }, e.status === 404 || e.status === 500
+            ? "記録がありません（transcript が削除されているか、まだ作られていません）" : "読み込めませんでした: " + e.message));
+        }
+        return;
+      }
       const next = `${stat.mtime}/${stat.size}`;
       if (next === sig) return;
       sig = next;
@@ -1137,10 +1150,71 @@ function gridTile(c) {
   };
 }
 
+// layoutGrid picks the column count that makes tiles largest for this many
+// tiles in this much space, then stretches them to fill it. Tiles shrink as
+// the count grows; below the minimum size the grid scrolls instead.
+function layoutGrid(grid, n) {
+  if (!n) return;
+  if (grid.classList.contains("has-max")) {
+    grid.style.gridTemplateColumns = "minmax(0, 1fr)";
+    grid.style.gridAutoRows = `${Math.max(200, grid.clientHeight)}px`;
+    return;
+  }
+  const gap = 10, minW = 300, minH = 200;
+  const W = grid.clientWidth, H = grid.clientHeight;
+  if (W < 700) { // phone: one column of comfortable tiles
+    grid.style.gridTemplateColumns = "1fr";
+    grid.style.gridAutoRows = "320px";
+    return;
+  }
+  let best = { cols: 1, area: -1, h: minH };
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const w = (W - gap * (cols - 1)) / cols;
+    if (w < minW && cols > 1) break;
+    const h = Math.max(minH, (H - gap * (rows - 1)) / rows);
+    // Usable area of one tile (a sliver narrower than 0.6:1 or wider than
+    // 2.5:1 doesn't count beyond that shape), discounted for empty cells.
+    // A layout that has to scroll only gets credit for what's on screen.
+    const visible = Math.min(1, H / (rows * h + gap * (rows - 1)));
+    const area = Math.min(w, h * 2.5) * Math.min(h, w / 0.6) * Math.sqrt(n / (cols * rows)) * visible;
+    if (area > best.area) best = { cols, area, h };
+  }
+  grid.style.gridTemplateColumns = `repeat(${best.cols}, minmax(0, 1fr))`;
+  grid.style.gridAutoRows = `${Math.floor(best.h)}px`;
+}
+
 function gridPage() {
   const mount = mainMount;
   crumbs({ text: "グリッド" });
   const grid = h("div", { class: "grid" });
+  const relayout = () => layoutGrid(grid, grid.childElementCount);
+  // Double-clicking a tile's title maximizes it over the grid; again (or
+  // Esc) restores. The choice survives the 4 s refresh.
+  let maxKey = null;
+  const applyMax = () => {
+    let found = false;
+    for (const [k, t] of tiles) {
+      const on = k === maxKey;
+      t.el.classList.toggle("max", on);
+      found ||= on;
+    }
+    if (!found) maxKey = null;
+    grid.classList.toggle("has-max", !!maxKey);
+    relayout();
+    if (maxKey) tiles.get(maxKey)?.scrollLog?.();
+  };
+  grid.addEventListener("tile-max", (e) => {
+    const k = [...tiles].find(([, t]) => t.el === e.target)?.[0];
+    maxKey = maxKey === k ? null : k;
+    applyMax();
+  });
+  const onKey = (e) => { if (e.key === "Escape" && maxKey) { maxKey = null; applyMax(); } };
+  document.addEventListener("keydown", onKey);
+  cleanup.push(() => document.removeEventListener("keydown", onKey));
+  const ro = new ResizeObserver(relayout);
+  ro.observe(grid);
+  cleanup.push(() => ro.disconnect());
   const count = h("span", { class: "muted small" });
   const empty = h("div", { class: "empty", hidden: true }, "動いているセッションはありません");
   mount.append(h("div", { class: "grid-page" },
@@ -1159,6 +1233,7 @@ function gridPage() {
     }
     for (const [k, t] of tiles) if (!keep.has(k)) { t.el.remove(); tiles.delete(k); }
     empty.hidden = tiles.size > 0;
+    applyMax();
     const needs = list.filter((c) => c.session.attention === "needs_you").length;
     const working = list.filter((c) => c.session.status === "active").length;
     count.textContent = `${list.length} 件 · 要対応 ${needs} · 作業中 ${working}`;
