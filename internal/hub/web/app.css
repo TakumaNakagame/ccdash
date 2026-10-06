@@ -40,6 +40,9 @@
 }
 
 * { box-sizing: border-box; }
+/* The hidden attribute must win over component display rules (.agent-bar,
+   .usage-card, … set display: flex). */
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -362,3 +365,15 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .bar { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; }
 .bar span { width: 100%; max-width: 28px; background: var(--accent); border-radius: 3px 3px 0 0; opacity: .8; }
 .bar small { font-size: 10px; color: var(--muted); }
+
+/* wide screens: TUI-style two panes (session list | session) */
+.split { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--list-w, 34%) 6px 1fr; }
+.split-list { min-height: 0; overflow-y: auto; background: var(--bg); }
+.split-list .page { max-width: none; padding: 12px; }
+.split-list .page.compact h1 { font-size: 16px; }
+.split-handle { cursor: col-resize; background: var(--line); opacity: .6; }
+.split-handle:hover { background: var(--accent); opacity: .7; }
+.split-main { min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+.split-main > .page { overflow-y: auto; }
+.split-empty { margin: auto; }
+.item.selected { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); box-shadow: inset 3px 0 0 var(--accent); }

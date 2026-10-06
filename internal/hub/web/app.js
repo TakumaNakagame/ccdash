@@ -85,14 +85,14 @@ const dev = (id) => ({
   del: (p) => api(`/api/d/${id}${p}`, { method: "DELETE" }),
 });
 
-function every(ms, fn) {
+function every(ms, fn, bucket = cleanup) {
   let stopped = false, timer;
   const loop = async () => {
     try { await fn(); } catch (e) { if (e.status !== 401) console.warn(e); }
     if (!stopped) timer = setTimeout(loop, ms);
   };
   loop();
-  cleanup.push(() => { stopped = true; clearTimeout(timer); });
+  bucket.push(() => { stopped = true; clearTimeout(timer); });
 }
 
 function crumbs(...parts) {
@@ -121,12 +121,70 @@ const deviceCache = new Map(); // id → device row, for crumbs
 
 // ---------- router ----------
 
+// mainMount is where a page renders: the whole view, or — on a wide screen
+// inside a device — the right pane next to the session list (TUI-style).
+let mainMount = view;
+let split = null; // { dev, left, right, cleanup }
+const wideQuery = matchMedia("(min-width: 1024px)");
+
+function closeSplit() {
+  if (!split) return;
+  split.cleanup.forEach((f) => { try { f(); } catch {} });
+  split = null;
+}
+
+function openSplit(id) {
+  closeSplit();
+  view.replaceChildren();
+  const left = h("div", { class: "split-list" });
+  const right = h("div", { class: "split-main" });
+  const handle = h("div", { class: "split-handle", title: "ドラッグで幅を変更" });
+  const box = h("div", { class: "split" }, left, handle, right);
+  let w = 34;
+  try { w = +localStorage.getItem("ccdash.listWidth") || 34; } catch {}
+  const setW = (v) => { w = Math.min(70, Math.max(18, v)); box.style.setProperty("--list-w", w + "%"); };
+  setW(w);
+  handle.addEventListener("pointerdown", (e) => {
+    handle.setPointerCapture(e.pointerId);
+    const rect = box.getBoundingClientRect();
+    const move = (ev) => setW(((ev.clientX - rect.left) / rect.width) * 100);
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      try { localStorage.setItem("ccdash.listWidth", String(Math.round(w))); } catch {}
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  });
+  view.append(box);
+  split = { dev: id, left, right, cleanup: [] };
+  devicePage(id, { mount: left, bucket: split.cleanup, compact: true });
+}
+
 function route() {
   cleanup.forEach((f) => { try { f(); } catch {} });
   cleanup = [];
-  view.replaceChildren();
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
-  if (parts[0] === "d" && parts[1]) {
+  const inDevice = parts[0] === "d" && parts[1];
+  if (inDevice && wideQuery.matches) {
+    if (split?.dev !== parts[1]) openSplit(parts[1]);
+    split.right.replaceChildren();
+    mainMount = split.right;
+    split.left.querySelectorAll(".item.selected").forEach((e) => e.classList.remove("selected"));
+    if (parts[2] === "s" && parts[3]) {
+      split.left.querySelector(`.item[data-sid="${CSS.escape(parts[3])}"]`)?.classList.add("selected");
+      if (parts[4] === "diff") return diffPage(parts[1], parts[3]);
+      return sessionPage(parts[1], parts[3], parts[4]);
+    }
+    if (parts[2] === "p" && parts[3]) return spawnPage(parts[1], parts[3], parts[4]);
+    crumbs({ text: "端末", href: "#/" }, { text: deviceCache.get(parts[1])?.name || parts[1] });
+    split.right.append(h("div", { class: "empty split-empty" }, "左の一覧からセッションを選んでください"));
+    return;
+  }
+  closeSplit();
+  view.replaceChildren();
+  mainMount = view;
+  if (inDevice) {
     if (parts[2] === "s" && parts[3] && parts[4] === "diff") return diffPage(parts[1], parts[3]);
     if (parts[2] === "s" && parts[3]) return sessionPage(parts[1], parts[3], parts[4]);
     if (parts[2] === "p" && parts[3]) return spawnPage(parts[1], parts[3], parts[4]);
@@ -301,9 +359,11 @@ const tabKey = (id) => `ccdash.tab.${id}`;
 function loadTab(id) { try { return localStorage.getItem(tabKey(id)) || ""; } catch { return ""; } }
 function saveTab(id, g) { try { localStorage.setItem(tabKey(id), g); } catch {} }
 
-async function devicePage(id) {
+async function devicePage(id, opts = {}) {
+  const mount = opts.mount || mainMount;
+  const bucket = opts.bucket || cleanup;
   const name = await deviceName(id);
-  crumbs({ text: "端末", href: "#/" }, { text: name });
+  if (!opts.compact) crumbs({ text: "端末", href: "#/" }, { text: name });
   const approvals = h("div");
   const spawns = h("div");
   const tabs = h("div", { class: "tabs" });
@@ -335,7 +395,7 @@ async function devicePage(id) {
   };
   loadUsage();
   const usageTimer = setInterval(loadUsage, 60000);
-  cleanup.push(() => clearInterval(usageTimer));
+  bucket.push(() => clearInterval(usageTimer));
   settingsBox.addEventListener("toggle", async () => {
     if (!settingsBox.open || settingsBox.dataset.loaded) return;
     try {
@@ -347,7 +407,7 @@ async function devicePage(id) {
         h("p", { class: "muted small" }, "変更は端末の TUI（, キー）から。ハブからは変更できません。")));
     } catch (e) { toast(e.message); }
   });
-  view.append(h("div", { class: "page" },
+  mount.append(h("div", { class: "page" + (opts.compact ? " compact" : "") },
     h("div", { class: "row" },
       h("h1", { class: "grow" }, name),
       h("button", { class: "btn primary", onclick: () => newSession(id) }, "＋ 新規セッション")),
@@ -421,7 +481,7 @@ async function devicePage(id) {
     renderApprovals(approvals, id, aps, sessions);
     render();
   };
-  every(3000, tick);
+  every(3000, tick, bucket);
 }
 
 function sessionRow(id, s, live, info, showGroup) {
@@ -433,7 +493,8 @@ function sessionRow(id, s, live, info, showGroup) {
   chips.push(h("span", { class: "chip " + s.status }, s.status));
   const sub = [s.attention === "needs_you" && s.attention_reason ? "? " + s.attention_reason : null,
     showGroup ? groupOf(s) : null, shortPath(s.cwd, info?.home), s.branch, rel(s.last_seen)].filter(Boolean).join(" · ");
-  return h("div", { class: "item", onclick: () => (location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`) },
+  const sel = decodeURIComponent(location.hash).startsWith(`#/d/${id}/s/${s.session_id}`);
+  return h("div", { class: "item" + (sel ? " selected" : ""), "data-sid": s.session_id, onclick: () => (location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`) },
     h("span", { class: "num" }, s.num ? `#${s.num}` : ""),
     h("div", { class: "grow" },
       h("div", { class: "title" }, (s.favorite ? "★ " : "") + sessionTitle(s)),
@@ -560,6 +621,7 @@ function aliasOf(ptys, key) {
 }
 
 async function termRoute(id, { sid, key }) {
+  const mount = mainMount;
   const name = await deviceName(id);
   const ptys = (await dev(id).get("/pty/").catch(() => [])) || [];
   const k = key || sid;
@@ -570,6 +632,7 @@ async function termRoute(id, { sid, key }) {
     location.replace(chatHref);
     return;
   }
+  if (mainMount !== mount) return; // navigated away meanwhile
   terminal(id, k, sid ? "ターミナル" : "新規セッション", chatHref);
 }
 
@@ -1129,6 +1192,7 @@ async function sendToSession(id, sid, text) {
 }
 
 async function diffPage(id, sid) {
+  const mount = mainMount;
   const name = await deviceName(id);
   const d = dev(id);
   const chatHref = `#/d/${id}/s/${encodeURIComponent(sid)}`;
@@ -1154,7 +1218,7 @@ async function diffPage(id, sid) {
       location.hash = chatHref;
     } catch (e) { toast(e.message); paintCount(); }
   });
-  view.append(h("div", { class: "chat-wrap" },
+  mount.append(h("div", { class: "chat-wrap" },
     h("div", { class: "term-bar" }, h("a", { class: "btn small", href: chatHref }, "←"), h("span", { class: "grow title" }, "差分レビュー"),
       h("button", { class: "btn small", onclick: () => route() }, "更新")),
     h("div", { class: "chat" }, h("div", { class: "page diff-page" }, info, filesEl)),
@@ -1280,6 +1344,7 @@ function openAgent(id, sid, a) {
 // ---- the page ----
 
 async function chatPage(id, { sid, key }) {
+  const mount = mainMount;
   const name = await deviceName(id);
   const d = dev(id);
   let session = null, ptyKey = key || null, hosted = false, info = null;
@@ -1401,7 +1466,7 @@ async function chatPage(id, { sid, key }) {
       if (ev === "drop") addFiles([...e.dataTransfer.files]);
     });
   }
-  view.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, quickRow, composer)));
+  mount.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, quickRow, composer)));
 
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
   input.addEventListener("input", autosize);
@@ -1682,6 +1747,7 @@ const KEYS = [
 ];
 
 function terminal(id, key, title, chatHref) {
+  const host = mainMount;
   const mount = h("div", { id: "term" });
   const sendInput = h("input", { placeholder: "テキストを送信（日本語入力向け・Enter で送信+改行）", enterkeyhint: "send", autocomplete: "off" });
   let ws = null, term = null, fit = null, closedByUs = false;
@@ -1709,7 +1775,7 @@ function terminal(id, key, title, chatHref) {
     sendInput.value = "";
   } }, sendInput, h("button", { class: "btn" }, "送信"));
   const wrap = h("div", { class: "term-wrap" }, bar, mount, sendbar, keys);
-  view.append(wrap);
+  host.append(wrap);
 
   term = new Terminal({
     fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "monospace",
@@ -1870,5 +1936,6 @@ function updateBadge(b) {
   });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
   window.addEventListener("hashchange", route);
+  wideQuery.addEventListener("change", () => { closeSplit(); route(); });
   route();
 })();

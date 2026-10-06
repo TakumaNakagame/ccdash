@@ -522,6 +522,9 @@ machine never accepts inbound connections — its collector dials out.
 - **🔔** in the header turns on push notifications for this browser (the
   installed app on a phone): a new approval, a question or confirmation on
   a ccdash-hosted claude's screen, and a session finishing its turn.
+- On a wide screen (≥ 1024 px, i.e. a PC) a device opens TUI-style in two
+  panes: the session list on the left, the selected session (chat, terminal
+  or diff) on the right. Drag the divider to resize; the width is remembered.
 - **Front page board**: 要対応 (needs you — approval, question, menu on
   screen) / 作業中 (working) / 未確認 (finished, not yet looked at), across
   all devices; opening a session marks it read. The app icon badge shows the
