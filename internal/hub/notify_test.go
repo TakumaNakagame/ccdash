@@ -98,6 +98,15 @@ func TestBoard(t *testing.T) {
 		{SessionID: "c", Status: model.StatusIdle, Attention: model.AttentionDone},
 		{SessionID: "d", Status: model.StatusIdle},
 	})
+	wa := serve(hub.Handler(), "GET", "/api/active", "", nil)
+	var act []struct {
+		Session model.Session `json:"session"`
+	}
+	_ = json.Unmarshal(wa.Body.Bytes(), &act)
+	// b (needs you) first, then a (working); idle c is alive too; d is idle as well.
+	if len(act) != 4 || act[0].Session.SessionID != "b" || act[1].Session.SessionID != "a" {
+		t.Fatalf("active = %s", wa.Body)
+	}
 	w := serve(hub.Handler(), "GET", "/api/board", "", nil)
 	var b map[string][]struct {
 		DeviceName string        `json:"device_name"`

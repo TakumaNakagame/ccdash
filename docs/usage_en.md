@@ -527,6 +527,9 @@ machine never accepts inbound connections — its collector dials out.
   or diff) on the right. Drag the divider (or focus it and use ← →) to resize; the width is
   remembered, and a double-click resets it to the device's TUI "Session
   list size".
+- **Grid** (header): every running session across devices on one screen —
+  needs-you first, then working, then idle — each tile with its state, the
+  reason it wants you, the latest exchange (live) and a one-line reply.
 - **Front page board**: 要対応 (needs you — approval, question, menu on
   screen) / 作業中 (working) / 未確認 (finished, not yet looked at), across
   all devices; opening a session marks it read. The app icon badge shows the

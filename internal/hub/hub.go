@@ -161,6 +161,7 @@ func (h *Hub) Handler() http.Handler {
 	api.HandleFunc("POST /api/devices/{id}/rename", h.handleRenameDevice)
 	api.HandleFunc("DELETE /api/devices/{id}", h.handleDeleteDevice)
 	api.HandleFunc("GET /api/board", h.handleBoard)
+	api.HandleFunc("GET /api/active", h.handleActive)
 	api.HandleFunc("GET /api/quick", h.handleQuickGet)
 	api.HandleFunc("PUT /api/quick", h.handleQuickPut)
 	api.HandleFunc("GET /api/push/key", h.handlePushKey)

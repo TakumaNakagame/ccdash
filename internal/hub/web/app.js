@@ -211,6 +211,7 @@ function route() {
   closeSplit();
   view.replaceChildren();
   mainMount = view;
+  if (parts[0] === "grid") return gridPage();
   if (inDevice) {
     if (parts[2] === "s" && parts[3] && parts[4] === "diff") return diffPage(parts[1], parts[3]);
     if (parts[2] === "s" && parts[3]) return sessionPage(parts[1], parts[3], parts[4]);
@@ -1078,6 +1079,90 @@ function sessionMenu(id, s, groups, refresh) {
           try { await d.post("/api/titles", { sessionIds: [sid] }); toast("タイトルを生成しています（claude -p）"); refresh(); } catch (e) { toast(e.message); }
         } }, "タイトルを自動生成")),
       h("div", { class: "actions" }, h("button", { class: "btn primary" }, "閉じる")));
+  });
+}
+
+// ---- grid view ----
+//
+// Every running session across devices on one screen: a tile each with its
+// state, why it wants you, the latest exchange (live), and a one-line reply.
+
+function gridTile(c) {
+  const id = c.device_id, sid = c.session.session_id;
+  const chatHref = `#/d/${id}/s/${encodeURIComponent(sid)}`;
+  const title = h("a", { class: "tile-title", href: chatHref });
+  const status = h("span", { class: "chip" });
+  const reason = h("div", { class: "tile-reason" });
+  const log = h("div", { class: "tile-log" }, h("div", { class: "muted small" }, "読み込み中…"));
+  const input = h("input", { placeholder: "返信（Enter で送信）", enterkeyhint: "send" });
+  const form = h("form", { class: "tile-reply" }, input, h("button", { class: "btn small primary" }, "送信"));
+  const el = h("div", { class: "tile" },
+    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status), reason, log, form);
+  let session = c.session, sig = "";
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    if (session.attention === "needs_you") { toast("Claude が回答を待っています。開いて質問カードから答えてください"); location.hash = chatHref; return; }
+    try { await sendToSession(id, sid, text); input.value = ""; toast("送信しました"); }
+    catch (err) { toast(err.message); }
+  });
+  return {
+    el,
+    update(c2) {
+      session = c2.session;
+      title.textContent = (session.num ? `#${session.num} ` : "") + sessionTitle(session);
+      const st = session.attention === "needs_you" ? "要対応" : session.status === "active" ? "作業中" : session.attention === "done" ? "未確認" : "待機中";
+      status.textContent = st;
+      status.className = "chip " + (session.attention === "needs_you" ? "pend" : session.attention === "done" && session.status !== "active" ? "done" : session.status);
+      el.classList.toggle("needs", session.attention === "needs_you");
+      el.classList.toggle("working", session.status === "active");
+      reason.replaceChildren(...(session.attention === "needs_you"
+        ? [h("span", {}, "? " + (session.attention_reason || "要対応")), h("a", { class: "btn small", href: chatHref }, "開いて回答")]
+        : []));
+      reason.hidden = session.attention !== "needs_you";
+    },
+    async refresh() {
+      const d = dev(id);
+      const stat = await d.get(`/api/sessions/${encodeURIComponent(sid)}/transcript?mode=stat`);
+      const next = `${stat.mtime}/${stat.size}`;
+      if (next === sig) return;
+      sig = next;
+      const t = await d.get(`/api/sessions/${encodeURIComponent(sid)}/transcript?mode=tail&bytes=98304`);
+      const items = parseTranscript(decodeEntries(t.data)).filter((x) => x.kind !== "thinking").slice(-8);
+      const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+      log.replaceChildren(...(items.length ? items.map((it) => renderItem(it)).filter(Boolean) : [h("div", { class: "muted small" }, "まだメッセージがありません")]));
+      if (stick) log.scrollTop = log.scrollHeight;
+    },
+  };
+}
+
+function gridPage() {
+  const mount = mainMount;
+  crumbs({ text: "グリッド" });
+  const grid = h("div", { class: "grid" });
+  const count = h("span", { class: "muted small" });
+  const empty = h("div", { class: "empty", hidden: true }, "動いているセッションはありません");
+  mount.append(h("div", { class: "grid-page" },
+    h("div", { class: "row grid-top" }, h("h1", { class: "grow" }, "グリッド"), count), empty, grid));
+  const tiles = new Map();
+  every(4000, async () => {
+    const list = await api("/api/active");
+    const keep = new Set();
+    for (const c of list) {
+      const k = c.device_id + ":" + c.session.session_id;
+      keep.add(k);
+      let t = tiles.get(k);
+      if (!t) { t = gridTile(c); tiles.set(k, t); }
+      t.update(c);
+      grid.append(t.el); // re-append keeps the server's order
+    }
+    for (const [k, t] of tiles) if (!keep.has(k)) { t.el.remove(); tiles.delete(k); }
+    empty.hidden = tiles.size > 0;
+    const needs = list.filter((c) => c.session.attention === "needs_you").length;
+    const working = list.filter((c) => c.session.status === "active").length;
+    count.textContent = `${list.length} 件 · 要対応 ${needs} · 作業中 ${working}`;
+    await Promise.all([...tiles.values()].map((t) => t.refresh().catch(() => {})));
   });
 }
 

@@ -386,3 +386,36 @@ func (h *Hub) handleBoard(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, board)
 }
+
+// handleActive lists, across connected devices, the sessions that are
+// running (a live claude: active or idle) or want the operator — the grid
+// view. Needs-you first, then working, then idle; newest first within.
+func (h *Hub) handleActive(w http.ResponseWriter, r *http.Request) {
+	out := []boardCard{}
+	h.mu.Lock()
+	for _, snap := range h.snapshots {
+		for _, s := range snap.Sessions {
+			if s.Status == model.StatusActive || s.Status == model.StatusIdle || s.Attention == model.AttentionNeedsYou {
+				out = append(out, boardCard{DeviceID: snap.Device.ID, DeviceName: snap.Device.Name, Session: s})
+			}
+		}
+	}
+	h.mu.Unlock()
+	rank := func(s model.Session) int {
+		switch {
+		case s.Attention == model.AttentionNeedsYou:
+			return 0
+		case s.Status == model.StatusActive:
+			return 1
+		}
+		return 2
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i].Session, out[j].Session
+		if rank(a) != rank(b) {
+			return rank(a) < rank(b)
+		}
+		return a.LastSeen.After(b.LastSeen)
+	})
+	writeJSON(w, out)
+}
