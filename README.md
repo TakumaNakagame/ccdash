@@ -390,6 +390,29 @@ new-session picker (attach on). It can never reach the hook endpoints,
 `/shutdown`, or settings writes — so a compromised hub cannot switch the
 device's own safety toggles back on.
 
+**Read tokens (machine clients).** A bot or script that can't do a browser
+login can read the hub with `Authorization: Bearer <token>`. Configure the
+tokens at start (each ≥ 32 characters, e.g. `openssl rand -hex 32`):
+`CCDASH_HUB_READ_TOKENS` (comma-separated) and/or `--read-token-file`
+(`CCDASH_HUB_READ_TOKEN_FILE`; one per line). A read token may only GET:
+
+| Route | Returns |
+|---|---|
+| `/api/board` | `{"needs_you": [card], "working": [card], "done": [card]}` |
+| `/api/active` | `[card]` — running (active / idle) or needs-you sessions |
+| `/api/devices` | `[{id, name, created_at, last_seen, hostname, version, online, since, remote}]` |
+| `/api/d/{id}/api/sessions` | the device's `[session]` (`?archived=1` for archived ones) |
+| `/api/d/{id}/api/sessions/{sid}/transcript` | `{mtime, size, data}` — `data` is base64 of the transcript JSONL tail; `mode=tail` (default, `bytes=` ≤ 1 MiB, `lines=N` for the last N records) or `mode=stat` |
+
+A card is `{device_id, device_name, session}`; a session has `session_id`,
+`num`, `title` / `gen_title` / `custom_title`, `cwd`, `repo`, `branch`,
+`status` (`active` / `idle` / `recent` / `stopped`), `attention`
+(`needs_you` / `done` / empty), `attention_reason`, `attention_at`,
+`last_seen`, `model`, … (`internal/model.Session`). Everything else —
+writes, PTYs, approvals, push, settings — answers 403 to a read token; a
+wrong token gets 401. The bearer header is never forwarded to devices. See
+`docs/decisions/0004-hub-read-tokens.md`.
+
 ## Threat model
 
 ccdash is built for a single user (or a small trusted team, via remote
@@ -469,7 +492,10 @@ mode) managing their own Claude Code sessions.
   device; rotating or deleting a device in the portal cuts its tunnel
   immediately. The device-side allowlist (see "Hub mode") bounds what a
   compromised hub could do, and the **Hub connection** toggle (part of the
-  secure preset) takes a device off the hub entirely.
+  secure preset) takes a device off the hub entirely. Optional read tokens
+  (bearer, GET-only on five read routes) can read session lists and
+  transcript tails — the raw transcript, unredacted — but can't write,
+  drive a PTY or decide approvals; treat one like a portal login.
 
 ## Layout
 

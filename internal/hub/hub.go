@@ -47,6 +47,9 @@ type Config struct {
 	DataDir   string // hub.sqlite lives here
 	PublicURL string // browser-facing origin, e.g. https://ccdash.g3.lab-dev.net
 	Auth      AuthConfig
+	// ReadTokens are bearer tokens for machine clients: GET-only access to
+	// a fixed set of read routes (see readtoken.go). Empty disables them.
+	ReadTokens []string
 }
 
 // Hub is a running portal.
@@ -56,6 +59,8 @@ type Hub struct {
 	auth *authn
 
 	assets string // hash of the embedded web files; the SPA reloads when it changes
+
+	readTokens [][32]byte // SHA-256 of each read token; never the tokens themselves
 
 	mu        sync.Mutex
 	conns     map[string]*deviceConn    // device id → live tunnel
@@ -94,6 +99,11 @@ func New(ctx context.Context, cfg Config) (*Hub, error) {
 		return nil, fmt.Errorf("--public-url must be the browser-facing origin like https://ccdash.example.net, got %q", cfg.PublicURL)
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
+	readTokens, err := hashReadTokens(cfg.ReadTokens)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ReadTokens = nil
 	st, err := openStore(cfg.DataDir)
 	if err != nil {
 		return nil, err
@@ -112,6 +122,8 @@ func New(ctx context.Context, cfg Config) (*Hub, error) {
 		st:     st,
 		auth:   &authn{cfg: cfg.Auth, publicURL: cfg.PublicURL, key: []byte(key), secure: pu.Scheme == "https"},
 		conns:  map[string]*deviceConn{},
+
+		readTokens: readTokens,
 	}, nil
 }
 
@@ -133,6 +145,9 @@ func (h *Hub) ListenAndServe(ctx context.Context) error {
 		h.mu.Unlock()
 	}()
 	log.Printf("ccdash hub %s listening on %s (public url %s)", buildinfo.Version, h.cfg.Listen, h.cfg.PublicURL)
+	if n := len(h.readTokens); n > 0 {
+		log.Printf("hub: %d read token(s) configured (GET-only machine access)", n)
+	}
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -172,8 +187,10 @@ func (h *Hub) Handler() http.Handler {
 	api.HandleFunc("/api/d/{id}/{rest...}", h.handleDeviceProxy)
 	// Go 1.25's cross-origin guard rejects non-GET requests a browser
 	// marks as cross-site (Sec-Fetch-Site / Origin), so a page elsewhere
-	// can't ride the session cookie into a device action.
-	mux.Handle("/api/", h.requireUser(http.NewCrossOriginProtection().Handler(api), false))
+	// can't ride the session cookie into a device action. apiAuth lets a
+	// read token (Authorization: Bearer) through for a few GET routes and
+	// sends everything else to the cookie login.
+	mux.Handle("/api/", h.apiAuth(http.NewCrossOriginProtection().Handler(api)))
 
 	static, _ := fs.Sub(webFS, "web")
 	files := http.FileServerFS(static)
@@ -466,23 +483,7 @@ func (h *Hub) handleAgent(w http.ResponseWriter, r *http.Request) {
 		IdleConnTimeout:     60 * time.Second,
 	}
 	dc := &deviceConn{sess: sess, since: time.Now().UTC(), remote: clientIP(r), transport: tr}
-	dc.proxy = &httputil.ReverseProxy{
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.Out.URL.Scheme = "http"
-			pr.Out.URL.Host = "device"
-			pr.Out.Host = "device"
-			// The device authenticates the tunnel, not the browser: never
-			// forward portal credentials.
-			pr.Out.Header.Del("Cookie")
-			pr.Out.Header.Del("Authorization")
-			pr.Out.Header.Del("X-Ccdash-Token")
-		},
-		Transport:     tr,
-		FlushInterval: -1,
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			http.Error(w, "device unreachable: "+err.Error(), http.StatusBadGateway)
-		},
-	}
+	dc.proxy = newDeviceProxy(tr)
 
 	h.mu.Lock()
 	old := h.conns[d.ID]
@@ -514,6 +515,27 @@ func (h *Hub) handleAgent(w http.ResponseWriter, r *http.Request) {
 	tr.CloseIdleConnections()
 	_ = h.st.touchDevice(context.Background(), d.ID, hostname, version)
 	log.Printf("hub: device %q disconnected", d.Name)
+}
+
+// newDeviceProxy forwards portal requests to a device over tr (the tunnel).
+func newDeviceProxy(tr http.RoundTripper) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.Out.URL.Scheme = "http"
+			pr.Out.URL.Host = "device"
+			pr.Out.Host = "device"
+			// The device authenticates the tunnel, not the browser: never
+			// forward portal credentials.
+			pr.Out.Header.Del("Cookie")
+			pr.Out.Header.Del("Authorization")
+			pr.Out.Header.Del("X-Ccdash-Token")
+		},
+		Transport:     tr,
+		FlushInterval: -1,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, "device unreachable: "+err.Error(), http.StatusBadGateway)
+		},
+	}
 }
 
 func clientIP(r *http.Request) string {

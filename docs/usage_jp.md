@@ -419,4 +419,13 @@ rm $(which ccdash)           # バイナリ削除
 - **サブエージェント**: セッションがサブエージェント（Agent ツール）を使っていると、チャット上部のバーに実行中の数が出る。開くと種類・説明・経過時間・直近のツール呼び出しが並び、タップでそのサブエージェントの記録と（完了後は）報告を見られる
 - ポータルは PWA。「アプリをインストール」/「ホーム画面に追加」で専用アイコン・専用ウィンドウで開ける（オフラインのキャッシュはせず、常にハブと通信）
 
+**bot 用の読み取りトークン**: ログインできない機械クライアント（アラート調査 bot など）は、読み取り専用トークンでハブを読める。ハブを `CCDASH_HUB_READ_TOKENS=<token>[,<token>…]` または `--read-token-file <file>` 付きで起動し（トークンは 32 文字以上）、`Authorization: Bearer <token>` を付けて送る。使えるのは次の GET だけ: `/api/board`、`/api/active`、`/api/devices`、`/api/d/{id}/api/sessions`、`/api/d/{id}/api/sessions/{sid}/transcript`（tail のみ。`?lines=20` で末尾 20 レコード）。それ以外は 403。レスポンスの形は README「Hub mode」を参照。
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" https://ccdash.example.net/api/board
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://ccdash.example.net/api/d/$DEV/api/sessions/$SID/transcript?lines=20" \
+  | jq -r .data | base64 -d
+```
+
 ポータルにできることは端末側の設定で制限される: **Attach** OFF なら閲覧のみ、**Approval blocking** OFF なら承認不可、**Hub connection** OFF なら端末はオフライン扱い。

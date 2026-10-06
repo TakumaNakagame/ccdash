@@ -51,7 +51,7 @@ func envOr(flagVal, env string) string {
 }
 
 func hubServeCmd() *cobra.Command {
-	var listen, dataDir, publicURL, issuer, clientID, secretFile string
+	var listen, dataDir, publicURL, issuer, clientID, secretFile, readTokenFile string
 	var emails []string
 	var noAuth, tsAuth bool
 	c := &cobra.Command{
@@ -66,7 +66,14 @@ is configured:
   CCDASH_HUB_LISTEN, CCDASH_HUB_DATA_DIR, CCDASH_HUB_PUBLIC_URL,
   CCDASH_HUB_OIDC_ISSUER, CCDASH_HUB_OIDC_CLIENT_ID,
   CCDASH_HUB_OIDC_CLIENT_SECRET (or --oidc-client-secret-file),
-  CCDASH_HUB_ALLOWED_EMAILS (comma-separated)
+  CCDASH_HUB_ALLOWED_EMAILS (comma-separated),
+  CCDASH_HUB_READ_TOKENS (comma-separated; or --read-token-file /
+  CCDASH_HUB_READ_TOKEN_FILE)
+
+Read tokens are for machine clients (bots, scripts): a request with
+"Authorization: Bearer <token>" may GET /api/board, /api/active,
+/api/devices, /api/d/{id}/api/sessions and
+/api/d/{id}/api/sessions/{sid}/transcript (tail only) — nothing else.
 
 TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -104,6 +111,17 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 					}
 				}
 			}
+			readTokens, err := hub.ParseReadTokens(os.Getenv("CCDASH_HUB_READ_TOKENS"))
+			if err != nil {
+				return fmt.Errorf("CCDASH_HUB_READ_TOKENS: %w", err)
+			}
+			if f := envOr(readTokenFile, "CCDASH_HUB_READ_TOKEN_FILE"); f != "" {
+				ft, err := hub.ReadTokenFile(f)
+				if err != nil {
+					return err
+				}
+				readTokens = append(readTokens, ft...)
+			}
 			if tsAuth {
 				host, _, err := net.SplitHostPort(listen)
 				if err != nil || !isLoopbackHost(host) {
@@ -131,6 +149,7 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 					NoAuth:         noAuth,
 					TailscaleServe: tsAuth,
 				},
+				ReadTokens: readTokens,
 			})
 			if err != nil {
 				return err
@@ -148,6 +167,7 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 	c.Flags().StringSliceVar(&emails, "allowed-email", nil, "email allowed to log in (repeatable)")
 	c.Flags().BoolVar(&tsAuth, "tailscale-auth", false, "log users in by the Tailscale-User-Login header of `tailscale serve` (loopback --listen; logins must be in --allowed-email)")
 	c.Flags().BoolVar(&noAuth, "no-auth", false, "skip login (local development only; loopback --listen required)")
+	c.Flags().StringVar(&readTokenFile, "read-token-file", "", "file of read-only bearer tokens for machine clients, one per line (adds to $CCDASH_HUB_READ_TOKENS)")
 	return c
 }
 
