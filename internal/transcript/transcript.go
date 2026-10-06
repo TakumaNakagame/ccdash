@@ -101,6 +101,35 @@ func TailBytes(path string, budget int64) (data []byte, mtime time.Time, size in
 	return raw, fi.ModTime(), fi.Size(), nil
 }
 
+// LastLines returns the last n non-empty lines of a JSONL blob (each with
+// its trailing newline when it had one). It slices data; nothing is copied.
+func LastLines(data []byte, n int) []byte {
+	if n <= 0 {
+		return data
+	}
+	end := len(data)
+	for end > 0 && (data[end-1] == '\n' || data[end-1] == '\r') {
+		end--
+	}
+	start := end
+	for count := 0; start > 0; {
+		i := bytes.LastIndexByte(data[:start], '\n')
+		if i < 0 {
+			start = 0
+			break
+		}
+		if i+1 < start && len(bytes.TrimSpace(data[i+1:start])) > 0 {
+			count++
+			if count == n {
+				start = i + 1
+				break
+			}
+		}
+		start = i
+	}
+	return data[start:]
+}
+
 // ParseBytes parses an in-memory JSONL blob (already loaded — from disk or
 // fetched from a remote collector) into Messages. Load, LoadTail, and
 // store.Remote's transcript methods all funnel through this so the parsing
