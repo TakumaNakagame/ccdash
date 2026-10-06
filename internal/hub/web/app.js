@@ -767,6 +767,8 @@ function parseTranscript(entries, opts = {}) {
       continue;
     }
     if ((e.type !== "user" && e.type !== "assistant") || !e.message || (e.isSidechain && !opts.sidechain)) continue;
+    // Context compaction writes its summary as a user turn; show a note instead.
+    if (e.isCompactSummary) { items.push({ kind: "note", text: "会話が長くなったため要約して続行しました" }); continue; }
     const c = e.message.content;
     const parts = typeof c === "string" ? [{ type: "text", text: c }] : Array.isArray(c) ? c : [];
     for (const p of parts) {
