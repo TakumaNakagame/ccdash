@@ -118,6 +118,9 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN gen_title TEXT`,
 		`ALTER TABLE sessions ADD COLUMN gen_title_at INTEGER`,
 		`ALTER TABLE sessions ADD COLUMN title_status TEXT`,
+		`ALTER TABLE sessions ADD COLUMN attention TEXT`,
+		`ALTER TABLE sessions ADD COLUMN attention_reason TEXT`,
+		`ALTER TABLE sessions ADD COLUMN attention_at INTEGER`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -377,7 +380,8 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       s.first_seen, s.last_seen, s.status,
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
 		       COALESCE(s.account,''),
-		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,'')
+		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
+		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0)
 		FROM sessions s
 		WHERE COALESCE(s.archived,0) = ?
 		ORDER BY COALESCE(s.favorite,0) DESC, s.last_seen DESC
@@ -389,7 +393,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 	var out []model.Session
 	for rows.Next() {
 		var s model.Session
-		var first, last, sumAt, genAt int64
+		var first, last, sumAt, genAt, attAt int64
 		var status string
 		var arch, fav int
 		if err := rows.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -400,9 +404,11 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&arch, &fav,
 			&s.Summary, &s.SummaryStatus, &sumAt,
 			&first, &last, &status, &s.PendingCount, &s.Account,
-			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus); err != nil {
+			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
+			&s.Attention, &s.AttentionReason, &attAt); err != nil {
 			return nil, err
 		}
+		finishAttention(&s, attAt)
 		if genAt > 0 {
 			s.GenTitleAt = time.Unix(genAt, 0).UTC()
 		}
@@ -435,12 +441,13 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       s.first_seen, s.last_seen, s.status,
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
 		       COALESCE(s.account,''),
-		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,'')
+		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
+		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0)
 		FROM sessions s
 		WHERE s.session_id = ?
 	`, sessionID)
 	var s model.Session
-	var first, last, sumAt, genAt int64
+	var first, last, sumAt, genAt, attAt int64
 	var status string
 	var arch, fav int
 	err := row.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -451,7 +458,8 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&arch, &fav,
 		&s.Summary, &s.SummaryStatus, &sumAt,
 		&first, &last, &status, &s.PendingCount, &s.Account,
-		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus)
+		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
+		&s.Attention, &s.AttentionReason, &attAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Session{}, false, nil
 	}
@@ -469,7 +477,48 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 	if genAt > 0 {
 		s.GenTitleAt = time.Unix(genAt, 0).UTC()
 	}
+	finishAttention(&s, attAt)
 	return s, true, nil
+}
+
+// finishAttention completes the attention fields of a scanned row. A
+// pending approval always means "needs you", whatever the stored column says
+// (approvals live in their own table and resolve on their own).
+func finishAttention(s *model.Session, attAt int64) {
+	if attAt > 0 {
+		s.AttentionAt = time.Unix(attAt, 0).UTC()
+	}
+	if s.PendingCount > 0 && s.Attention != model.AttentionNeedsYou {
+		s.Attention = model.AttentionNeedsYou
+		s.AttentionReason = "承認待ち"
+	}
+}
+
+// SetAttention records what a session wants from the operator.
+func (d *DB) SetAttention(ctx context.Context, sessionID, kind, reason string) error {
+	_, err := d.sql.ExecContext(ctx,
+		`UPDATE sessions SET attention = ?, attention_reason = ?, attention_at = ? WHERE session_id = ?`,
+		kind, reason, time.Now().Unix(), sessionID)
+	return err
+}
+
+// ClearAttention drops the attention mark; with only != "" it clears just
+// that kind (a finished tool must not erase an unread "done").
+func (d *DB) ClearAttention(ctx context.Context, sessionID, only string) error {
+	q := `UPDATE sessions SET attention = '', attention_reason = '' WHERE session_id = ?`
+	args := []any{sessionID}
+	if only != "" {
+		q += ` AND attention = ?`
+		args = append(args, only)
+	}
+	_, err := d.sql.ExecContext(ctx, q, args...)
+	return err
+}
+
+// MarkSeen records that the operator looked at a session: an unread
+// "done" becomes read.
+func (d *DB) MarkSeen(ctx context.Context, sessionID string) error {
+	return d.ClearAttention(ctx, sessionID, model.AttentionDone)
 }
 
 // SetArchived flips the archived flag.

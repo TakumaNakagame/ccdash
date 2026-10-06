@@ -127,6 +127,7 @@ function route() {
   view.replaceChildren();
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   if (parts[0] === "d" && parts[1]) {
+    if (parts[2] === "s" && parts[3] && parts[4] === "diff") return diffPage(parts[1], parts[3]);
     if (parts[2] === "s" && parts[3]) return sessionPage(parts[1], parts[3], parts[4]);
     if (parts[2] === "p" && parts[3]) return spawnPage(parts[1], parts[3], parts[4]);
     return devicePage(parts[1]);
@@ -136,10 +137,25 @@ function route() {
 
 // ---------- devices ----------
 
+// The board: every connected device's sessions that need the operator,
+// are working, or finished unread — the first thing to look at.
+const BOARD_COLS = [["needs_you", "要対応"], ["working", "作業中"], ["done", "未確認"]];
+
+function boardCard(c) {
+  const s = c.session;
+  const reason = s.attention === "needs_you" ? (s.attention_reason || "要対応") : s.attention === "done" ? "完了" : "作業中";
+  return h("a", { class: "card " + (s.attention || "working"), href: `#/d/${c.device_id}/s/${encodeURIComponent(s.session_id)}` },
+    h("div", { class: "row" }, h("span", { class: "chip" }, c.device_name), h("span", { class: "grow" }), h("span", { class: "muted small" }, rel(s.last_seen))),
+    h("div", { class: "card-title" }, (s.num ? `#${s.num} ` : "") + sessionTitle(s)),
+    h("div", { class: "card-reason" }, reason));
+}
+
 function devicesPage() {
   crumbs({ text: "端末" });
   const list = h("div", { class: "list" }, h("div", { class: "empty" }, "読み込み中…"));
+  const board = h("div", { class: "board" });
   view.append(h("div", { class: "page" },
+    board,
     h("div", { class: "row" },
       h("h1", { class: "grow" }, "端末"),
       h("button", { class: "btn primary", onclick: addDevice }, "＋ 端末を追加")),
@@ -148,6 +164,17 @@ function devicesPage() {
     h("p", { class: "muted small" },
       "端末側で ", h("span", { class: "mono" }, "ccdash hub join"), " を実行すると、その端末の collector がこのハブへ接続します。端末にポートを開ける必要はありません。")));
 
+  every(4000, async () => {
+    const b = await api("/api/board");
+    updateBadge(b);
+    const cols = BOARD_COLS.map(([k, label]) => {
+      const cards = b[k] || [];
+      return h("div", { class: "board-col " + k },
+        h("div", { class: "board-head" }, label, h("span", { class: "count" }, cards.length)),
+        ...(cards.length ? cards.slice(0, 30).map(boardCard) : [h("div", { class: "muted small board-empty" }, "なし")]));
+    });
+    board.replaceChildren(...cols);
+  });
   every(5000, async () => {
     const ds = await api("/api/devices");
     ds.forEach((d) => deviceCache.set(d.id, d));
@@ -287,6 +314,28 @@ async function devicePage(id) {
   const archBtn = h("button", { class: "btn small", onclick: () => { showArchived = !showArchived; archBtn.classList.toggle("on", showArchived); archBtn.textContent = showArchived ? "アーカイブ表示中" : "アーカイブ"; refreshNow(); } }, "アーカイブ");
   const status = h("div", { class: "muted small" });
   const settingsBox = h("details", { class: "settings-box" }, h("summary", {}, "端末の設定（閲覧のみ）"));
+  const usageCard = h("div", { class: "usage-card", hidden: true });
+  const loadUsage = async () => {
+    const u = await dev(id).get("/api/usage?days=7").catch(() => null);
+    if (!u) return;
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const dt = new Date(Date.now() - i * 86400000);
+      const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+      days.push([key.slice(5), u.by_day?.[key]?.cost || 0]);
+    }
+    const max = Math.max(...days.map((x) => x[1]), 0.01);
+    usageCard.hidden = !u.range?.messages;
+    usageCard.replaceChildren(
+      h("div", { class: "row" },
+        h("div", { class: "grow" }, h("div", { class: "muted small" }, "今日（API 換算）"), h("b", { class: "big" }, fmtUSD(u.today?.cost || 0))),
+        h("div", {}, h("div", { class: "muted small" }, "7 日間"), h("b", {}, fmtUSD(u.range?.cost || 0)), h("span", { class: "muted small" }, ` · ${fmtTok(tokTotal(u.range || {}))} tok`))),
+      h("div", { class: "bars", title: "日別" }, days.map(([d, v]) => h("div", { class: "bar", title: `${d} ${fmtUSD(v)}` },
+        h("span", { style: `height:${Math.max(2, Math.round((v / max) * 40))}px` }), h("small", {}, d.slice(3))))));
+  };
+  loadUsage();
+  const usageTimer = setInterval(loadUsage, 60000);
+  cleanup.push(() => clearInterval(usageTimer));
   settingsBox.addEventListener("toggle", async () => {
     if (!settingsBox.open || settingsBox.dataset.loaded) return;
     try {
@@ -302,7 +351,7 @@ async function devicePage(id) {
     h("div", { class: "row" },
       h("h1", { class: "grow" }, name),
       h("button", { class: "btn primary", onclick: () => newSession(id) }, "＋ 新規セッション")),
-    status, approvals, spawns,
+    status, usageCard, approvals, spawns,
     tabs,
     h("div", { class: "row", style: "margin-bottom:8px" }, filter, archBtn),
     list, more, settingsBox));
@@ -378,10 +427,12 @@ async function devicePage(id) {
 function sessionRow(id, s, live, info, showGroup) {
   const chips = [];
   if (live) chips.push(h("span", { class: "chip live" }, "live"));
-  if (s.pending_count) chips.push(h("span", { class: "chip pend" }, `承認待ち ${s.pending_count}`));
+  if (s.attention === "needs_you") chips.push(h("span", { class: "chip pend", title: s.attention_reason || "" }, "要対応"));
+  else if (s.attention === "done") chips.push(h("span", { class: "chip done" }, "未確認"));
   if (s.account && s.account !== "default") chips.unshift(h("span", { class: "chip" }, s.account));
   chips.push(h("span", { class: "chip " + s.status }, s.status));
-  const sub = [showGroup ? groupOf(s) : null, shortPath(s.cwd, info?.home), s.branch, rel(s.last_seen)].filter(Boolean).join(" · ");
+  const sub = [s.attention === "needs_you" && s.attention_reason ? "? " + s.attention_reason : null,
+    showGroup ? groupOf(s) : null, shortPath(s.cwd, info?.home), s.branch, rel(s.last_seen)].filter(Boolean).join(" · ");
   return h("div", { class: "item", onclick: () => (location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`) },
     h("span", { class: "num" }, s.num ? `#${s.num}` : ""),
     h("div", { class: "grow" },
@@ -425,6 +476,12 @@ function newSession(id, preset = {}) {
     const path = h("input", { class: "grow mono", value: preset.cwd || info?.newSessionDir || "" });
     const dirs = h("div", { class: "dirlist" });
     const prompt = h("textarea", { rows: 2, class: "grow", placeholder: "最初の指示（任意）。/ でスキル・コマンドを選べます", value: preset.prompt || "" });
+    const mode = h("select", { class: "mode" },
+      h("option", { value: "" }, "権限モード: 既定"),
+      h("option", { value: "manual" }, "manual（毎回確認）"),
+      h("option", { value: "acceptEdits" }, "acceptEdits（編集は自動許可）"),
+      h("option", { value: "auto" }, "auto（自動判断）"),
+      h("option", { value: "plan" }, "plan（計画だけ立てる）"));
     const skillBox = h("div", { class: "dirlist skills", hidden: true });
     let skillList = null;
     const loadSkills = async () => {
@@ -462,7 +519,7 @@ function newSession(id, preset = {}) {
       let first = prompt.value.trim();
       if (first.startsWith("-")) first = " " + first;
       try {
-        const r = await dev(id).post("/pty/start", { cwd: path.value, cols: 120, rows: 36, prompt: first });
+        const r = await dev(id).post("/pty/start", { cwd: path.value, cols: 120, rows: 36, prompt: first, permissionMode: mode.value });
         close();
         location.hash = `#/d/${id}/p/${encodeURIComponent(r.ptyKey)}`;
       } catch (err) { toast(err.message); }
@@ -470,7 +527,7 @@ function newSession(id, preset = {}) {
     body.append(h("h1", {}, "新規セッション"),
       h("div", { class: "row" }, path, h("button", { type: "button", class: "btn", onclick: () => load(path.value) }, "移動")),
       dirs,
-      h("div", { class: "col" }, prompt, skillBox),
+      h("div", { class: "col" }, prompt, skillBox, mode),
       h("div", { class: "actions" },
         h("button", { class: "btn", value: "cancel" }, "キャンセル"),
         h("button", { class: "btn primary", onclick: start }, "ここで claude を起動")));
@@ -927,6 +984,252 @@ function sessionMenu(id, s, groups, refresh) {
   });
 }
 
+// ---- usage (API-price estimate) ----
+
+function fmtTok(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+  return String(n);
+}
+const fmtUSD = (v) => "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2));
+const tokTotal = (t) => (t.input || 0) + (t.output || 0) + (t.cache_write || 0) + (t.cache_read || 0);
+
+function usageDialog(u, title) {
+  dialog((body) => {
+    const rows = Object.entries(u.by_model || {}).sort((a, b) => b[1].cost - a[1].cost);
+    body.append(h("h1", {}, title),
+      h("p", { class: "muted small" }, "API の定価で換算した概算です（サブスクリプションの実際の請求額ではありません）。"),
+      h("div", { class: "md-table" }, h("table", {},
+        h("thead", {}, h("tr", {}, ["モデル", "入力", "出力", "キャッシュ書込", "キャッシュ読込", "概算"].map((x) => h("th", {}, x)))),
+        h("tbody", {}, rows.map(([m, t]) => h("tr", {}, [m, fmtTok(t.input), fmtTok(t.output), fmtTok(t.cache_write), fmtTok(t.cache_read), fmtUSD(t.cost)].map((x) => h("td", {}, x))))))),
+      u.subagents?.messages ? h("p", { class: "small" }, `うちサブエージェント: ${fmtUSD(u.subagents.cost)}（${fmtTok(tokTotal(u.subagents))} トークン）`) : null,
+      h("div", { class: "actions" }, h("button", { class: "btn primary" }, "閉じる")));
+  });
+}
+
+// ---- composer helpers ----
+
+// Claude Code built-ins worth having one tap away (the device's own skills
+// and commands are appended from /hub/skills).
+const BUILTIN_SLASH = [
+  { name: "compact", description: "会話を要約して文脈を圧縮" },
+  { name: "clear", description: "会話をクリア" },
+  { name: "model", description: "モデルを切り替え" },
+  { name: "context", description: "文脈の使用状況" },
+  { name: "cost", description: "このセッションのコスト" },
+  { name: "review", description: "変更のレビュー" },
+  { name: "init", description: "CLAUDE.md を作成" },
+  { name: "memory", description: "メモリを編集" },
+];
+
+function editQuick(paint) {
+  dialog(async (body, close) => {
+    const cmds = await api("/api/quick").catch(() => []);
+    const ta = h("textarea", { rows: 8, class: "grow" });
+    ta.value = cmds.join("\n");
+    body.append(h("h1", {}, "クイックコマンド"),
+      h("p", { class: "muted small" }, "1 行に 1 つ。チャットの入力欄の上にボタンとして並び、タップで送信します（全端末・全ブラウザで共通）。"),
+      ta,
+      h("div", { class: "actions" },
+        h("button", { class: "btn", value: "cancel" }, "キャンセル"),
+        h("button", { type: "button", class: "btn primary", onclick: async () => {
+          try { paint(await api("/api/quick", { method: "PUT", json: ta.value.split("\n") })); close(); }
+          catch (e) { toast(e.message); }
+        } }, "保存")));
+  });
+}
+
+let recog = null;
+function speechSupported() { return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
+function stopDictation() { try { recog?.stop(); } catch {} recog = null; }
+function toggleDictation(btn, input, autosize) {
+  if (recog) { stopDictation(); btn.classList.remove("on"); return; }
+  const R = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recog = new R();
+  recog.lang = "ja-JP";
+  recog.interimResults = true;
+  recog.continuous = true;
+  const base = input.value ? input.value.replace(/\s*$/, " ") : "";
+  let finalText = "";
+  recog.onresult = (e) => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) finalText += e.results[i][0].transcript;
+      else interim += e.results[i][0].transcript;
+    }
+    input.value = base + finalText + interim;
+    autosize();
+  };
+  recog.onend = () => { btn.classList.remove("on"); recog = null; };
+  recog.onerror = (e) => { if (e.error !== "aborted") toast("音声入力: " + e.error); };
+  btn.classList.add("on");
+  recog.start();
+}
+
+// ---- diff review ----
+//
+// Annotate the session's working-tree diff line by line, then send every
+// note to Claude as ONE prompt (batched feedback keeps the revision
+// coherent). Notes wait in localStorage until sent.
+
+function parseDiff(text) {
+  const files = [];
+  let f = null, oldNo = 0, newNo = 0;
+  for (const line of text.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      const m = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+      f = { path: m ? m[2] : line.slice(11), old: m ? m[1] : "", lines: [], added: 0, deleted: 0, binary: false };
+      files.push(f);
+      continue;
+    }
+    if (!f) continue;
+    if (line.startsWith("+++ ")) { const p = line.slice(4).replace(/^b\//, ""); if (p !== "/dev/null") f.path = p; continue; }
+    if (line.startsWith("--- ") || line.startsWith("index ") || line.startsWith("new file") || line.startsWith("deleted file") || line.startsWith("similarity") || line.startsWith("rename ") || line.startsWith("old mode") || line.startsWith("new mode")) continue;
+    if (line.startsWith("Binary files")) { f.binary = true; continue; }
+    const hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/);
+    if (hunk) { oldNo = +hunk[1]; newNo = +hunk[2]; f.lines.push({ kind: "hunk", text: line }); continue; }
+    if (line.startsWith("+")) { f.lines.push({ kind: "add", newNo: newNo++, text: line.slice(1) }); f.added++; }
+    else if (line.startsWith("-")) { f.lines.push({ kind: "del", oldNo: oldNo++, text: line.slice(1) }); f.deleted++; }
+    else if (line.startsWith(" ")) f.lines.push({ kind: "ctx", oldNo: oldNo++, newNo: newNo++, text: line.slice(1) });
+  }
+  return files;
+}
+
+const reviewKey = (id, sid) => `ccdash.review.${id}.${sid}`;
+function loadNotes(id, sid) { try { return JSON.parse(localStorage.getItem(reviewKey(id, sid)) || "[]"); } catch { return []; } }
+function saveNotes(id, sid, notes) { try { localStorage.setItem(reviewKey(id, sid), JSON.stringify(notes)); } catch {} }
+
+function reviewPrompt(notes, general) {
+  const out = ["差分レビューのコメントです。それぞれ対応してください。", ""];
+  notes.forEach((n, i) => {
+    const where = n.line ? `${n.path}:${n.line}` : n.path;
+    const code = n.code ? `（${n.side === "del" ? "-" : n.side === "add" ? "+" : " "} \`${n.code.trim().slice(0, 120)}\`）` : "";
+    out.push(`${i + 1}. ${where}${code}`);
+    for (const l of n.text.split("\n")) out.push("   " + l);
+  });
+  if (general.trim()) out.push("", "全体について:", general.trim());
+  return out.join("\n");
+}
+
+// sendToSession types text into the session's claude, resuming it with the
+// text as the first prompt when it isn't running under ccdash.
+async function sendToSession(id, sid, text) {
+  const d = dev(id);
+  const ptys = (await d.get("/pty/").catch(() => [])) || [];
+  if (ptys.some((p) => p.key === sid && p.alive)) {
+    await d.post(`/pty/${encodeURIComponent(sid)}/input`, { text, submit: true });
+    return;
+  }
+  const sessions = (await d.get("/api/sessions").catch(() => [])) || [];
+  const s = sessions.find((x) => x.session_id === sid);
+  if (s && (s.status === "active" || s.status === "idle") &&
+    !confirm("このセッションは ccdash 管理外のターミナルで実行中のようです。ここで別インスタンスとして再開して送信しますか？")) throw new Error("キャンセルしました");
+  await d.post("/pty/start", { sessionId: sid, resumeId: sid, cwd: s?.cwd || "", cols: 120, rows: 40, prompt: text.startsWith("-") ? " " + text : text });
+}
+
+async function diffPage(id, sid) {
+  const name = await deviceName(id);
+  const d = dev(id);
+  const chatHref = `#/d/${id}/s/${encodeURIComponent(sid)}`;
+  crumbs({ text: "端末", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: "差分", href: chatHref });
+  let notes = loadNotes(id, sid);
+  const info = h("div", { class: "muted small" }, "読み込み中…");
+  const filesEl = h("div", { class: "diff-files" });
+  const general = h("textarea", { rows: 2, placeholder: "全体へのコメント（任意）" });
+  const sendBtn = h("button", { class: "btn primary" }, "Claude に送る");
+  const countEl = h("span", { class: "grow muted small" });
+  const paintCount = () => {
+    countEl.textContent = notes.length ? `コメント ${notes.length} 件` : "行をタップしてコメント";
+    sendBtn.disabled = !notes.length && !general.value.trim();
+  };
+  general.addEventListener("input", paintCount);
+  sendBtn.addEventListener("click", async () => {
+    sendBtn.disabled = true;
+    try {
+      await sendToSession(id, sid, reviewPrompt(notes, general.value));
+      notes = [];
+      saveNotes(id, sid, notes);
+      toast("レビューを送りました");
+      location.hash = chatHref;
+    } catch (e) { toast(e.message); paintCount(); }
+  });
+  view.append(h("div", { class: "chat-wrap" },
+    h("div", { class: "term-bar" }, h("a", { class: "btn small", href: chatHref }, "←"), h("span", { class: "grow title" }, "差分レビュー"),
+      h("button", { class: "btn small", onclick: () => route() }, "更新")),
+    h("div", { class: "chat" }, h("div", { class: "page diff-page" }, info, filesEl)),
+    h("div", { class: "chat-bottom" }, h("div", { class: "composer col" }, general, h("div", { class: "row" }, countEl, sendBtn)))));
+  paintCount();
+
+  let st, diffText;
+  try {
+    [st, diffText] = await Promise.all([
+      d.get(`/hub/git/status?session=${encodeURIComponent(sid)}`),
+      d.get(`/hub/git/diff?session=${encodeURIComponent(sid)}`),
+    ]);
+  } catch (e) { info.textContent = e.message; return; }
+  if (!st.repo) { info.textContent = "このセッションのディレクトリは git リポジトリではありません"; return; }
+  info.replaceChildren(
+    h("b", {}, st.branch || "?"),
+    st.upstream ? ` → ${st.upstream}` : "",
+    st.ahead ? ` · ↑${st.ahead}` : "", st.behind ? ` · ↓${st.behind}` : "",
+    st.head ? ` · 最新 ${st.head.hash} ${st.head.subject}（${st.head.when}）` : "",
+    diffText.truncated ? " · 差分が大きいため途中まで" : "");
+  const files = parseDiff(diffText.diff || "");
+  if (!files.length) { filesEl.append(h("div", { class: "empty" }, "変更はありません")); return; }
+
+  const noteFor = (path, ln) => notes.find((n) => n.path === path && n.key === ln);
+  const renderFile = (f) => {
+    const body = h("div", { class: "diff-body" });
+    const det = h("details", { class: "diff-file", open: files.length <= 3 },
+      h("summary", {}, h("span", { class: "mono grow" }, f.path),
+        h("span", { class: "add" }, `+${f.added}`), " ", h("span", { class: "del" }, `-${f.deleted}`),
+        h("span", { class: "note-count" }, "")),
+      body);
+    const paintCountChip = () => {
+      const n = notes.filter((x) => x.path === f.path).length;
+      det.querySelector(".note-count").textContent = n ? ` 💬${n}` : "";
+    };
+    const draw = () => {
+      if (f.binary) { body.replaceChildren(h("div", { class: "muted small" }, "バイナリファイル")); return; }
+      body.replaceChildren(...f.lines.map((l, idx) => {
+        if (l.kind === "hunk") return h("div", { class: "dl hunk" }, l.text);
+        const key = `${l.kind}:${l.newNo ?? ""}:${l.oldNo ?? ""}:${idx}`;
+        const row = h("div", { class: "dl " + l.kind },
+          h("span", { class: "ln" }, l.oldNo ?? ""), h("span", { class: "ln" }, l.newNo ?? ""),
+          h("span", { class: "code" }, (l.kind === "add" ? "+" : l.kind === "del" ? "-" : " ") + l.text));
+        const wrap = h("div", {}, row);
+        const existing = noteFor(f.path, key);
+        const editor = (n) => {
+          const ta = h("textarea", { rows: 2, placeholder: "この行へのコメント" });
+          ta.value = n?.text || "";
+          const box = h("div", { class: "note-editor" }, ta, h("div", { class: "row" },
+            n ? h("button", { type: "button", class: "btn small danger", onclick: () => { notes = notes.filter((x) => x !== n); saveNotes(id, sid, notes); paintCount(); paintCountChip(); draw(); } }, "削除") : null,
+            h("span", { class: "grow" }),
+            h("button", { type: "button", class: "btn small", onclick: () => draw() }, "閉じる"),
+            h("button", { type: "button", class: "btn small primary", onclick: () => {
+              const text = ta.value.trim();
+              if (!text) return;
+              if (n) n.text = text;
+              else notes.push({ path: f.path, key, line: l.newNo ?? l.oldNo, side: l.kind, code: l.text, text });
+              saveNotes(id, sid, notes); paintCount(); paintCountChip(); draw();
+            } }, "保存")));
+          wrap.append(box);
+          setTimeout(() => ta.focus(), 0);
+        };
+        if (existing) wrap.append(h("div", { class: "note", onclick: () => { wrap.lastChild.remove(); editor(existing); } }, "💬 " + existing.text));
+        row.addEventListener("click", () => { if (!wrap.querySelector(".note-editor")) editor(existing); });
+        return wrap;
+      }));
+    };
+    det.addEventListener("toggle", () => { if (det.open && !body.childElementCount) draw(); });
+    if (det.open) draw();
+    paintCountChip();
+    return det;
+  };
+  filesEl.replaceChildren(...files.map(renderFile));
+}
+
 // ---- subagents ----
 
 function elapsed(from, to) {
@@ -1005,9 +1308,12 @@ async function chatPage(id, { sid, key }) {
     try { await d.del(`/pty/${encodeURIComponent(ptyKey)}`); toast("終了しました"); } catch (e) { toast(e.message); }
   } }, "終了");
   let allGroups = [];
+  const diffBtn = h("a", { class: "btn small", hidden: true, title: "変更の差分を見てコメントする" }, "差分");
+  let lastUsage = null;
+  const costBtn = h("button", { class: "btn small cost", hidden: true, title: "このセッションのトークンと API 換算コスト", onclick: () => lastUsage && usageDialog(lastUsage, "このセッションの使用量") }, "");
   const menuBtn = h("button", { class: "btn small", title: "セッションの操作", onclick: () => session ? sessionMenu(id, session, allGroups, poll) : toast("まだセッションが登録されていません") }, "⋯");
   const bar = h("div", { class: "term-bar" },
-    h("a", { class: "btn small", href: `#/d/${id}` }, "←"), titleEl, statusEl, termBtn, endBtn, menuBtn);
+    h("a", { class: "btn small", href: `#/d/${id}` }, "←"), titleEl, statusEl, costBtn, diffBtn, termBtn, endBtn, menuBtn);
   const log = h("div", { class: "chat-log" });
   const scroller = h("div", { class: "chat" }, log);
   const approvalsEl = h("div", { class: "chat-dock" });
@@ -1059,7 +1365,35 @@ async function chatPage(id, { sid, key }) {
     if (files.length) { e.preventDefault(); addFiles(files); }
   });
   cleanup.push(() => attachments.forEach((a) => URL.revokeObjectURL(a.url)));
-  const composer = h("form", { class: "composer" }, attachBtn, h("div", { class: "grow col" }, thumbs, input), fileInput, h("div", { class: "row" }, stopBtn, sendBtn));
+  // Voice input (Web Speech API): dictation is appended to the message.
+  const micBtn = speechSupported() ? h("button", { type: "button", class: "btn attach mic", title: "音声入力" }, "🎤") : null;
+  micBtn?.addEventListener("click", () => toggleDictation(micBtn, input, autosize));
+  cleanup.push(() => stopDictation());
+  // "/" completion: skills and slash commands of this device.
+  const slashBox = h("div", { class: "slash-box", hidden: true });
+  let slashList = null;
+  const showSlash = async () => {
+    const v = input.value;
+    if (!v.startsWith("/") || /\s/.test(v)) { slashBox.hidden = true; return; }
+    if (!slashList) {
+      const skills = (await d.get(`/hub/skills?dir=${encodeURIComponent(session?.cwd || "")}`).catch(() => [])) || [];
+      slashList = [...BUILTIN_SLASH, ...skills.map((k) => ({ name: k.name, description: k.description }))];
+    }
+    const q = v.slice(1).toLowerCase();
+    const hits = slashList.filter((k) => k.name.toLowerCase().includes(q) || (k.description || "").toLowerCase().includes(q)).slice(0, 30);
+    slashBox.hidden = !hits.length;
+    slashBox.replaceChildren(...hits.map((k) => h("div", { onclick: () => { input.value = "/" + k.name + " "; slashBox.hidden = true; autosize(); input.focus(); } },
+      h("b", {}, "/" + k.name), k.description ? h("span", { class: "muted small" }, " " + k.description) : null)));
+  };
+  input.addEventListener("input", showSlash);
+  // Quick commands: one tap sends a saved prompt.
+  const quickRow = h("div", { class: "quick-row" });
+  const sendQuick = (text) => { input.value = text; autosize(); composer.requestSubmit(); };
+  const paintQuick = (cmds) => quickRow.replaceChildren(
+    ...cmds.map((c) => h("button", { type: "button", class: "chip quick", title: c, onclick: () => sendQuick(c) }, c.length > 18 ? c.slice(0, 18) + "…" : c)),
+    h("button", { type: "button", class: "chip quick edit", title: "クイックコマンドを編集", onclick: () => editQuick(paintQuick) }, "✎"));
+  api("/api/quick").then(paintQuick).catch(() => {});
+  const composer = h("form", { class: "composer" }, attachBtn, micBtn, h("div", { class: "grow col" }, thumbs, slashBox, input), fileInput, h("div", { class: "row" }, stopBtn, sendBtn));
   for (const ev of ["dragover", "drop"]) {
     scroller.addEventListener(ev, (e) => {
       if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
@@ -1067,7 +1401,7 @@ async function chatPage(id, { sid, key }) {
       if (ev === "drop") addFiles([...e.dataTransfer.files]);
     });
   }
-  view.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, composer)));
+  view.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, quickRow, composer)));
 
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
   input.addEventListener("input", autosize);
@@ -1236,6 +1570,11 @@ async function chatPage(id, { sid, key }) {
         (await d.get("/api/sessions?archived=1").catch(() => []))?.find((s) => s.session_id === sid) || session;
     }
     hosted = !!ptyKey && ptys.some((p) => p.key === ptyKey && p.alive);
+    // Open and visible: the operator is looking at it.
+    if (session?.attention === "done" && sid && !document.hidden) {
+      d.post(`/api/sessions/${encodeURIComponent(sid)}/seen`, {}).catch(() => {});
+      session.attention = "";
+    }
 
     const title = session ? (session.num ? `#${session.num} ` : "") + sessionTitle(session) : sid ? sid : "新規セッション";
     titleEl.textContent = title;
@@ -1256,6 +1595,25 @@ async function chatPage(id, { sid, key }) {
     // approvals for this session
     renderApprovals(approvalsEl, id, sid ? aps.filter((a) => a.session_id === sid) : [], sessions);
     approvalsEl.querySelector("h2")?.remove();
+
+    // usage (every seventh poll)
+    if (sid && agentTick % 7 === 0) {
+      const u = await d.get(`/api/sessions/${encodeURIComponent(sid)}/usage`).catch(() => null);
+      if (u?.total?.messages) {
+        lastUsage = u;
+        costBtn.hidden = false;
+        costBtn.textContent = fmtUSD(u.total.cost);
+      }
+    }
+
+    // git changes (every fifth poll)
+    if (sid && agentTick % 5 === 0) {
+      const g = await d.get(`/hub/git/status?session=${encodeURIComponent(sid)}`).catch(() => null);
+      const n = g?.files?.length || 0;
+      diffBtn.hidden = !g?.repo;
+      diffBtn.textContent = n ? `差分 ${n}` : "差分";
+      diffBtn.href = `#/d/${id}/s/${encodeURIComponent(sid)}/diff`;
+    }
 
     // subagents (every third poll: it reads a directory of transcripts)
     if (sid && agentTick++ % 3 === 0) {
@@ -1461,6 +1819,21 @@ function notifyButton() {
   return btn;
 }
 
+// updateBadge mirrors the board onto the installed app's icon badge and a
+// header chip: how many sessions need the operator (+ unread finishes).
+function updateBadge(b) {
+  const needs = (b?.needs_you || []).length, done = (b?.done || []).length;
+  try {
+    if (needs + done > 0) navigator.setAppBadge?.(needs + done);
+    else navigator.clearAppBadge?.();
+  } catch {}
+  const el = $("#att");
+  if (!el) return;
+  el.hidden = needs + done === 0;
+  el.textContent = needs ? `要対応 ${needs}` : `未確認 ${done}`;
+  el.classList.toggle("needs", needs > 0);
+}
+
 // ---------- boot ----------
 
 (async function boot() {
@@ -1485,6 +1858,10 @@ function notifyButton() {
     } catch {}
   };
   setInterval(checkUpdate, 30000);
+  // Keep the badge / header chip current on every page.
+  const badgeTick = () => api("/api/board").then(updateBadge).catch(() => {});
+  badgeTick();
+  setInterval(badgeTick, 15000);
   // Installable as an app (PWA); the worker caches nothing.
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   // A tapped notification asks an open window to show its session.

@@ -97,9 +97,19 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 		Prompt    string `json:"prompt"`
 		Cols      int    `json:"cols"`
 		Rows      int    `json:"rows"`
+		// PermissionMode is passed as --permission-mode. bypassPermissions
+		// / dontAsk are not offered: they'd let a remote start skip every
+		// safety prompt.
+		PermissionMode string `json:"permissionMode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	switch req.PermissionMode {
+	case "", "manual", "acceptEdits", "auto", "plan":
+	default:
+		http.Error(w, "permissionMode must be manual, acceptEdits, auto or plan", http.StatusBadRequest)
 		return
 	}
 
@@ -119,6 +129,9 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 	var args []string
 	if req.ResumeID != "" {
 		args = append(args, "--resume", req.ResumeID)
+	}
+	if req.PermissionMode != "" {
+		args = append(args, "--permission-mode", req.PermissionMode)
 	}
 	if strings.HasPrefix(req.Prompt, "-") {
 		// claude would parse it as a flag, not a message.

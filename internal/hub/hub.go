@@ -57,9 +57,10 @@ type Hub struct {
 
 	assets string // hash of the embedded web files; the SPA reloads when it changes
 
-	mu      sync.Mutex
-	conns   map[string]*deviceConn // device id → live tunnel
-	refused map[string]bool        // tailscale logins already logged as refused
+	mu        sync.Mutex
+	conns     map[string]*deviceConn    // device id → live tunnel
+	refused   map[string]bool           // tailscale logins already logged as refused
+	snapshots map[string]deviceSnapshot // device id → latest session list (board)
 }
 
 // deviceConn is one connected device's tunnel plus an HTTP client that
@@ -159,6 +160,9 @@ func (h *Hub) Handler() http.Handler {
 	api.HandleFunc("POST /api/devices/{id}/rotate", h.handleRotateDevice)
 	api.HandleFunc("POST /api/devices/{id}/rename", h.handleRenameDevice)
 	api.HandleFunc("DELETE /api/devices/{id}", h.handleDeleteDevice)
+	api.HandleFunc("GET /api/board", h.handleBoard)
+	api.HandleFunc("GET /api/quick", h.handleQuickGet)
+	api.HandleFunc("PUT /api/quick", h.handleQuickPut)
 	api.HandleFunc("GET /api/push/key", h.handlePushKey)
 	api.HandleFunc("POST /api/push/subscribe", h.handlePushSubscribe)
 	api.HandleFunc("POST /api/push/unsubscribe", h.handlePushUnsubscribe)
@@ -247,6 +251,49 @@ func (h *Hub) logRefused(login string) {
 		h.refused[login] = true
 		log.Printf("hub: refused tailscale login %q (not in --allowed-email)", login)
 	}
+}
+
+// Quick commands: the operator's one-tap prompts ("続けて", "/compact"…),
+// kept per login in the hub so every browser / phone shares them.
+
+var defaultQuick = []string{"続けて", "テストを実行して", "変更をコミットして", "/compact"}
+
+func (h *Hub) quickKey(r *http.Request) string {
+	email, _ := h.auth.user(r)
+	return "quick:" + email
+}
+
+func (h *Hub) handleQuickGet(w http.ResponseWriter, r *http.Request) {
+	v, err := h.st.secret(r.Context(), h.quickKey(r), func() string {
+		b, _ := json.Marshal(defaultQuick)
+		return string(b)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(v))
+}
+
+func (h *Hub) handleQuickPut(w http.ResponseWriter, r *http.Request) {
+	var cmds []string
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&cmds); err != nil {
+		http.Error(w, "want a JSON array of strings", http.StatusBadRequest)
+		return
+	}
+	out := []string{}
+	for _, c := range cmds {
+		if c = strings.TrimSpace(c); c != "" && len(c) <= 2000 && len(out) < 30 {
+			out = append(out, c)
+		}
+	}
+	b, _ := json.Marshal(out)
+	if err := h.st.putKV(r.Context(), h.quickKey(r), string(b)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, out)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

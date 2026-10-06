@@ -522,6 +522,21 @@ machine never accepts inbound connections — its collector dials out.
 - **🔔** in the header turns on push notifications for this browser (the
   installed app on a phone): a new approval, a question or confirmation on
   a ccdash-hosted claude's screen, and a session finishing its turn.
+- **Front page board**: 要対応 (needs you — approval, question, menu on
+  screen) / 作業中 (working) / 未確認 (finished, not yet looked at), across
+  all devices; opening a session marks it read. The app icon badge shows the
+  count. In the TUI the same state shows as `?` / `✓` in the list and the
+  header; `!` filters to those sessions.
+- **差分 (diff)** in a chat opens the working-tree diff: tap a line to leave
+  a note, then **Claude に送る** sends every note (and an optional overall
+  comment) as one prompt.
+- **Cost**: the `$` chip in a chat header shows that session's tokens and
+  API-price estimate (by model, subagents included); a device page shows
+  today / 7 days with a daily bar chart; the TUI header shows today. On a
+  subscription this is an estimate at list price, not your bill.
+- Above the input: **quick commands** (tap to send; ✎ edits them, shared
+  across browsers), 🎤 voice input, `/` completion, and new sessions take a
+  permission mode (manual / acceptEdits / auto / plan).
 - **Subagents**: when a session has run subagents (the Agent tool), a bar
   under the chat header shows how many are running; open it for each one's
   type, description, elapsed time and latest tool call, and tap one for its

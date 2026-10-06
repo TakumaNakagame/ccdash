@@ -159,6 +159,12 @@ func (s *Server) hubHandler() http.Handler {
 			}
 			handleHubUpload(w, r)
 			return
+		case r.Method == http.MethodGet && r.URL.Path == "/hub/git/status":
+			s.handleHubGitStatus(w, r)
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/hub/git/diff":
+			s.handleHubGitDiff(w, r)
+			return
 		case r.Method == http.MethodGet && r.URL.Path == "/hub/subagents":
 			s.handleHubSubagents(w, r)
 			return
@@ -198,8 +204,8 @@ func (s *Server) hubHandler() http.Handler {
 }
 
 var (
-	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|sessions/[^/]+/transcript)$`)
-	hubSessionEdit = regexp.MustCompile(`^/api/sessions/[^/]+/(archive|favorite|title|group)$`)
+	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|usage|sessions/[^/]+/(transcript|usage))$`)
+	hubSessionEdit = regexp.MustCompile(`^/api/sessions/[^/]+/(archive|favorite|title|group|seen)$`)
 	// claude -p runs; summarize.Kickoff / KickoffTitles refuse them
 	// themselves while summary_enabled is off.
 	hubSummarize   = regexp.MustCompile(`^/api/(sessions/[^/]+/summarize|titles)$`)

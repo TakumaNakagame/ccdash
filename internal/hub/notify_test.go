@@ -8,36 +8,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
-)
 
-func TestScreenPromptKind(t *testing.T) {
-	ask := []string{
-		"←  ☐ 果物  ☐ 色  ✔ Submit  →", "", "好きな果物はどれですか？", "",
-		"❯ 1. りんご", "     りんご", "  2. みかん", "  3. Type something.", "──────", "  4. Chat about this", "",
-		"Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
-	}
-	if k, q := screenPromptKind(ask); k != "question" || q != "好きな果物はどれですか？" {
-		t.Errorf("ask dialog = %q %q", k, q)
-	}
-	perm := []string{"╭────╮", "│ Bash command │", "│ rm -rf build │", "│ Do you want to proceed? │", "│ ❯ 1. Yes │", "│   2. No │", "╰────╯"}
-	if k, q := screenPromptKind(perm); k != "confirm" || q != "Do you want to proceed?" {
-		t.Errorf("permission dialog = %q %q", k, q)
-	}
-	trust := []string{" Quick safety check: Is this a project you created or one you trust?", "", " ❯ No, exit", "   Yes, I trust this folder", "", " Enter to confirm · Esc to cancel"}
-	if k, q := screenPromptKind(trust); k != "confirm" || !strings.Contains(q, "trust") {
-		t.Errorf("unnumbered trust menu = %q %q", k, q)
-	}
-	// A wrapped past prompt above the (empty) input box is not a menu.
-	scrollback := []string{"❯ テストです。何も調べず、AskUserQuestion を使って", "  1問目「好きな果物」を聞いて", "● はい", "────", "❯ ", "────"}
-	if k, _ := screenPromptKind(scrollback); k != "" {
-		t.Errorf("past prompt detected as %q", k)
-	}
-	idle := []string{"● done", "────", "❯ ", "────", "  ⏵⏵ auto mode on"}
-	if k, _ := screenPromptKind(idle); k != "" {
-		t.Errorf("idle input prompt detected as %q", k)
-	}
-}
+	"github.com/takumanakagame/ccmanage/internal/model"
+)
 
 // fakeDevice serves the device API the watcher polls; tests mutate it
 // between polls.
@@ -71,8 +44,6 @@ func TestWatchOnce(t *testing.T) {
 	f := &fakeDevice{
 		sessions:  `[{"session_id":"s1","num":7,"title":"build the thing","status":"active","first_seen":"2026-10-05T00:00:00Z","last_seen":"2026-10-05T00:00:00Z"}]`,
 		approvals: `[]`,
-		ptys:      `[{"key":"pid-10","alive":true,"pid":10},{"key":"s1","alive":true,"pid":10}]`,
-		screens:   map[string][]string{"s1": {"❯ "}},
 	}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
@@ -80,49 +51,61 @@ func TestWatchOnce(t *testing.T) {
 	d := Device{ID: "dev1", Name: "haruna"}
 	st := newWatchState()
 	ctx := context.Background()
+	set := func(js string) { f.mu.Lock(); f.sessions = js; f.mu.Unlock() }
 
-	if ns, err := watchOnce(ctx, c, d, st); err != nil || len(ns) != 0 {
-		t.Fatalf("baseline poll = %v %v, want nothing", ns, err)
+	if ns, ss, err := watchOnce(ctx, c, d, st); err != nil || len(ns) != 0 || len(ss) != 1 {
+		t.Fatalf("baseline poll = %v %d %v, want nothing", ns, len(ss), err)
 	}
 
-	// A question appears on the hosted claude's screen.
-	f.mu.Lock()
-	f.screens["s1"] = []string{"☐ 季節", "好きな季節は？", "❯ 1. 春", "  2. 夏", "  3. Type something.", "  4. Chat about this", "Enter to select"}
-	f.mu.Unlock()
-	ns, _ := watchOnce(ctx, c, d, st)
-	if len(ns) != 1 || !strings.Contains(ns[0].Title, "質問") || ns[0].URL != "/#/d/dev1/s/s1" || !strings.Contains(ns[0].Body, "#7 build the thing") {
+	// The collector marks a question.
+	set(`[{"session_id":"s1","num":7,"title":"build the thing","status":"active","attention":"needs_you","attention_reason":"質問: 好きな季節は？","first_seen":"2026-10-05T00:00:00Z","last_seen":"2026-10-05T00:00:00Z"}]`)
+	ns, _, _ := watchOnce(ctx, c, d, st)
+	if len(ns) != 1 || !strings.Contains(ns[0].Title, "要対応") || ns[0].URL != "/#/d/dev1/s/s1" || !strings.Contains(ns[0].Body, "#7 build the thing") || !strings.Contains(ns[0].Body, "好きな季節") {
 		t.Fatalf("question = %+v", ns)
 	}
-	// Same question again: no repeat.
-	if ns, _ := watchOnce(ctx, c, d, st); len(ns) != 0 {
-		t.Fatalf("repeat question notified: %+v", ns)
+	if ns, _, _ := watchOnce(ctx, c, d, st); len(ns) != 0 {
+		t.Fatalf("repeat notified: %+v", ns)
 	}
 
-	// A session that ran a whole short turn between two polls (never seen
-	// active) still counts as finished.
+	// The turn finishes (done), and an approval appears on another session.
+	set(`[{"session_id":"s1","num":7,"title":"build the thing","status":"idle","attention":"done","first_seen":"2026-10-05T00:00:00Z","last_seen":"2026-10-05T00:00:00Z"},
+	      {"session_id":"s2","num":8,"title":"other","status":"active","attention":"needs_you","attention_reason":"承認待ち","pending_count":1,"first_seen":"2026-10-05T00:00:00Z","last_seen":"2026-10-05T00:00:00Z"}]`)
 	f.mu.Lock()
-	f.sessions = strings.Replace(f.sessions, `]`, `,{"session_id":"s3","num":9,"title":"quick","status":"idle","first_seen":"2026-10-05T00:00:00Z","last_seen":"`+time.Now().UTC().Format(time.RFC3339)+`"}]`, 1)
-	f.mu.Unlock()
-	if ns, _ := watchOnce(ctx, c, d, st); len(ns) != 1 || !strings.Contains(ns[0].Title, "完了") || !strings.Contains(ns[0].Body, "#9") {
-		t.Fatalf("short turn = %+v", ns)
-	}
-	if ns, _ := watchOnce(ctx, c, d, st); len(ns) != 0 {
-		t.Fatalf("idle session re-notified: %+v", ns)
-	}
-
-	// The turn ends and an approval for another session arrives.
-	f.mu.Lock()
-	f.screens["s1"] = []string{"❯ "}
-	f.sessions = strings.Replace(f.sessions, `"active"`, `"idle"`, 1)
 	f.approvals = `[{"id":3,"session_id":"s2","tool":"Bash","status":"pending","tool_input":{},"timestamp":"2026-10-05T00:00:00Z"}]`
 	f.mu.Unlock()
-	ns, _ = watchOnce(ctx, c, d, st)
-	titles := []string{}
+	ns, _, _ = watchOnce(ctx, c, d, st)
+	got := []string{}
 	for _, n := range ns {
-		titles = append(titles, n.Title)
+		got = append(got, n.Title+"/"+n.Body)
 	}
-	if len(ns) != 2 || !strings.Contains(strings.Join(titles, ","), "完了") || !strings.Contains(strings.Join(titles, ","), "承認待ち") {
-		t.Fatalf("done + approval = %v", titles)
+	joined := strings.Join(got, ",")
+	if len(ns) != 2 || !strings.Contains(joined, "完了") || !strings.Contains(joined, "承認待ち: Bash") {
+		t.Fatalf("done + approval = %v", got)
+	}
+
+	// Seen: attention cleared → no notification.
+	set(`[{"session_id":"s1","num":7,"title":"build the thing","status":"idle","first_seen":"2026-10-05T00:00:00Z","last_seen":"2026-10-05T00:00:00Z"}]`)
+	if ns, _, _ := watchOnce(ctx, c, d, st); len(ns) != 0 {
+		t.Fatalf("cleared attention notified: %+v", ns)
+	}
+}
+
+func TestBoard(t *testing.T) {
+	hub := newTestHub(t, true)
+	hub.storeSnapshot(Device{ID: "d1", Name: "haruna"}, []model.Session{
+		{SessionID: "a", Status: model.StatusActive},
+		{SessionID: "b", Status: model.StatusIdle, Attention: model.AttentionNeedsYou},
+		{SessionID: "c", Status: model.StatusIdle, Attention: model.AttentionDone},
+		{SessionID: "d", Status: model.StatusIdle},
+	})
+	w := serve(hub.Handler(), "GET", "/api/board", "", nil)
+	var b map[string][]struct {
+		DeviceName string        `json:"device_name"`
+		Session    model.Session `json:"session"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &b)
+	if len(b["needs_you"]) != 1 || len(b["working"]) != 1 || len(b["done"]) != 1 || b["done"][0].Session.SessionID != "c" || b["needs_you"][0].DeviceName != "haruna" {
+		t.Fatalf("board = %s", w.Body)
 	}
 }
 

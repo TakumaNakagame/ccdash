@@ -9,7 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -204,13 +204,19 @@ func (h *Hub) handlePushTest(w http.ResponseWriter, r *http.Request) {
 
 // ---- device watcher ----
 
+// The collector decides what each session wants from the operator
+// (model.Session.Attention: "needs_you" / "done"; see internal/server
+// attention.go), so the hub only watches that field change. Each look also
+// refreshes the device's snapshot for the cross-device board.
+
 type watchState struct {
 	first     bool
-	status    map[string]model.SessionStatus
-	lastSeen  map[string]time.Time
-	approvals map[int64]bool
-	prompts   map[string]string // pty key → prompt signature
+	attention map[string]string // session id → attention|reason last seen
 	lastSent  map[string]time.Time
+}
+
+func newWatchState() *watchState {
+	return &watchState{first: true, attention: map[string]string{}, lastSent: map[string]time.Time{}}
 }
 
 // watchDevice polls one connected device until ctx ends (the tunnel closed).
@@ -219,10 +225,14 @@ func (h *Hub) watchDevice(ctx context.Context, d Device, dc *deviceConn) {
 	st := newWatchState()
 	t := time.NewTicker(watchInterval)
 	defer t.Stop()
+	defer h.dropSnapshot(d.ID)
 	for {
-		ns, err := watchOnce(ctx, client, d, st)
+		ns, sessions, err := watchOnce(ctx, client, d, st)
 		if err != nil && ctx.Err() == nil {
 			log.Printf("hub: watch %s: %v", d.Name, err)
+		}
+		if err == nil {
+			h.storeSnapshot(d, sessions)
 		}
 		for _, n := range ns {
 			h.push(ctx, n)
@@ -252,207 +262,127 @@ func getJSON(ctx context.Context, c *http.Client, path string, v any) error {
 	return json.NewDecoder(resp.Body).Decode(v)
 }
 
-// watchOnce takes one look at a device and returns the notifications due.
-// The first look only records a baseline.
-func watchOnce(ctx context.Context, c *http.Client, d Device, st *watchState) ([]notification, error) {
+func sessionLabel(s model.Session) string {
+	t := s.DisplayTitle()
+	if r := []rune(t); len(r) > 60 {
+		t = string(r[:60]) + "…"
+	}
+	if s.Num > 0 {
+		return fmt.Sprintf("#%d %s", s.Num, t)
+	}
+	return t
+}
+
+// watchOnce takes one look at a device and returns the notifications due
+// plus the session list. The first look only records a baseline.
+func watchOnce(ctx context.Context, c *http.Client, d Device, st *watchState) ([]notification, []model.Session, error) {
 	var sessions []model.Session
 	if err := getJSON(ctx, c, "/api/sessions", &sessions); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	// Approvals name the tool, which makes a better "needs you" line.
 	var approvals []model.Approval
 	_ = getJSON(ctx, c, "/api/approvals", &approvals) // 403 when approvals are off
-	var ptys []struct {
-		Key   string `json:"key"`
-		Alive bool   `json:"alive"`
-		PID   int    `json:"pid"`
+	toolOf := map[string]string{}
+	for _, a := range approvals {
+		if a.Status == model.ApprovalPending {
+			toolOf[a.SessionID] = a.Tool
+		}
 	}
-	_ = getJSON(ctx, c, "/pty/", &ptys)
 
-	byID := map[string]model.Session{}
-	for _, s := range sessions {
-		byID[s.SessionID] = s
-	}
-	label := func(sid string) string {
-		s, ok := byID[sid]
-		if !ok {
-			return "新しいセッション"
-		}
-		t := s.DisplayTitle()
-		if r := []rune(t); len(r) > 60 {
-			t = string(r[:60]) + "…"
-		}
-		if s.Num > 0 {
-			return fmt.Sprintf("#%d %s", s.Num, t)
-		}
-		return t
-	}
 	var out []notification
-	send := func(sid, key, title, body string) {
-		if st.first {
-			return
+	now := map[string]string{}
+	for _, s := range sessions {
+		if s.Attention == "" {
+			continue
 		}
+		reason := s.AttentionReason
+		if tool := toolOf[s.SessionID]; tool != "" && reason == "承認待ち" {
+			reason = "承認待ち: " + tool
+		}
+		sig := s.Attention + "|" + reason
+		now[s.SessionID] = sig
+		if st.first || st.attention[s.SessionID] == sig {
+			continue
+		}
+		key := s.SessionID + ":" + s.Attention
 		if time.Since(st.lastSent[key]) < sessionCooldown {
-			return
+			continue
 		}
 		st.lastSent[key] = time.Now()
-		u := "/#/d/" + d.ID
-		if sid != "" {
-			u += "/s/" + url.PathEscape(sid)
-		}
-		out = append(out, notification{Title: d.Name + " · " + title, Body: body, URL: u, Tag: d.ID + ":" + key})
-	}
-
-	// New approvals.
-	live := map[int64]bool{}
-	for _, a := range approvals {
-		if a.Status != model.ApprovalPending {
-			continue
-		}
-		live[a.ID] = true
-		if !st.approvals[a.ID] {
-			send(a.SessionID, a.SessionID, "承認待ち", fmt.Sprintf("%s — %s", a.Tool, label(a.SessionID)))
-		}
-	}
-	st.approvals = live
-
-	// Turns that finished. A short turn can start and end between two
-	// polls, so "was active, now isn't" misses it; a session that is idle
-	// (alive, waiting for input) and whose last activity moved since the
-	// previous look has finished a turn too — including a brand-new session
-	// finishing its first one.
-	for _, s := range sessions {
-		prev, seen := st.status[s.SessionID]
-		prevSeen := st.lastSeen[s.SessionID]
-		switch {
-		case seen && prev == model.StatusActive && s.Status != model.StatusActive:
-			send(s.SessionID, s.SessionID+":done", "完了", label(s.SessionID))
-		case s.Status == model.StatusIdle && s.LastSeen.After(prevSeen) && (seen || time.Since(s.LastSeen) < 2*watchInterval+10*time.Second):
-			send(s.SessionID, s.SessionID+":done", "完了", label(s.SessionID))
-		}
-		st.status[s.SessionID] = s.Status
-		st.lastSeen[s.SessionID] = s.LastSeen
-	}
-
-	// Questions / confirmations on hosted claudes' screens. One key per
-	// process (a spawn is listed under pid-N and later its session id too).
-	keyOf := map[int]string{}
-	for _, p := range ptys {
-		if !p.Alive {
-			continue
-		}
-		if k, ok := keyOf[p.PID]; !ok || strings.HasPrefix(k, "pid-") {
-			keyOf[p.PID] = p.Key
-		}
-	}
-	prompts := map[string]string{}
-	for _, key := range keyOf {
-		var scr struct {
-			Rows []string `json:"rows"`
-		}
-		if err := getJSON(ctx, c, "/pty/"+url.PathEscape(key)+"/text", &scr); err != nil {
-			continue
-		}
-		kind, text := screenPromptKind(scr.Rows)
-		if kind == "" {
-			continue
-		}
-		prompts[key] = kind + ":" + text
-		if st.prompts[key] != prompts[key] {
-			sid := ""
-			if !strings.HasPrefix(key, "pid-") {
-				sid = key
+		n := notification{URL: "/#/d/" + d.ID + "/s/" + url.PathEscape(s.SessionID), Tag: d.ID + ":" + s.SessionID}
+		switch s.Attention {
+		case model.AttentionNeedsYou:
+			n.Title = d.Name + " · 要対応"
+			n.Body = sessionLabel(s)
+			if reason != "" {
+				n.Body += "\n" + reason
 			}
-			title := "確認が必要です"
-			if kind == "question" {
-				title = "Claude からの質問"
-			}
-			body := text
-			if sid != "" {
-				body = label(sid) + "\n" + text
-			}
-			send(sid, key, title, body)
+		case model.AttentionDone:
+			n.Title = d.Name + " · 完了"
+			n.Body = sessionLabel(s)
+		default:
+			continue
 		}
+		out = append(out, n)
 	}
-	st.prompts = prompts
+	st.attention = now
 	st.first = false
-	return out, nil
+	return out, sessions, nil
 }
 
-func newWatchState() *watchState {
-	return &watchState{first: true, status: map[string]model.SessionStatus{}, lastSeen: map[string]time.Time{}, approvals: map[int64]bool{}, prompts: map[string]string{}, lastSent: map[string]time.Time{}}
+// ---- cross-device board ----
+
+type deviceSnapshot struct {
+	Device   Device
+	Sessions []model.Session
+	At       time.Time
 }
 
-var (
-	numberedCursor = regexp.MustCompile(`^\s*❯\s*\d{1,2}[.)]\s`)
-	askTabs        = regexp.MustCompile(`[☐☒]\s*\S`)
-)
+func (h *Hub) storeSnapshot(d Device, sessions []model.Session) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.snapshots == nil {
+		h.snapshots = map[string]deviceSnapshot{}
+	}
+	h.snapshots[d.ID] = deviceSnapshot{Device: d, Sessions: sessions, At: time.Now()}
+}
 
-// screenPromptKind spots what the portal's chat shows as cards (see
-// screenAsk / screenPrompt in web/app.js): Claude Code's AskUserQuestion
-// dialog ("question") or a numbered confirmation menu — permission, plan
-// approval, folder trust ("confirm"). text is the question line.
-func screenPromptKind(rows []string) (kind, text string) {
-	all := strings.Join(rows, "\n")
-	if strings.Contains(all, "Enter to select") && strings.Contains(all, "Chat about this") {
-		for i, r := range rows {
-			if askTabs.MatchString(r) {
-				for _, q := range rows[i+1:] {
-					if t := strings.TrimSpace(q); t != "" {
-						return "question", t
-					}
-				}
+func (h *Hub) dropSnapshot(id string) {
+	h.mu.Lock()
+	delete(h.snapshots, id)
+	h.mu.Unlock()
+}
+
+type boardCard struct {
+	DeviceID   string        `json:"device_id"`
+	DeviceName string        `json:"device_name"`
+	Session    model.Session `json:"session"`
+}
+
+// handleBoard is the portal's cross-device view, served from the watchers'
+// latest snapshots: sessions that need the operator, are working, or
+// finished unread — without a round trip to every device.
+func (h *Hub) handleBoard(w http.ResponseWriter, r *http.Request) {
+	board := map[string][]boardCard{"needs_you": {}, "working": {}, "done": {}}
+	h.mu.Lock()
+	for _, snap := range h.snapshots {
+		for _, s := range snap.Sessions {
+			c := boardCard{DeviceID: snap.Device.ID, DeviceName: snap.Device.Name, Session: s}
+			switch {
+			case s.Attention == model.AttentionNeedsYou:
+				board["needs_you"] = append(board["needs_you"], c)
+			case s.Status == model.StatusActive:
+				board["working"] = append(board["working"], c)
+			case s.Attention == model.AttentionDone:
+				board["done"] = append(board["done"], c)
 			}
 		}
-		return "question", ""
 	}
-	unbox := func(r string) string { return strings.TrimSpace(strings.Trim(strings.TrimSpace(r), "│|")) }
-	for i := len(rows) - 1; i >= 0; i-- {
-		if !numberedCursor.MatchString(unbox(rows[i])) {
-			continue
-		}
-		for j := i - 1; j >= 0 && j >= i-12; j-- {
-			t := unbox(rows[j])
-			if strings.HasSuffix(t, "?") || strings.HasSuffix(t, "？") {
-				return "confirm", t
-			}
-		}
-		return "confirm", ""
+	h.mu.Unlock()
+	for _, k := range []string{"needs_you", "working", "done"} {
+		cs := board[k]
+		sort.Slice(cs, func(i, j int) bool { return cs[i].Session.LastSeen.After(cs[j].Session.LastSeen) })
 	}
-	// Unnumbered list (the folder-trust question, the theme picker): the
-	// cursor row has siblings in the column after the "❯". A lone "❯" row
-	// is claude's input prompt, not a menu.
-	// Only the bottom-most "❯" row counts: higher ones are past prompts in
-	// the scrollback, and an empty one is the input box (no dialog open).
-	for i := len(rows) - 1; i >= 0; i-- {
-		r := unbox(rows[i])
-		col := strings.Index(r, "❯")
-		if col < 0 {
-			continue
-		}
-		if strings.TrimSpace(r[col+len("❯"):]) == "" {
-			return "", ""
-		}
-		raw := rows[i]
-		c := strings.Index(raw, "❯")
-		sib := func(l string) bool {
-			return len(l) > c+len("❯") && strings.TrimSpace(l[:c]) == "" && strings.TrimSpace(l[c:]) != "" && !strings.Contains(l, "─")
-		}
-		n := 0
-		for j := i - 1; j >= 0 && sib(rows[j]); j-- {
-			n++
-		}
-		for j := i + 1; j < len(rows) && sib(rows[j]); j++ {
-			n++
-		}
-		if n == 0 {
-			return "", ""
-		}
-		for j := i - 1; j >= 0 && j >= i-12; j-- {
-			if t := unbox(rows[j]); strings.HasSuffix(t, "?") || strings.HasSuffix(t, "？") || strings.Contains(t, "?") {
-				return "confirm", t
-			}
-		}
-		return "confirm", ""
-	}
-	return "", ""
+	writeJSON(w, board)
 }

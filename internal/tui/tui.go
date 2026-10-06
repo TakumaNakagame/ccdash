@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/takumanakagame/ccmanage/internal/usage"
 	"io"
 	"net/http"
 	"os"
@@ -149,6 +150,16 @@ type model struct {
 	}
 	searchQuery   string // "" = no filter; case-insensitive substring search
 	accountFilter string // "" = all accounts; otherwise account name (from accounts.json)
+	// attentionOnly (!) narrows the list to sessions that need the
+	// operator or finished a turn nobody has looked at yet.
+	attentionOnly bool
+	// usageToday is today's API-price estimate across sessions, refreshed
+	// every usageEvery ticks (header).
+	usageToday *usage.Totals
+	usageTicks int
+	// seenSent remembers the unread "done" marks this TUI already cleared,
+	// so a slow refresh doesn't re-send MarkSeen every tick.
+	seenSent map[string]time.Time
 
 	settings settings.Settings
 
@@ -514,6 +525,22 @@ func (m *model) runUpdateCmd() tea.Cmd {
 }
 
 type tickMsg time.Time
+
+type usageMsg struct{ today usage.Totals }
+
+// usageEvery is how many refresh ticks pass between usage refreshes.
+const usageEvery = 30
+
+func (m *model) usageCmd() tea.Cmd {
+	return func() tea.Msg {
+		sum, err := m.store.UsageSummary(m.ctx, 1)
+		if err != nil {
+			return nil
+		}
+		return usageMsg{today: sum.Today}
+	}
+}
+
 type animTickMsg time.Time
 
 // updateCheckMsg is the result of the startup release-tag probe. tag is
@@ -669,7 +696,14 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 	case tickMsg:
 		m.lastTick = time.Time(msg)
+		m.usageTicks++
+		if m.usageTicks%usageEvery == 1 {
+			return m, tea.Batch(m.refresh(), tickCmd(m.tickInterval()), m.usageCmd())
+		}
 		return m, tea.Batch(m.refresh(), tickCmd(m.tickInterval()))
+	case usageMsg:
+		t := msg.today
+		m.usageToday = &t
 	case animTickMsg:
 		m.animTick++
 		return m, animTickCmd()
@@ -780,8 +814,12 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selSess < 0 {
 			m.selSess = 0
 		}
+		seen := m.markSelectedSeen()
 		if cur := m.currentSessionID(); cur != "" && cur != prev {
-			return m, m.loadTailCmd()
+			return m, tea.Batch(m.loadTailCmd(), seen)
+		}
+		if seen != nil {
+			return m, seen
 		}
 	case eventsMsg:
 		m.events = []mdl.Event(msg)
@@ -1240,6 +1278,18 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "f":
 		return m, m.toggleFavoriteCurrent()
+	case "!":
+		m.attentionOnly = !m.attentionOnly
+		m.applyGroupFilter()
+		if m.selSess >= len(m.sessions) {
+			m.selSess = max(len(m.sessions)-1, 0)
+		}
+		if m.attentionOnly {
+			m.flash = "要対応・未確認だけ表示（! で解除）"
+		} else {
+			m.flash = "すべて表示"
+		}
+		return m, m.loadTailCmd()
 	case "t":
 		return m, m.startTitleEdit()
 	case "T":
@@ -1346,6 +1396,15 @@ func (m *model) applyGroupFilter() {
 		out := make([]mdl.Session, 0, len(src))
 		for _, s := range src {
 			if groupOf(s) == m.groupFilter {
+				out = append(out, s)
+			}
+		}
+		src = out
+	}
+	if m.attentionOnly {
+		out := make([]mdl.Session, 0, len(src))
+		for _, s := range src {
+			if s.Attention != "" {
 				out = append(out, s)
 			}
 		}
@@ -1930,6 +1989,30 @@ func (m *model) toggleArchiveCurrent() tea.Cmd {
 			return attachDoneMsg{err: err}
 		}
 		return attachDoneMsg{msg: verb + " " + shortID(sid)}
+	}
+}
+
+// markSelectedSeen clears the unread "done" mark of the session under the
+// cursor: it is on screen (the right pane shows it), so it has been seen.
+func (m *model) markSelectedSeen() tea.Cmd {
+	if m.selSess < 0 || m.selSess >= len(m.sessions) {
+		return nil
+	}
+	s := m.sessions[m.selSess]
+	if s.Attention != mdl.AttentionDone {
+		return nil
+	}
+	if m.seenSent == nil {
+		m.seenSent = map[string]time.Time{}
+	}
+	if t, ok := m.seenSent[s.SessionID]; ok && !s.AttentionAt.After(t) {
+		return nil
+	}
+	m.seenSent[s.SessionID] = time.Now()
+	sid := s.SessionID
+	return func() tea.Msg {
+		_ = m.store.MarkSeen(m.ctx, sid)
+		return nil
 	}
 }
 
@@ -2656,7 +2739,29 @@ func (m *model) renderHeader() string {
 		// second visible line — that wrap was eating the tabs row.
 		pendingPart = pendingStyle.Render(fmt.Sprintf("⚠ pending: %d", pendingTotal))
 	}
-	right := subtitleStyle.Render(fmt.Sprintf("sessions: %d  ", len(m.sessions))) +
+	needs, unread := 0, 0
+	for _, s := range m.allSessions {
+		switch s.Attention {
+		case mdl.AttentionNeedsYou:
+			needs++
+		case mdl.AttentionDone:
+			unread++
+		}
+	}
+	attPart := ""
+	if needs > 0 {
+		attPart += pendingStyle.Render(fmt.Sprintf("? 要対応 %d", needs)) + "  "
+	}
+	if unread > 0 {
+		attPart += statusIdle.Render(fmt.Sprintf("✓ 未確認 %d", unread)) + "  "
+	}
+	if m.attentionOnly {
+		attPart += subtitleStyle.Render("[!]") + "  "
+	}
+	if m.usageToday != nil && m.usageToday.Messages > 0 {
+		attPart += subtitleStyle.Render(fmt.Sprintf("今日 $%.2f", m.usageToday.Cost)) + "  "
+	}
+	right := subtitleStyle.Render(fmt.Sprintf("sessions: %d  ", len(m.sessions))) + attPart +
 		pendingPart +
 		subtitleStyle.Render("  "+m.lastTick.Format("15:04:05"))
 	switch m.serverMode {
@@ -2769,7 +2874,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  S skill  </> resize  enter attach  a/A/d allow/keep/deny  s sum  f fav  t/T rename/group  ctrl+t auto-title  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
+	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  S skill  </> resize  enter attach  a/A/d allow/keep/deny  s sum  f fav  ! needs-you  t/T rename/group  ctrl+t auto-title  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
 	if m.pane == paneSessions {
 		if live := m.liveForCurrent(); live != nil && !live.exited {
 			if m.liveFocus {
@@ -3513,6 +3618,14 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		marker = "▶"
 	}
 	statusDot := renderStatusDot(s.Status, m.animTick)
+	switch {
+	case s.Attention == mdl.AttentionNeedsYou && s.Status != mdl.StatusActive:
+		statusDot = pendingStyle.Render("?")
+	case s.Attention == mdl.AttentionNeedsYou:
+		statusDot = pendingStyle.Bold(true).Render("?")
+	case s.Attention == mdl.AttentionDone:
+		statusDot = statusIdle.Bold(true).Render("✓")
+	}
 
 	title := s.DisplayTitle()
 	if title == "" {
@@ -3560,6 +3673,12 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	}
 	if s.PendingCount > 0 {
 		parts = append(parts, pendingStyle.Render(fmt.Sprintf("⚠%d pending", s.PendingCount)))
+	} else if s.Attention == mdl.AttentionNeedsYou {
+		reason := s.AttentionReason
+		if reason == "" {
+			reason = "要対応"
+		}
+		parts = append(parts, pendingStyle.Render("? "+shorten(reason, 60)))
 	}
 	switch s.SummaryStatus {
 	case "running":

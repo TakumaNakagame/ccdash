@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/takumanakagame/ccmanage/internal/usage"
 	"io"
 	"net/http"
 	"os"
@@ -48,6 +49,26 @@ func (l *Local) SetArchived(ctx context.Context, sessionID string, v bool) error
 
 func (l *Local) SetFavorite(ctx context.Context, sessionID string, v bool) error {
 	return l.db.SetFavorite(ctx, sessionID, v)
+}
+
+func (l *Local) UsageSummary(ctx context.Context, days int) (usage.Summary, error) {
+	paths := map[string]string{}
+	for _, archived := range []bool{false, true} {
+		ss, err := l.db.ListSessions(ctx, archived)
+		if err != nil {
+			return usage.Summary{}, err
+		}
+		for _, x := range ss {
+			if x.TranscriptPath != "" {
+				paths[x.SessionID] = x.TranscriptPath
+			}
+		}
+	}
+	return usage.Default.Summarize(paths, days), nil
+}
+
+func (l *Local) MarkSeen(ctx context.Context, sessionID string) error {
+	return l.db.MarkSeen(ctx, sessionID)
 }
 
 func (l *Local) SetCustomTitle(ctx context.Context, sessionID, title string) error {

@@ -45,7 +45,19 @@ type Session struct {
 	LastSeen       time.Time     `json:"last_seen"`
 	Status         SessionStatus `json:"status"`
 	PendingCount   int           `json:"pending_count,omitempty"`
+	// Attention is what the session wants from the operator: "needs_you"
+	// (an approval, a question, a menu on screen) or "done" (finished a turn
+	// the operator hasn't looked at yet); "" otherwise. See internal/server
+	// attention.go for who sets and clears it.
+	Attention       string    `json:"attention,omitempty"`
+	AttentionReason string    `json:"attention_reason,omitempty"`
+	AttentionAt     time.Time `json:"attention_at,omitzero"`
 }
+
+const (
+	AttentionNeedsYou = "needs_you"
+	AttentionDone     = "done"
+)
 
 // DisplayTitle returns the operator-set title when present, then the
 // generated one (ctrl+t), then the auto-derived first prompt.

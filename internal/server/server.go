@@ -138,9 +138,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/favorite", wrap(s.handleAPIFavorite))
 	s.mux.HandleFunc("POST /api/sessions/{id}/title", wrap(s.handleAPITitle))
 	s.mux.HandleFunc("POST /api/sessions/{id}/group", wrap(s.handleAPIGroup))
+	s.mux.HandleFunc("POST /api/sessions/{id}/seen", wrap(s.handleAPISeen))
 	s.mux.HandleFunc("POST /api/sessions/{id}/summarize", wrap(s.handleAPISummarize))
 	s.mux.HandleFunc("POST /api/titles", wrap(s.handleAPITitles))
 	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
+	s.mux.HandleFunc("GET /api/sessions/{id}/usage", wrap(s.handleAPISessionUsage))
+	s.mux.HandleFunc("GET /api/usage", wrap(s.handleAPIUsage))
 	s.mux.HandleFunc("GET /api/settings", wrap(s.handleAPISettingsList))
 	s.mux.HandleFunc("PUT /api/settings/{key}", wrap(s.handleAPISettingSet))
 }
@@ -235,6 +238,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	s.syncInstalledHooks()
 	go s.discoveryLoop(ctx)
 	go s.hubLoop(ctx)
+	go s.attentionLoop(ctx)
 	errCh := make(chan error, len(lns))
 	for _, ln := range lns {
 		go func(l net.Listener) { errCh <- s.srv.Serve(l) }(ln)
@@ -432,6 +436,7 @@ type hookPayload struct {
 	ToolUseID      string          `json:"tool_use_id"`
 	Error          string          `json:"error"`
 	DurationMS     int64           `json:"duration_ms"`
+	Message        string          `json:"message"` // Notification hook
 }
 
 func readPayload(r *http.Request) (*hookPayload, json.RawMessage, error) {
@@ -576,6 +581,7 @@ func (s *Server) handleUserPrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.ensureSessionAt(r, p, model.StatusActive, true) // a prompt is what moves last_seen
+	_ = s.db.ClearAttention(r.Context(), p.SessionID, "")
 	summary := truncate(strings.TrimSpace(p.Prompt), 200)
 	_, _ = s.db.AppendEvent(r.Context(), &model.Event{
 		SessionID: p.SessionID,
@@ -600,6 +606,7 @@ func (s *Server) handlePreTool(w http.ResponseWriter, r *http.Request) {
 		Summary:   summarizeToolInput(p.ToolName, p.ToolInput),
 		Payload:   raw,
 	})
+	s.attentionFromPreTool(r.Context(), p)
 	writeOK(w, nil)
 }
 
@@ -628,6 +635,7 @@ func (s *Server) handlePostTool(w http.ResponseWriter, r *http.Request) {
 	// matches when we got lucky. Fall back to closing the oldest pending
 	// approval with the same session+tool — that's almost always the one.
 	_ = s.db.ResolveOldestPendingForTool(r.Context(), p.SessionID, p.ToolName, model.ApprovalResolved)
+	s.attentionFromPostTool(r.Context(), p)
 	writeOK(w, nil)
 }
 
@@ -651,6 +659,7 @@ func (s *Server) handlePostToolFailure(w http.ResponseWriter, r *http.Request) {
 	})
 	_ = s.db.ResolvePendingByToolUseID(r.Context(), p.SessionID, p.ToolUseID, model.ApprovalFailed)
 	_ = s.db.ResolveOldestPendingForTool(r.Context(), p.SessionID, p.ToolName, model.ApprovalFailed)
+	s.attentionFromPostTool(r.Context(), p)
 	writeOK(w, nil)
 }
 
@@ -827,6 +836,7 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		Summary:   "stop",
 		Payload:   raw,
 	})
+	_ = s.db.SetAttention(r.Context(), p.SessionID, model.AttentionDone, "")
 	writeOK(w, nil)
 }
 
@@ -857,6 +867,7 @@ func (s *Server) handleNotification(w http.ResponseWriter, r *http.Request) {
 		Summary:   "notification",
 		Payload:   raw,
 	})
+	s.attentionFromNotification(r.Context(), p)
 	writeOK(w, nil)
 }
 

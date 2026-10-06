@@ -12,6 +12,7 @@ package store
 
 import (
 	"context"
+	"github.com/takumanakagame/ccmanage/internal/usage"
 	"time"
 
 	"github.com/takumanakagame/ccmanage/internal/model"
@@ -35,6 +36,11 @@ type Store interface {
 
 	SetArchived(ctx context.Context, sessionID string, v bool) error
 	SetFavorite(ctx context.Context, sessionID string, v bool) error
+	// MarkSeen records that the operator looked at the session (clears an
+	// unread "done" attention mark).
+	MarkSeen(ctx context.Context, sessionID string) error
+	// UsageSummary totals tokens / API-price estimate over the last days.
+	UsageSummary(ctx context.Context, days int) (usage.Summary, error)
 	SetCustomTitle(ctx context.Context, sessionID, title string) error
 	SetUserGroup(ctx context.Context, sessionID, group string) error
 

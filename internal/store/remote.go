@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/takumanakagame/ccmanage/internal/usage"
 	"io"
 	"net/http"
 	"net/url"
@@ -132,6 +133,18 @@ func (r *Remote) SetArchived(ctx context.Context, sessionID string, v bool) erro
 func (r *Remote) SetFavorite(ctx context.Context, sessionID string, v bool) error {
 	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "favorite"), nil,
 		map[string]any{"favorite": v}, nil)
+}
+
+func (r *Remote) UsageSummary(ctx context.Context, days int) (usage.Summary, error) {
+	var out usage.Summary
+	q := url.Values{}
+	q.Set("days", strconv.Itoa(days))
+	err := r.doJSON(ctx, 30*time.Second, http.MethodGet, "/api/usage", q, nil, &out) // first scan of a week of transcripts can take a while
+	return out, err
+}
+
+func (r *Remote) MarkSeen(ctx context.Context, sessionID string) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "seen"), nil, map[string]any{}, nil)
 }
 
 func (r *Remote) SetCustomTitle(ctx context.Context, sessionID, title string) error {

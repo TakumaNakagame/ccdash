@@ -106,6 +106,11 @@ func (s *store) secret(ctx context.Context, k string, gen func() string) (string
 	return v, nil
 }
 
+func (s *store) putKV(ctx context.Context, k, v string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, k, v)
+	return err
+}
+
 // ErrDuplicateName is returned when a device name is already taken.
 var ErrDuplicateName = errors.New("a device with that name already exists")
 
