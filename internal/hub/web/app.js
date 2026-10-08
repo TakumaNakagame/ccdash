@@ -931,7 +931,7 @@ function parseTranscript(entries, opts = {}) {
         let t = p.text.trim();
         if (e.type === "user") {
           if ((e.origin?.kind ?? "human") !== "human") continue;
-          if (e.isMeta || /^<(local-command|system-reminder)/.test(t)) continue;
+          if (e.isMeta || /^<(local-command|system-reminder|task-notification)/.test(t)) continue;
           const cmd = t.match(/<command-name>([^<]*)<\/command-name>/);
           if (cmd) {
             const args = t.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1]?.trim();
@@ -1033,11 +1033,31 @@ function askCard(it, ctx) {
   return el;
 }
 
+// userText splits a user turn around Claude Code's paste wrappers
+// (<pasted_content id="…"> … </pasted_content id="…">): typed text stays
+// as is, each paste becomes a collapsed block.
+const PASTE_RE = /<pasted_content id="[^"]*">\n?([\s\S]*?)\n?<\/pasted_content id="[^"]*">/g;
+function userText(text) {
+  const out = [];
+  let at = 0;
+  for (const m of text.matchAll(PASTE_RE)) {
+    const before = text.slice(at, m.index).trim();
+    if (before) out.push(h("div", {}, before));
+    const body = m[1];
+    const n = body.split("\n").length;
+    out.push(h("details", { class: "paste" }, h("summary", {}, `📋 貼り付け（${n} 行）`), h("pre", {}, body)));
+    at = m.index + m[0].length;
+  }
+  const rest = text.slice(at).trim();
+  if (rest || !out.length) out.push(h("div", {}, rest));
+  return out;
+}
+
 function renderItem(it, ctx) {
   if (it.kind === "tool" && it.name === "AskUserQuestion" && ctx) return askCard(it, ctx);
   switch (it.kind) {
     case "user":
-      return h("div", { class: "bubble user" + (it.queued ? " queued" : ""), title: it.queued ? "作業中に送信" : null }, it.text);
+      return h("div", { class: "bubble user" + (it.queued ? " queued" : ""), title: it.queued ? "作業中に送信" : null }, ...userText(it.text));
     case "image":
       return h("a", { class: "chat-img " + it.role, href: it.src, target: "_blank", rel: "noopener" }, h("img", { src: it.src, alt: "画像", loading: "lazy" }));
     case "assistant": {
@@ -1114,6 +1134,25 @@ function screenAsk(rows) {
   const last = options[options.length - 1];
   const other = /^Type something/.test(last.label) || (last.cursor && !last.desc.length) ? last : null;
   return { kind: "ask", tabs, question: question.join(" "), options, multi, other, key: rows.slice(tabRow, footer).join("\n") };
+}
+
+// screenStatus returns the lines Claude Code draws under its input box
+// (the statusLine command's output, then the mode hint), or null when the
+// input box isn't on screen (a dialog, a fullscreen view).
+function screenStatus(rows) {
+  const rule = (r) => /^─{8,}$/.test(r.trim());
+  let r2 = -1;
+  for (let i = rows.length - 1; i >= 0; i--) if (rule(rows[i])) { r2 = i; break; }
+  if (r2 < 1) return null;
+  let r1 = -1;
+  for (let i = r2 - 1; i >= 0 && i >= r2 - 12; i--) if (rule(rows[i])) { r1 = i; break; }
+  if (r1 < 0 || !rows.slice(r1 + 1, r2).some((r) => r.trimStart().startsWith("❯"))) return null;
+  const lines = [];
+  for (const r of rows.slice(r2 + 1).map((x) => x.trim())) {
+    if (/^[●◯]\s/.test(r)) break; // the agent panel ("● main", "◯ general-purpose …") starts here
+    if (r) lines.push(r);
+  }
+  return lines.length ? lines : null;
 }
 
 function screenPrompt(rows) {
@@ -2101,9 +2140,22 @@ async function chatPage(id, { sid, key }) {
       if (ev === "drop") addFiles([...e.dataTransfer.files]);
     });
   }
-  // Right of the shortcuts, like Claude Code's status line: model, context
-  // fill and cost (tap for the breakdown).
+  // Right of the shortcuts: Claude Code's own status line read off the
+  // hosted claude's screen (so it says exactly what the terminal says), or
+  // — for a session not running here — model · context · cost from the
+  // transcript. Tap for the token / cost breakdown.
   const statusLine = h("button", { type: "button", class: "chat-status", hidden: true, title: "トークンと API 換算コストの内訳", onclick: () => lastUsage && usageDialog(lastUsage, "このセッションの使用量") });
+  let screenSt = null, statusSig = "";
+  const paintStatus = () => {
+    const sig = screenSt ? "s:" + screenSt.join("\n") : lastUsage ? "u:" + JSON.stringify([lastUsage.model, lastUsage.context, lastUsage.total?.cost]) : "";
+    if (sig === statusSig) return;
+    statusSig = sig;
+    statusLine.hidden = !sig;
+    statusLine.classList.toggle("screen", !!screenSt);
+    statusLine.replaceChildren(...(screenSt
+      ? screenSt.map((l, i) => h("span", { class: i ? "st-sub" : "st-line" }, l))
+      : lastUsage ? statusParts(lastUsage) : []));
+  };
   mount.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, h("div", { class: "quick-bar" }, quickRow, statusLine), composer)));
 
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
@@ -2335,11 +2387,7 @@ async function chatPage(id, { sid, key }) {
     // usage (every seventh poll)
     if (sid && agentTick % 7 === 0) {
       const u = await d.get(`/api/sessions/${encodeURIComponent(sid)}/usage`).catch(() => null);
-      if (u?.total?.messages) {
-        lastUsage = u;
-        statusLine.hidden = false;
-        statusLine.replaceChildren(...statusParts(u));
-      }
+      if (u?.total?.messages) { lastUsage = u; paintStatus(); }
     }
 
     // git changes (every fifth poll)
@@ -2362,6 +2410,10 @@ async function chatPage(id, { sid, key }) {
       const scr = await d.get(`/pty/${encodeURIComponent(ptyKey)}/text`).catch(() => null);
       const askPending = items.some((x) => x.kind === "tool" && x.name === "AskUserQuestion" && x.result == null);
       const pr = scr && !askPending && screenPrompt(scr.rows);
+      // The status line Claude Code itself draws (the operator's
+      // statusLine command) — kept while a dialog hides it.
+      const st = scr && screenStatus(scr.rows);
+      if (st) screenSt = st;
       if (!pr) promptEl.replaceChildren();
       else if (promptEl.dataset.key !== pr.key) {
         promptEl.dataset.key = pr.key;
@@ -2373,7 +2425,9 @@ async function chatPage(id, { sid, key }) {
       if (!pr) delete promptEl.dataset.key;
     } else {
       promptEl.replaceChildren();
+      screenSt = null;
     }
+    paintStatus();
   }
 
   every(1500, poll);

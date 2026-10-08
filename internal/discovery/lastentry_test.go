@@ -101,3 +101,14 @@ func TestLastPromptSkipsNonPrompts(t *testing.T) {
 		t.Fatalf("LastModified = %v, want %v", ds[0].LastModified, want)
 	}
 }
+
+// TestCleanTitlePasted: the pasted-content markers never become the title.
+func TestCleanTitlePasted(t *testing.T) {
+	got := cleanTitle("<pasted_content id=\"4b65\">\nこれの違い\nhttps://example.com/a\n</pasted_content id=\"4b65\">")
+	if got != "これの違い" {
+		t.Errorf("title = %q", got)
+	}
+	if got := cleanTitle("<task-notification>\n<task-id>x</task-id>"); got != "" {
+		t.Errorf("task notification became a title: %q", got)
+	}
+}

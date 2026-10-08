@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -307,6 +308,8 @@ func extractUserText(msg json.RawMessage) string {
 	return ""
 }
 
+var pastedMarker = regexp.MustCompile(`</?pasted_content id="[^"]*">`)
+
 func cleanTitle(s string) string {
 	s = strings.TrimSpace(s)
 	// Skip text Claude Code injects as a "user" turn: slash command
@@ -315,6 +318,9 @@ func cleanTitle(s string) string {
 	if transcript.IsNoise(s) {
 		return ""
 	}
+	// Claude Code wraps pasted text in <pasted_content id="…"> …
+	// </pasted_content id="…">; the markers are not part of the prompt.
+	s = strings.TrimSpace(pastedMarker.ReplaceAllString(s, ""))
 	// First line, collapsed.
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]

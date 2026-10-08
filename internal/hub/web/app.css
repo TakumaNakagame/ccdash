@@ -471,3 +471,10 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .chat-status .st-bar.warm > span { background: #eab308; }
 .chat-status .st-bar.hot > span { background: #ef4444; }
 .chat-status .st-cost { color: #eab308; }
+.bubble.user details.paste { margin: 4px 0; }
+.bubble.user details.paste summary { cursor: pointer; opacity: .9; font-size: 13px; }
+.bubble.user details.paste pre { margin: 6px 0 0; padding: 8px; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-size: 12px; background: rgba(0, 0, 0, .18); border-radius: 6px; }
+.chat-status.screen { flex-direction: column; align-items: flex-end; gap: 0; max-width: 100%; min-width: 0; flex: 0 1 auto; }
+.chat-status.screen span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.chat-status .st-line { color: var(--text); }
+.chat-status .st-sub { font-size: 11px; }
