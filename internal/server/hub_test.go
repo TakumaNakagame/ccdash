@@ -34,6 +34,7 @@ func TestHubAllowed(t *testing.T) {
 		{"GET", "/api/sessions/abc/transcript", on, true},
 		{"GET", "/api/sessions/abc/usage", on, true},
 		{"GET", "/api/usage", on, true},
+		{"GET", "/api/usage/sessions", on, true},
 		{"POST", "/api/sessions/abc/title", on, true},
 		{"POST", "/api/sessions/abc/summarize", on, true},
 		{"POST", "/api/titles", on, true},

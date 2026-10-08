@@ -411,7 +411,9 @@ func (s *Server) aliasPTYByTag(tag int, sessionID string) {
 // the PTY's shell. This is the hook-less path: without ccdash's hooks
 // installed, the tag in aliasPTYByTag never arrives, but claude still
 // writes ~/.claude/sessions/<pid>.json (procs) right at startup — well
-// before its first prompt creates the transcript discovery lists.
+// before its first prompt creates the transcript discovery lists. When the
+// shell execs claude (`$SHELL -c 'claude …'` with a single command), claude
+// keeps the shell's PID, so a claude whose own PID is the PTY's matches too.
 func (s *Server) aliasPTYsByParent(ctx context.Context, procs map[string]procmap.Entry) {
 	s.ptyMu.Lock()
 	pending := map[int]*ptyEntry{} // shell pid → entry, only if no alias yet
@@ -436,7 +438,9 @@ func (s *Server) aliasPTYsByParent(ctx context.Context, procs map[string]procmap
 		if _, ok := s.ptyMap[sid]; ok || sid == "" {
 			continue
 		}
-		if e, ok := pending[parents[pe.PID]]; ok {
+		if e, ok := pending[pe.PID]; ok {
+			s.ptyMap[sid] = e
+		} else if e, ok := pending[parents[pe.PID]]; ok {
 			s.ptyMap[sid] = e
 		}
 	}

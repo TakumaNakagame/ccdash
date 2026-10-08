@@ -336,6 +336,39 @@ func TestAliasPTYsByParent(t *testing.T) {
 	}
 }
 
+// TestAliasPTYsByOwnPID: a shell that execs claude leaves claude with the
+// PTY's own PID (no parent hop) — that must alias too.
+func TestAliasPTYsByOwnPID(t *testing.T) {
+	s := &Server{ptyMap: map[string]*ptyEntry{}}
+	ts := httptest.NewServer(http.HandlerFunc(s.handlePTY))
+	t.Cleanup(ts.Close)
+	resp, err := http.Post(ts.URL+"/pty/start", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	var started struct{ PtyKey string }
+	_ = json.NewDecoder(resp.Body).Decode(&started)
+	resp.Body.Close()
+	t.Cleanup(func() {
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/pty/"+started.PtyKey, nil)
+		if r, err := http.DefaultClient.Do(req); err == nil {
+			r.Body.Close()
+		}
+	})
+	s.ptyMu.Lock()
+	entry := s.ptyMap[started.PtyKey]
+	s.ptyMu.Unlock()
+
+	s.aliasPTYsByParent(context.Background(), map[string]procmap.Entry{
+		"sess-exec": {SessionID: "sess-exec", PID: entry.sess.PID()},
+	})
+	s.ptyMu.Lock()
+	defer s.ptyMu.Unlock()
+	if s.ptyMap["sess-exec"] != entry {
+		t.Fatal("sess-exec not aliased to the PTY that is its own process")
+	}
+}
+
 // TestPTYStartPrompt: a prompt becomes claude's trailing argument (the
 // skill picker's "/<skill>"), and one that looks like a flag is refused.
 func TestPTYStartPrompt(t *testing.T) {

@@ -541,7 +541,7 @@ async function devicePage(id, opts = {}) {
     h("div", { class: "row", style: "margin-bottom:8px" }, filter, archBtn),
     selBar, list, more, settingsBox));
 
-  let last = null, tab = loadTab(id), limit = 100;
+  let last = null, tab = loadTab(id), limit = 100, briefs = {}, briefsAt = 0;
   const render = () => {
     if (!last) return;
     if (deferWhileSelecting(list, render)) return;
@@ -575,7 +575,7 @@ async function devicePage(id, opts = {}) {
         bucket = b;
         out.push(h("div", { class: "bucket" }, b));
       }
-      out.push(sessionRow(id, s, live.has(s.session_id), info, !tab, sel));
+      out.push(sessionRow(id, s, live.has(s.session_id), info, !tab, sel, briefs[s.session_id]));
     }
     list.replaceChildren(...(out.length ? out : [h("div", { class: "empty" }, q ? "該当なし" : "セッションがありません")]));
     more.replaceChildren(...(rows.length > limit
@@ -603,6 +603,12 @@ async function devicePage(id, opts = {}) {
       d.get("/pty/").then((x) => x || []).catch(() => []), deviceInfo(id),
     ]);
     last = { sessions, ptys, info };
+    // Model / context / cost per row: a transcript scan, so not every tick.
+    if (Date.now() - briefsAt > 30000) {
+      briefsAt = Date.now();
+      d.get(showArchived ? "/api/usage/sessions?archived=1" : "/api/usage/sessions")
+        .then((b) => { briefs = b || {}; render(); }).catch(() => {});
+    }
     status.textContent = `${info.hostname} · ccdash ${info.version}` +
       (info.attachEnabled ? "" : " · attach OFF（閲覧のみ）") + (info.approveEnabled ? "" : " · 承認 OFF");
     renderApprovals(approvals, id, aps, sessions);
@@ -611,7 +617,7 @@ async function devicePage(id, opts = {}) {
   every(3000, tick, bucket);
 }
 
-function sessionRow(id, s, live, info, showGroup, sel = null) {
+function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
   const chips = [];
   if (live) chips.push(h("span", { class: "chip live" }, "live"));
   if (s.attention === "needs_you") chips.push(h("span", { class: "chip pend", title: s.attention_reason || "" }, "要対応"));
@@ -643,7 +649,8 @@ function sessionRow(id, s, live, info, showGroup, sel = null) {
     h("span", { class: "num" }, s.num ? `#${s.num}` : ""),
     h("div", { class: "grow" },
       h("div", { class: "title" }, (s.favorite ? "★ " : "") + sessionTitle(s)),
-      h("div", { class: "sub" }, sub)),
+      h("div", { class: "sub" }, sub),
+      brief ? h("div", { class: "sub meta" }, usageLine(brief)) : null),
     ...chips, mark);
 }
 
@@ -1585,6 +1592,10 @@ function fmtTok(n) {
   return String(n);
 }
 const fmtUSD = (v) => "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2));
+const shortModel = (m) => (m || "").replace(/^claude-/, "");
+// usageLine: "opus-5-5 · 文脈 85.2k · $1.23" (a Brief or a SessionUsage).
+const usageLine = (u) => [shortModel(u.model), u.context ? "文脈 " + fmtTok(u.context) : "",
+  fmtUSD(u.cost ?? u.total?.cost ?? 0)].filter(Boolean).join(" · ");
 const tokTotal = (t) => (t.input || 0) + (t.output || 0) + (t.cache_write || 0) + (t.cache_read || 0);
 
 function usageDialog(u, title) {
@@ -1592,6 +1603,8 @@ function usageDialog(u, title) {
     const rows = Object.entries(u.by_model || {}).sort((a, b) => b[1].cost - a[1].cost);
     body.append(h("h1", {}, title),
       h("p", { class: "muted small" }, "API の定価で換算した概算です（サブスクリプションの実際の請求額ではありません）。"),
+      u.model ? h("p", { class: "small" }, `現在のモデル: ${u.model}` + (u.context ? ` · 文脈 ${fmtTok(u.context)} トークン（直近の応答時点）` : "")) : null,
+      u.total ? h("p", { class: "small" }, `合計 ${fmtTok(tokTotal(u.total))} トークン · ${u.total.messages} 応答 · ${fmtUSD(u.total.cost)}`) : null,
       h("div", { class: "md-table" }, h("table", {},
         h("thead", {}, h("tr", {}, ["モデル", "入力", "出力", "キャッシュ書込", "キャッシュ読込", "概算"].map((x) => h("th", {}, x)))),
         h("tbody", {}, rows.map(([m, t]) => h("tr", {}, [m, fmtTok(t.input), fmtTok(t.output), fmtTok(t.cache_write), fmtTok(t.cache_read), fmtUSD(t.cost)].map((x) => h("td", {}, x))))))),
@@ -2241,7 +2254,7 @@ async function chatPage(id, { sid, key }) {
       if (u?.total?.messages) {
         lastUsage = u;
         costBtn.hidden = false;
-        costBtn.textContent = fmtUSD(u.total.cost);
+        costBtn.textContent = usageLine(u);
       }
     }
 

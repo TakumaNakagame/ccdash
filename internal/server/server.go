@@ -144,6 +144,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
 	s.mux.HandleFunc("GET /api/sessions/{id}/usage", wrap(s.handleAPISessionUsage))
 	s.mux.HandleFunc("GET /api/usage", wrap(s.handleAPIUsage))
+	s.mux.HandleFunc("GET /api/usage/sessions", wrap(s.handleAPIUsageSessions))
 	s.mux.HandleFunc("GET /api/settings", wrap(s.handleAPISettingsList))
 	s.mux.HandleFunc("PUT /api/settings/{key}", wrap(s.handleAPISettingSet))
 }

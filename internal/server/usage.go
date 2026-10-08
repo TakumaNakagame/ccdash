@@ -44,3 +44,21 @@ func (s *Server) handleAPIUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	writeOK(w, usage.Default.Summarize(paths, days))
 }
+
+// handleAPIUsageSessions: model, context size and cost per session, for the
+// session list (archived sessions too with ?archived=1).
+// GET /api/usage/sessions
+func (s *Server) handleAPIUsageSessions(w http.ResponseWriter, r *http.Request) {
+	ss, err := s.db.ListSessions(r.Context(), r.URL.Query().Get("archived") == "1")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	paths := map[string]string{}
+	for _, x := range ss {
+		if x.TranscriptPath != "" {
+			paths[x.SessionID] = x.TranscriptPath
+		}
+	}
+	writeOK(w, usage.Default.Briefs(paths))
+}

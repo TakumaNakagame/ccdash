@@ -107,6 +107,11 @@ type File struct {
 	ByDay   map[string]Totals `json:"by_day"`   // local date YYYY-MM-DD
 	ByModel map[string]Totals `json:"by_model"` // model id
 	Last    time.Time         `json:"last,omitzero"`
+	// Model and Context come from the newest assistant message: the model
+	// it ran on and the prompt it was sent (input + cache), i.e. how full
+	// the context window is now.
+	Model   string `json:"model,omitempty"`
+	Context int64  `json:"context,omitempty"`
 }
 
 type fileState struct {
@@ -204,13 +209,15 @@ func (st *fileState) consume(line []byte) {
 	m := st.data.ByModel[e.Message.Model]
 	m.add(t)
 	st.data.ByModel[e.Message.Model] = m
-	if e.Timestamp.After(st.data.Last) {
+	if !e.Timestamp.Before(st.data.Last) {
 		st.data.Last = e.Timestamp
+		st.data.Model = e.Message.Model
+		st.data.Context = u.Input + u.CacheCreation + u.CacheRead
 	}
 }
 
 func (f File) clone() File {
-	out := File{Total: f.Total, Last: f.Last, ByDay: map[string]Totals{}, ByModel: map[string]Totals{}}
+	out := File{Total: f.Total, Last: f.Last, Model: f.Model, Context: f.Context, ByDay: map[string]Totals{}, ByModel: map[string]Totals{}}
 	for k, v := range f.ByDay {
 		out.ByDay[k] = v
 	}
@@ -272,9 +279,35 @@ func (s *Scanner) ForSession(transcriptPath string) SessionUsage {
 			continue
 		}
 		Merge(&out.File, f)
-		if i > 0 {
+		if i == 0 {
+			// The window that matters is the main conversation's.
+			out.Model, out.Context = f.Model, f.Context
+		} else {
 			out.Subagents.add(f.Total)
 		}
+	}
+	return out
+}
+
+// Brief is the per-session line of a session list.
+type Brief struct {
+	Cost     float64 `json:"cost"`
+	Tokens   int64   `json:"tokens"`
+	Messages int     `json:"messages"`
+	Model    string  `json:"model,omitempty"`
+	Context  int64   `json:"context,omitempty"`
+}
+
+// Briefs is ForSession reduced to a Brief for each session id → transcript
+// path; sessions without any usage are left out.
+func (s *Scanner) Briefs(transcripts map[string]string) map[string]Brief {
+	out := map[string]Brief{}
+	for sid, path := range transcripts {
+		u := s.ForSession(path)
+		if u.Total.Messages == 0 {
+			continue
+		}
+		out[sid] = Brief{Cost: u.Total.Cost, Tokens: u.Total.Tokens(), Messages: u.Total.Messages, Model: u.Model, Context: u.Context}
 	}
 	return out
 }

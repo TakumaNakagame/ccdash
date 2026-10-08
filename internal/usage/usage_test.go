@@ -42,6 +42,14 @@ func TestScanDedupesAndIncrements(t *testing.T) {
 	if _, ok := f.ByDay["2026-10-05"]; !ok {
 		t.Errorf("by day = %v", f.ByDay)
 	}
+	// The newest message names the model and the current context size.
+	if f.Model != "claude-haiku-4-5" || f.Context != 1000000 {
+		t.Errorf("model/context = %q %d", f.Model, f.Context)
+	}
+	b := s.Briefs(map[string]string{"sess": p, "none": filepath.Join(t.TempDir(), "missing.jsonl")})
+	if len(b) != 1 || b["sess"].Model != "claude-haiku-4-5" || b["sess"].Messages != 2 {
+		t.Errorf("briefs = %+v", b)
+	}
 }
 
 func TestUnknownModelHasNoCost(t *testing.T) {
