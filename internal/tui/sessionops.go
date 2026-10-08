@@ -2,15 +2,15 @@ package tui
 
 // Per-session operations that talk to the local collector directly:
 //
-//   - c / C: next palette color / a random different one for the session;
-//     the color lives on the session row, so the portal shows it too.
+//   - c / C: next palette color / a re-roll that avoids the colors of the
+//     running sessions; the color lives on the session row, so the portal
+//     shows it too.
 //   - ctrl+r: restart the session's hosted claude (POST /pty/{key}/restart:
 //     kill + `claude --resume`), after a y confirmation.
 
 import (
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -18,6 +18,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/takumanakagame/ccmanage/internal/auth"
+	"github.com/takumanakagame/ccmanage/internal/db"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
 )
@@ -29,7 +30,7 @@ type sessionRestartedMsg struct {
 }
 
 // stepColorCurrent moves the selected session's color dir steps through the
-// palette, starting from the color it shows now; dir 0 picks a random other.
+// palette, starting from the color it shows now; dir 0 re-rolls it.
 func (m *model) stepColorCurrent(dir int) tea.Cmd {
 	if len(m.sessions) == 0 {
 		return nil
@@ -46,10 +47,18 @@ func (m *model) stepColorCurrent(dir int) tea.Cmd {
 			break
 		}
 	}
-	next := mdl.SessionPalette[((i+dir)%n+n)%n]
-	if dir == 0 { // random, but never the current color
-		next = mdl.SessionPalette[(i+1+rand.IntN(n-1))%n]
+	sid := s.SessionID
+	if dir == 0 {
+		// Re-roll against the running sessions (db.SetColor picks one that
+		// stands apart); the refresh brings the drawn color back.
+		return func() tea.Msg {
+			if err := m.store.SetColor(m.ctx, sid, db.ColorRandom); err != nil {
+				return attachDoneMsg{err: err}
+			}
+			return attachDoneMsg{msg: "color re-rolled"}
+		}
 	}
+	next := mdl.SessionPalette[((i+dir)%n+n)%n]
 	// Show it right away; the next poll brings the stored value back.
 	m.sessions[m.selSess].ColorOverride = next
 	for k := range m.allSessions {
@@ -57,7 +66,6 @@ func (m *model) stepColorCurrent(dir int) tea.Cmd {
 			m.allSessions[k].ColorOverride = next
 		}
 	}
-	sid := s.SessionID
 	return func() tea.Msg {
 		if err := m.store.SetColor(m.ctx, sid, next); err != nil {
 			return attachDoneMsg{err: err}

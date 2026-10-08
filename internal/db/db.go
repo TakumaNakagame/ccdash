@@ -534,11 +534,97 @@ func (d *DB) SetArchived(ctx context.Context, sessionID string, archived bool) e
 	return err
 }
 
-// SetColor stores the operator's color for a session (a "#rrggbb"), or
-// clears it with "" so Session.Color falls back to the hashed one.
+// ColorRandom asks SetColor to draw a color that stands apart from the
+// running sessions' (model.PickColor).
+const ColorRandom = "random"
+
+// SetColor stores the operator's color for a session (a "#rrggbb"), clears
+// it with "" so Session.Color falls back to the automatic one, or with
+// ColorRandom re-rolls it against the sessions running now.
 func (d *DB) SetColor(ctx context.Context, sessionID, color string) error {
+	if color == ColorRandom {
+		running, err := d.runningColors(ctx)
+		if err != nil {
+			return err
+		}
+		cur := running[sessionID]
+		delete(running, sessionID)
+		if cur == "" {
+			if s, ok, err := d.GetSession(ctx, sessionID); err == nil && ok {
+				cur = s.Color()
+			}
+		}
+		color = model.PickColor(mapValues(running), cur)
+	}
 	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET color = NULLIF(?, '') WHERE session_id = ?`, color, sessionID)
 	return err
+}
+
+// AssignRunningColors gives every running (active / idle) session that has
+// no stored color one that stands apart from the other running sessions',
+// oldest first, so what's on screen together never looks alike. Stored, so
+// the color stays once the session stops.
+func (d *DB) AssignRunningColors(ctx context.Context) error {
+	rows, err := d.sql.QueryContext(ctx, `
+		SELECT session_id, COALESCE(color,'') FROM sessions
+		WHERE status IN ('active','idle') AND COALESCE(archived,0) = 0
+		ORDER BY first_seen`)
+	if err != nil {
+		return err
+	}
+	var used, missing []string
+	for rows.Next() {
+		var id, c string
+		if err := rows.Scan(&id, &c); err != nil {
+			rows.Close()
+			return err
+		}
+		if c != "" {
+			used = append(used, c)
+		} else {
+			missing = append(missing, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range missing {
+		c := model.PickColor(used, "")
+		if _, err := d.sql.ExecContext(ctx, `UPDATE sessions SET color = ? WHERE session_id = ? AND color IS NULL`, c, id); err != nil {
+			return err
+		}
+		used = append(used, c)
+	}
+	return nil
+}
+
+// runningColors maps each running session to the color it shows.
+func (d *DB) runningColors(ctx context.Context) (map[string]string, error) {
+	rows, err := d.sql.QueryContext(ctx, `
+		SELECT session_id, COALESCE(num,0), COALESCE(color,'') FROM sessions
+		WHERE status IN ('active','idle') AND COALESCE(archived,0) = 0`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var s model.Session
+		if err := rows.Scan(&s.SessionID, &s.Num, &s.ColorOverride); err != nil {
+			return nil, err
+		}
+		out[s.SessionID] = s.Color()
+	}
+	return out, rows.Err()
+}
+
+func mapValues(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	return out
 }
 
 // SetFavorite flips the favorite flag.

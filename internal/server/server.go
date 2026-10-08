@@ -350,6 +350,11 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 	if err := s.db.MarkStalePendingTimeout(ctx, 45*time.Second); err != nil {
 		log.Printf("approval sweep: %v", err)
 	}
+	defer func() {
+		if err := s.db.AssignRunningColors(ctx); err != nil {
+			log.Printf("assign colors: %v", err)
+		}
+	}()
 
 	accs, err := accounts.Load()
 	if err != nil {
@@ -997,7 +1002,8 @@ func (s *Server) handleAPIArchive(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, nil)
 }
 
-// handleAPIColor: {"color":"#rrggbb"} sets the session's color, "" clears it.
+// handleAPIColor: {"color":"#rrggbb"} sets the session's color, "random"
+// re-rolls it against the running sessions, "" clears it.
 func (s *Server) handleAPIColor(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Color string `json:"color"`
@@ -1006,8 +1012,8 @@ func (s *Server) handleAPIColor(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if body.Color != "" && !model.ValidColor(body.Color) {
-		writeErr(w, http.StatusBadRequest, errors.New(`color must be "#rrggbb" or ""`))
+	if body.Color != "" && body.Color != db.ColorRandom && !model.ValidColor(body.Color) {
+		writeErr(w, http.StatusBadRequest, errors.New(`color must be "#rrggbb", "random" or ""`))
 		return
 	}
 	if err := s.db.SetColor(r.Context(), r.PathValue("id"), strings.ToLower(body.Color)); err != nil {

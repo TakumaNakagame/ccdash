@@ -458,8 +458,12 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
 .swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; background: var(--c); cursor: pointer; padding: 0; }
 .swatch.on { border-color: var(--text, #fff); box-shadow: 0 0 0 2px var(--bg, #000) inset; }
-/* Chat status line (model · context · cost) under the composer. */
-.chat-status { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; max-width: 820px; width: 100%; margin: -4px auto 0; padding: 0 14px 8px; background: none; border: 0; color: var(--muted); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; text-align: left; cursor: pointer; }
+/* Shortcut chips (left, scrolling) and the status line (model · context ·
+   cost, right) share the row above the composer. */
+.quick-bar { max-width: 820px; margin: 0 auto; padding: 8px 12px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.quick-bar .quick-row { max-width: none; margin: 0; padding: 0; flex: 1 1 200px; min-width: 0; }
+.chat-status { display: flex; gap: 12px; align-items: center; margin-left: auto; flex: none; background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; }
+.chat-status[hidden] { display: none; }
 .chat-status .st-model { color: var(--accent); font-weight: 600; }
 .chat-status .st-ctx { display: inline-flex; align-items: center; gap: 6px; }
 .chat-status .st-bar { display: inline-block; width: 64px; height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--muted) 30%, transparent); overflow: hidden; }

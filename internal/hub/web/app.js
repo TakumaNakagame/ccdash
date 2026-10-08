@@ -1231,11 +1231,10 @@ function sessionMenu(id, s, groups, refresh) {
           type: "button", class: "swatch" + (sessionColorOf(s) === c ? " on" : ""), style: `--c:${c}`, title: c,
           onclick: () => { close(); post("/color", { color: c }, "色を変更しました"); },
         })),
-        h("button", { type: "button", class: "btn small", title: "今と違う色をランダムに選ぶ", onclick: () => {
-          const others = SESSION_PALETTE.filter((c) => c !== sessionColorOf(s));
+        h("button", { type: "button", class: "btn small", title: "いま動いているセッションの色と被らない（似ていない）色を引き直す", onclick: () => {
           close();
-          post("/color", { color: others[Math.floor(Math.random() * others.length)] }, "色をランダムに変更しました");
-        } }, "🎲 ランダム"),
+          post("/color", { color: "random" }, "色を引き直しました");
+        } }, "🎲 引き直す"),
         h("button", { type: "button", class: "btn small", disabled: !s.color, onclick: () => { close(); post("/color", { color: "" }, "色を自動に戻しました"); } }, "自動に戻す")),
       h("label", {}, "グループ（空にすると repo 名に戻す）"),
       h("div", { class: "row" }, group, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/group", { group: group.value.trim() }, "グループを保存しました"); } }, "保存")),
@@ -2102,10 +2101,10 @@ async function chatPage(id, { sid, key }) {
       if (ev === "drop") addFiles([...e.dataTransfer.files]);
     });
   }
-  // Under the composer, like Claude Code's status line: model, context
+  // Right of the shortcuts, like Claude Code's status line: model, context
   // fill and cost (tap for the breakdown).
   const statusLine = h("button", { type: "button", class: "chat-status", hidden: true, title: "トークンと API 換算コストの内訳", onclick: () => lastUsage && usageDialog(lastUsage, "このセッションの使用量") });
-  mount.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, quickRow, composer, statusLine)));
+  mount.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, h("div", { class: "quick-bar" }, quickRow, statusLine), composer)));
 
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
   input.addEventListener("input", autosize);

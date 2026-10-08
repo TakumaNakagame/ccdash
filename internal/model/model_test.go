@@ -44,3 +44,23 @@ func TestColorOverride(t *testing.T) {
 		}
 	}
 }
+
+// TestPickColorAvoidsUsed: the pick is never a used color nor a near
+// look-alike of one, and never the avoided one.
+func TestPickColorAvoidsUsed(t *testing.T) {
+	used := []string{"#ef4444", "#3b82f6", "#22c55e"} // red, blue, green
+	for i := 0; i < 200; i++ {
+		c := PickColor(used, "#facc15")
+		if c == "#facc15" {
+			t.Fatal("picked the avoided color")
+		}
+		for _, u := range used {
+			if d := colorDist(c, u); d < 30 {
+				t.Fatalf("picked %s, too close to %s (%.0f)", c, u, d)
+			}
+		}
+	}
+	if colorDist("#3b82f6", "#93c5fd") >= colorDist("#3b82f6", "#f97316") {
+		t.Error("blue should be nearer light blue than orange")
+	}
+}
