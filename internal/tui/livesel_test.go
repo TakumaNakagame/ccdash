@@ -30,7 +30,7 @@ func TestSelectionText(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := selectionText(tc.sel, rows, 20); got != tc.want {
+			if got := selectionText(tc.sel, rows, 40); got != tc.want {
 				t.Fatalf("got %q, want %q", got, tc.want)
 			}
 		})
@@ -48,20 +48,75 @@ func TestSelectionTextStripsMargins(t *testing.T) {
 		"    - nested item   ",
 		"                    ",
 	}
-	sel := liveSelection{ax: 0, ay: 0, bx: 19, by: 5}
-	want := "⏺ First paragraph\ncontinues here\n\n  - nested item"
-	if got := selectionText(sel, rows, 20); got != want {
+	sel := liveSelection{ax: 0, ay: 0, bx: 39, by: 5}
+	want := "First paragraph\ncontinues here\n\n  - nested item"
+	if got := selectionText(sel, rows, 40); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 
-	sel = liveSelection{ax: 0, ay: 2, bx: 19, by: 4}
-	want = "continues here\n\n- nested item"
-	if got := selectionText(sel, rows, 20); got != want {
+	sel = liveSelection{ax: 0, ay: 2, bx: 39, by: 4}
+	want = "continues here\n\n  - nested item" // relative indent kept
+	if got := selectionText(sel, rows, 40); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 
-	if got := selectionText(liveSelection{ax: 0, ay: 0, bx: 19, by: 0}, rows, 20); got != "" {
+	if got := selectionText(liveSelection{ax: 0, ay: 0, bx: 39, by: 0}, rows, 40); got != "" {
 		t.Fatalf("blank-only selection: got %q, want empty", got)
+	}
+}
+
+// TestSelectionTextUnwraps: a command Claude Code wrapped at the pane edge
+// copies as one line, without the "⎿" mark or the continuation indent.
+func TestSelectionTextUnwraps(t *testing.T) {
+	const w = 30
+	rows := []string{
+		"  ⎿\u00a0 $ curl -s -H \"X-Tok: $T",
+		"     \" http://127.0.0.1:9123/x",
+		"",
+	}
+	sel := liveSelection{ax: 0, ay: 0, bx: w - 1, by: 2}
+	want := `$ curl -s -H "X-Tok: $T" http://127.0.0.1:9123/x`
+	if got := selectionText(sel, rows, w); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	// Word wrap near the edge: the eaten space comes back.
+	rows = []string{
+		"● The quick brown fox jumps",
+		"  over the lazy dog.",
+	}
+	if got := selectionText(liveSelection{ax: 0, ay: 0, bx: w - 1, by: 1}, rows, w); got != "The quick brown fox jumps over the lazy dog." {
+		t.Fatalf("word wrap: got %q", got)
+	}
+
+	// A short line, then a long one: not a wrap.
+	rows = []string{
+		"● Run:",
+		"  ./a-very-long-command --with --many --flags",
+		strings.Repeat("─", 60),
+		"  status line",
+	}
+	if got := selectionText(liveSelection{ax: 0, ay: 0, bx: 59, by: 3}, rows, 60); got != "Run:\n./a-very-long-command --with --many --flags\nstatus line" {
+		t.Fatalf("short line / rule: got %q", got)
+	}
+}
+
+// TestSelectionTextQuotes: quote bars and box borders are not copied.
+func TestSelectionTextQuotes(t *testing.T) {
+	const w = 40
+	rows := []string{
+		"  ▎ quoted line one",
+		"  ▎ quoted line two",
+		"╭──────────────────╮",
+		"│ inside the box   │",
+		"│   indented       │",
+		"╰──────────────────╯",
+	}
+	if got := selectionText(liveSelection{ax: 0, ay: 0, bx: w - 1, by: 1}, rows, w); got != "quoted line one\nquoted line two" {
+		t.Fatalf("quote: got %q", got)
+	}
+	if got := selectionText(liveSelection{ax: 0, ay: 2, bx: w - 1, by: 5}, rows, w); got != "inside the box\n  indented" {
+		t.Fatalf("box: got %q", got)
 	}
 }
 

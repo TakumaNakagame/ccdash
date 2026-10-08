@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -59,20 +60,67 @@ func (s liveSelection) span(y, width int) (from, to int, ok bool) {
 }
 
 // selectionText extracts the selected text from rendered rows, cleaned up
-// for pasting elsewhere (Slack, an editor): the trailing blanks that pad
-// every emulator row are dropped, blank rows at either end are dropped,
-// and the left margin Claude Code indents its output with is removed —
-// the first row loses its leading blanks, the rest lose their common
-// indent so nested structure (lists, code) keeps its relative shape.
+// for pasting elsewhere (a shell, Slack, an editor):
+//   - the trailing blanks that pad every emulator row are dropped, and
+//     blank rows at either end;
+//   - the gutter marks Claude Code draws in front of text — "● " message
+//     bullets, "⎿ " tool output, "▎"/"│" quote bars, "❯ " prompts — are
+//     removed, and a "│ … │" box's right border with them; rows that are
+//     only box edges or rules go;
+//   - a row Claude Code wrapped to fit the pane is joined with the next one
+//     (a long command copies as one line);
+//   - the left margin is removed — rows lose their common indent so nested
+//     structure (lists, code) keeps its relative shape (a first row picked
+//     up mid-row just loses its leading blanks).
 func selectionText(sel liveSelection, rows []string, width int) string {
-	var out []string
+	type piece struct {
+		text    string // selected text, gutter removed
+		wrapsOn bool   // the row was filled up to the pane edge
+		fullW   int    // display width of the whole row
+		boxEdge bool
+	}
+	var ps []piece
 	_, sy, _, ey := sel.ordered()
 	for y := sy; y <= ey && y < len(rows); y++ {
 		from, to, ok := sel.span(y, width)
 		if !ok {
 			continue
 		}
-		out = append(out, strings.TrimRight(ansi.Strip(ansi.Cut(rows[y], from, to)), blankChars))
+		full := strings.TrimRight(clean(ansi.Strip(rows[y])), blankChars)
+		seg := strings.TrimRight(clean(ansi.Strip(ansi.Cut(rows[y], from, to))), blankChars)
+		seg = stripGutter(seg)
+		fw := ansi.StringWidth(full)
+		ps = append(ps, piece{text: seg, fullW: fw, wrapsOn: fw >= width-2, boxEdge: boxEdgeRow.MatchString(full)})
+	}
+	// Join soft-wrapped rows into logical lines.
+	var out []string
+	joinNext := false
+	for i, p := range ps {
+		if p.boxEdge {
+			joinNext = false
+			continue
+		}
+		if joinNext && len(out) > 0 {
+			out[len(out)-1] += strings.TrimLeft(p.text, blankChars)
+		} else {
+			out = append(out, p.text)
+		}
+		joinNext = false
+		if i+1 < len(ps) && p.text != "" && !ps[i+1].boxEdge {
+			next := strings.TrimLeft(ps[i+1].text, blankChars)
+			switch {
+			case next == "" || gutterStart.MatchString(next):
+			case p.wrapsOn:
+				// Filled to the edge: a character wrap, nothing was dropped.
+				joinNext = true
+			case width-p.fullW <= max(12, width/4) && p.fullW+1+ansi.StringWidth(firstWord(next)) > width:
+				// Ends fairly close to the edge and the next word wouldn't
+				// have fit: a word wrap, which ate one space. (A short
+				// "Run:" followed by a long command line is left alone.)
+				out[len(out)-1] += " "
+				joinNext = true
+			}
+		}
 	}
 	for len(out) > 0 && out[0] == "" {
 		out = out[1:]
@@ -83,9 +131,16 @@ func selectionText(sel liveSelection, rows []string, width int) string {
 	if len(out) == 0 {
 		return ""
 	}
-	out[0] = strings.TrimLeft(out[0], blankChars)
+	// A selection that starts mid-row has no margin on its first row; one
+	// that starts at the row's beginning dedents it with the rest.
+	first := 1
+	if sx, _, _, _ := sel.ordered(); sx > 0 {
+		out[0] = strings.TrimLeft(out[0], blankChars)
+	} else {
+		first = 0
+	}
 	indent := -1
-	for _, l := range out[1:] {
+	for _, l := range out[first:] {
 		if l == "" {
 			continue
 		}
@@ -94,13 +149,55 @@ func selectionText(sel liveSelection, rows []string, width int) string {
 		}
 	}
 	if indent > 0 {
-		for i := 1; i < len(out); i++ {
+		for i := first; i < len(out); i++ {
 			if len(out[i]) >= indent {
 				out[i] = out[i][indent:]
 			}
 		}
 	}
+	for i := range out {
+		out[i] = strings.TrimRight(out[i], blankChars)
+	}
 	return strings.Join(out, "\n")
+}
+
+var (
+	// gutterMark: a mark Claude Code draws in front of text, then its
+	// spacing. Only these — an ASCII "|" or ">" may be real content.
+	gutterMark  = regexp.MustCompile(`^( *)([●⏺⎿▎▍▌│┃❯])( +|$)`)
+	gutterStart = regexp.MustCompile(`^[●⏺⎿❯]( |$)`)
+	boxEdgeRow  = regexp.MustCompile(`^[ ]*(?:[╭╰┌└├][─━┄┈ ]*[╮╯┐┘┤]?|[─━═┄┈]{3,})[ ]*$`)
+)
+
+// clean turns the no-break spaces Claude Code pads marks with into plain
+// spaces (so trimming and column math treat them as blanks).
+func clean(s string) string { return strings.ReplaceAll(s, "\u00a0", " ") }
+
+// stripGutter blanks out a leading gutter mark (keeping the columns, so the
+// dedent below still lines rows up) and, for a "│ … │" box row, the right
+// border.
+func stripGutter(s string) string {
+	m := gutterMark.FindStringSubmatchIndex(s)
+	if m == nil {
+		return s
+	}
+	mark := s[m[4]:m[5]]
+	rest := s[m[1]:]
+	s = s[:m[3]] + strings.Repeat(" ", 1+(m[7]-m[6])) + rest
+	if mark == "│" || mark == "┃" {
+		if t := strings.TrimRight(s, blankChars); strings.HasSuffix(t, mark) {
+			s = strings.TrimRight(strings.TrimSuffix(t, mark), blankChars)
+		}
+	}
+	return s
+}
+
+// firstWord is s up to its first blank.
+func firstWord(s string) string {
+	if i := strings.IndexAny(s, blankChars); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // blankChars are the padding characters trimmed from copied rows. All are
