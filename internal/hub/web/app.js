@@ -384,6 +384,17 @@ function groupOf(s) {
   return s.user_group || s.repo || base(s.cwd) || "(none)";
 }
 
+// sessionColor: the session's stable accent color — the same FNV-1a hash
+// and palette as model.Session.Color, so the TUI shows the same color.
+const SESSION_PALETTE = ["#ef4444", "#f97316", "#eab308", "#84cc16", "#22c55e", "#14b8a6",
+  "#06b6d4", "#3b82f6", "#6366f1", "#a855f7", "#ec4899"];
+function sessionColor(sid) {
+  if (!sid) return "";
+  let x = 0x811c9dc5;
+  for (const b of new TextEncoder().encode(sid)) x = Math.imul(x ^ b, 16777619) >>> 0;
+  return SESSION_PALETTE[x % SESSION_PALETTE.length];
+}
+
 function sessionTitle(s) {
   return s.custom_title || s.gen_title || s.title || "(無題)";
 }
@@ -641,7 +652,8 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
     check.addEventListener("click", (e) => e.stopPropagation());
     check.addEventListener("change", () => sel.toggle(s.session_id, check.checked));
   }
-  return h("div", { class: "item" + (here ? " selected" : "") + (check?.checked ? " checked" : ""), "data-sid": s.session_id, onclick: (e) => {
+  return h("div", { class: "item" + (here ? " selected" : "") + (check?.checked ? " checked" : ""), "data-sid": s.session_id,
+    style: `--sess:${sessionColor(s.session_id)}`, onclick: (e) => {
     if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
     location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`;
   } },
@@ -1247,7 +1259,7 @@ function gridTile(c) {
   const log = h("div", { class: "tile-log" }, h("div", { class: "muted small" }, "読み込み中…"));
   const input = h("input", { placeholder: "返信（Enter で送信）", enterkeyhint: "send" });
   const form = h("form", { class: "tile-reply" }, input, h("button", { class: "btn small primary" }, "送信"));
-  const el = h("div", { class: "tile" },
+  const el = h("div", { class: "tile", style: `--sess:${sessionColor(sid)}` },
     h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, resumeBtn, openBtn, closeBtn), reason, log, form,
     h("div", { class: "tile-resize", title: "ドラッグで大きさを変更" }));
   title.addEventListener("dblclick", () => el.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
@@ -1921,7 +1933,7 @@ async function chatPage(id, { sid, key }) {
     return false;
   };
 
-  const titleEl = h("span", { class: "grow title" }, "読み込み中…");
+  const titleEl = h("span", { class: "grow title sess-title" }, "読み込み中…");
   const statusEl = h("span", { class: "chip" });
   const termBtn = h("a", { class: "btn small", href: "#" }, "ターミナル");
   const endBtn = h("button", { class: "btn small danger", hidden: true, onclick: async () => {
@@ -2200,6 +2212,7 @@ async function chatPage(id, { sid, key }) {
 
     const title = session ? (session.num ? `#${session.num} ` : "") + sessionTitle(session) : sid ? sid : "新規セッション";
     titleEl.textContent = title;
+    titleEl.style.setProperty("--sess", sessionColor(sid));
     crumbs({ text: "端末", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: title });
     // A ccdash-hosted claude is alive even when discovery still files the
     // session as recent/stopped (no hook fired since it was resumed).

@@ -80,6 +80,29 @@ func (s Session) Ref() string {
 	return fmt.Sprintf("#%d", s.Num)
 }
 
+// SessionPalette is the set of session colors: distinct hues that read on
+// dark and light backgrounds. The portal mirrors it (sessionColor in
+// internal/hub/web/app.js) — change both together.
+var SessionPalette = []string{
+	"#ef4444", "#f97316", "#eab308", "#84cc16", "#22c55e", "#14b8a6",
+	"#06b6d4", "#3b82f6", "#6366f1", "#a855f7", "#ec4899",
+}
+
+// Color is the session's stable accent color (hex), picked from
+// SessionPalette by an FNV-1a hash of the session ID, so the TUI and the
+// portal agree without storing anything. Empty for a row without an ID.
+func (s Session) Color() string {
+	if s.SessionID == "" {
+		return ""
+	}
+	h := uint32(2166136261)
+	for i := 0; i < len(s.SessionID); i++ {
+		h ^= uint32(s.SessionID[i])
+		h *= 16777619
+	}
+	return SessionPalette[h%uint32(len(SessionPalette))]
+}
+
 type EventType string
 
 const (

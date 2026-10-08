@@ -3608,6 +3608,14 @@ func sameYMD(a, b time.Time) bool {
 // Line 1 leads with status, age, and the title (the most useful identifier
 // for the operator). Line 2 carries supporting metadata in dim text.
 func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string {
+	// A one-cell bar in the session's color (Session.Color, shared with the
+	// portal) leads both lines. A background-colored space rather than a
+	// block glyph: those are East-Asian ambiguous width.
+	bar := " "
+	if c := s.Color(); c != "" {
+		bar = lipgloss.NewStyle().Background(lipgloss.Color(c)).Render(" ")
+	}
+	width--
 	age := m.sessionTime(s.LastSeen)
 	// Line-2 indent aligns with where the title starts on line 1:
 	// marker(1) + " "(1) + dot(1) + " "(1) + age + " "(1).
@@ -3703,7 +3711,7 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		line1 = selectedRow.Render(padRight(line1, width))
 		line2 = selectedRow.Render(padRight(line2, width))
 	}
-	return line1 + "\n" + line2 + "\n"
+	return bar + line1 + "\n" + bar + line2 + "\n"
 }
 
 func padRight(s string, width int) string {

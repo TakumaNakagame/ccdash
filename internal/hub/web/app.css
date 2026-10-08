@@ -450,3 +450,9 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
   background: linear-gradient(135deg, transparent 50%, var(--muted) 50%, var(--muted) 60%, transparent 60%, transparent 72%, var(--muted) 72%, var(--muted) 82%, transparent 82%); opacity: .7; }
 .tile { position: relative; }
 .grid.free.has-max > .tile.max { left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; z-index: 1000 !important; }
+
+/* Session color (sessionColor): a bar on the left of list rows, grid tiles
+   and the chat title, so a session is recognizable at a glance. */
+.item[style*="--sess"] { box-shadow: inset 4px 0 0 var(--sess); }
+.tile[style*="--sess"] { border-left: 4px solid var(--sess); }
+.sess-title::before { content: ""; display: inline-block; width: 4px; height: 1em; margin-right: 8px; vertical-align: -0.12em; border-radius: 2px; background: var(--sess, transparent); }
