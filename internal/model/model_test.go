@@ -18,6 +18,22 @@ func TestColorStable(t *testing.T) {
 	}
 }
 
+// TestColorByNum: consecutive sessions never share an automatic color
+// within a palette's length.
+func TestColorByNum(t *testing.T) {
+	seen := map[string]int64{}
+	for n := int64(100); n < 100+int64(len(SessionPalette)); n++ {
+		c := (Session{SessionID: "x", Num: n}).Color()
+		if prev, ok := seen[c]; ok {
+			t.Fatalf("#%d and #%d share %s", prev, n, c)
+		}
+		seen[c] = n
+	}
+	if got := (Session{SessionID: "x", Num: 1}).Color(); got != SessionPalette[7] {
+		t.Errorf("#1 = %s, want %s", got, SessionPalette[7])
+	}
+}
+
 func TestColorOverride(t *testing.T) {
 	if got := (Session{SessionID: "a", ColorOverride: "#123456"}).Color(); got != "#123456" {
 		t.Errorf("override ignored: %q", got)

@@ -111,7 +111,7 @@ ccdash --version               # report the current version
 | `T` | edit the user-named group for this session |
 | `t` | rename the session (operator override of auto / generated title) |
 | `f` | toggle ★ favorite (favorites pin to the top) |
-| `c` / `C` | next / previous color for the session's bar (shared with the portal) |
+| `c` / `C` | next / random color for the session's bar (shared with the portal; automatic colors follow `#N`, so recent sessions differ) |
 | `ctrl+r` | restart the session's ccdash-hosted claude (kill + `claude --resume`), after `y` |
 | `!` | show only sessions that need you (`?`: approval, question, menu on screen) or finished a turn you haven't looked at (`✓`) |
 | `x` | archive / unarchive |

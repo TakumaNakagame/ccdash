@@ -371,7 +371,6 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 select.mode { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 8px; font: inherit; color: var(--text); }
 
 /* usage */
-.btn.cost { font-variant-numeric: tabular-nums; }
 .usage-card { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 10px 14px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .usage-card .big { font-size: 20px; }
 .bars { display: flex; gap: 6px; align-items: flex-end; height: 76px; }
@@ -459,3 +458,12 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
 .swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; background: var(--c); cursor: pointer; padding: 0; }
 .swatch.on { border-color: var(--text, #fff); box-shadow: 0 0 0 2px var(--bg, #000) inset; }
+/* Chat status line (model · context · cost) under the composer. */
+.chat-status { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; max-width: 820px; width: 100%; margin: -4px auto 0; padding: 0 14px 8px; background: none; border: 0; color: var(--muted); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; text-align: left; cursor: pointer; }
+.chat-status .st-model { color: var(--accent); font-weight: 600; }
+.chat-status .st-ctx { display: inline-flex; align-items: center; gap: 6px; }
+.chat-status .st-bar { display: inline-block; width: 64px; height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--muted) 30%, transparent); overflow: hidden; }
+.chat-status .st-bar > span { display: block; height: 100%; background: #22c55e; }
+.chat-status .st-bar.warm > span { background: #eab308; }
+.chat-status .st-bar.hot > span { background: #ef4444; }
+.chat-status .st-cost { color: #eab308; }

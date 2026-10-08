@@ -106,13 +106,23 @@ func ValidColor(c string) bool {
 	return true
 }
 
+// colorStride steps the automatic color by #N: coprime with the palette
+// size, so 24 consecutive sessions get 24 different colors, and neighbours
+// land far apart on the hue wheel.
+const colorStride = 7
+
 // Color is the session's accent color (hex): the operator's pick when set,
-// else one from SessionPalette by an FNV-1a hash of the session ID, so the
-// TUI and the portal agree without storing anything. Empty for a row
-// without an ID.
+// else one from SessionPalette by the session's #N (so recent sessions
+// differ), or by an FNV-1a hash of the ID for a row without a number yet.
+// Empty for a row without an ID. The portal computes the same
+// (sessionColorOf in internal/hub/web/app.js).
 func (s Session) Color() string {
 	if s.ColorOverride != "" {
 		return s.ColorOverride
+	}
+	n := uint32(len(SessionPalette))
+	if s.Num > 0 {
+		return SessionPalette[uint32(s.Num*colorStride)%n]
 	}
 	if s.SessionID == "" {
 		return ""
@@ -122,7 +132,7 @@ func (s Session) Color() string {
 		h ^= uint32(s.SessionID[i])
 		h *= 16777619
 	}
-	return SessionPalette[h%uint32(len(SessionPalette))]
+	return SessionPalette[h%n]
 }
 
 type EventType string

@@ -2,14 +2,15 @@ package tui
 
 // Per-session operations that talk to the local collector directly:
 //
-//   - c / C: step the session's color through mdl.SessionPalette (C goes
-//     back); the color lives on the session row, so the portal shows it too.
+//   - c / C: next palette color / a random different one for the session;
+//     the color lives on the session row, so the portal shows it too.
 //   - ctrl+r: restart the session's hosted claude (POST /pty/{key}/restart:
 //     kill + `claude --resume`), after a y confirmation.
 
 import (
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -28,7 +29,7 @@ type sessionRestartedMsg struct {
 }
 
 // stepColorCurrent moves the selected session's color dir steps through the
-// palette, starting from the color it shows now.
+// palette, starting from the color it shows now; dir 0 picks a random other.
 func (m *model) stepColorCurrent(dir int) tea.Cmd {
 	if len(m.sessions) == 0 {
 		return nil
@@ -46,6 +47,9 @@ func (m *model) stepColorCurrent(dir int) tea.Cmd {
 		}
 	}
 	next := mdl.SessionPalette[((i+dir)%n+n)%n]
+	if dir == 0 { // random, but never the current color
+		next = mdl.SessionPalette[(i+1+rand.IntN(n-1))%n]
+	}
 	// Show it right away; the next poll brings the stored value back.
 	m.sessions[m.selSess].ColorOverride = next
 	for k := range m.allSessions {

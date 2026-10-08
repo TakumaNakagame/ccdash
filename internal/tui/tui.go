@@ -1295,7 +1295,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		return m, m.stepColorCurrent(1)
 	case "C":
-		return m, m.stepColorCurrent(-1)
+		return m, m.stepColorCurrent(0)
 	case "ctrl+r":
 		if !m.settings.AttachEnabled {
 			m.flash = "attach is OFF (settings ',')"
@@ -2899,7 +2899,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  S skill  </> resize  enter attach  a/A/d allow/keep/deny  s sum  f fav  c/C color  ctrl+r restart  ! needs-you  t/T rename/group  ctrl+t auto-title  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
+	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  S skill  </> resize  enter attach  a/A/d allow/keep/deny  s sum  f fav  c/C color/random  ctrl+r restart  ! needs-you  t/T rename/group  ctrl+t auto-title  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
 	if m.pane == paneSessions {
 		if live := m.liveForCurrent(); live != nil && !live.exited {
 			if m.liveFocus {

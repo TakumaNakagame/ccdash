@@ -387,7 +387,7 @@ function groupOf(s) {
 // sessionColor: the session's automatic accent color — the same FNV-1a
 // hash and palette as model.Session.Color, so the TUI shows the same color.
 // sessionColorOf prefers the operator's pick (s.color, set from ⋯ or the
-// TUI's c / C).
+// TUI's c / C), then the session's #N, then this hash.
 const SESSION_PALETTE = [
   "#ef4444", "#f97316", "#f59e0b", "#facc15", "#84cc16", "#22c55e",
   "#10b981", "#14b8a6", "#06b6d4", "#0ea5e9", "#3b82f6", "#6366f1",
@@ -400,7 +400,9 @@ function sessionColor(sid) {
   for (const b of new TextEncoder().encode(sid)) x = Math.imul(x ^ b, 16777619) >>> 0;
   return SESSION_PALETTE[x % SESSION_PALETTE.length];
 }
-const sessionColorOf = (s) => s?.color || sessionColor(s?.session_id);
+// By #N first: 7 is coprime with the palette size, so consecutive sessions
+// get different, far-apart colors (model.Session.Color does the same).
+const sessionColorOf = (s) => s?.color || (s?.num > 0 ? SESSION_PALETTE[(s.num * 7) % SESSION_PALETTE.length] : sessionColor(s?.session_id));
 
 function sessionTitle(s) {
   return s.custom_title || s.gen_title || s.title || "(無題)";
@@ -1229,6 +1231,11 @@ function sessionMenu(id, s, groups, refresh) {
           type: "button", class: "swatch" + (sessionColorOf(s) === c ? " on" : ""), style: `--c:${c}`, title: c,
           onclick: () => { close(); post("/color", { color: c }, "色を変更しました"); },
         })),
+        h("button", { type: "button", class: "btn small", title: "今と違う色をランダムに選ぶ", onclick: () => {
+          const others = SESSION_PALETTE.filter((c) => c !== sessionColorOf(s));
+          close();
+          post("/color", { color: others[Math.floor(Math.random() * others.length)] }, "色をランダムに変更しました");
+        } }, "🎲 ランダム"),
         h("button", { type: "button", class: "btn small", disabled: !s.color, onclick: () => { close(); post("/color", { color: "" }, "色を自動に戻しました"); } }, "自動に戻す")),
       h("label", {}, "グループ（空にすると repo 名に戻す）"),
       h("div", { class: "row" }, group, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/group", { group: group.value.trim() }, "グループを保存しました"); } }, "保存")),
@@ -1639,6 +1646,30 @@ const shortModel = (m) => (m || "").replace(/^claude-/, "");
 // usageLine: "opus-5-5 · 文脈 85.2k · $1.23" (a Brief or a SessionUsage).
 const usageLine = (u) => [shortModel(u.model), u.context ? "文脈 " + fmtTok(u.context) : "",
   fmtUSD(u.cost ?? u.total?.cost ?? 0)].filter(Boolean).join(" · ");
+// modelName: "claude-opus-5-5" → "Opus 5.5" ("-20251001" date suffixes dropped).
+function modelName(m) {
+  const parts = (m || "").replace(/^claude-/, "").replace(/-\d{8}$/, "").split("-");
+  const fam = parts.filter((p) => !/^\d+$/.test(p)).join(" ");
+  const ver = parts.filter((p) => /^\d+$/.test(p)).join(".");
+  return [fam.charAt(0).toUpperCase() + fam.slice(1), ver].filter(Boolean).join(" ");
+}
+// contextWindow: the transcript doesn't say which window a model ran with,
+// so 200k unless the prompt already outgrew it (then the 1M window).
+const contextWindow = (ctx) => (ctx > 200000 ? 1000000 : 200000);
+
+// statusParts: the chat's status line for a SessionUsage.
+function statusParts(u) {
+  const out = [h("span", { class: "st-model" }, "◆ " + modelName(u.model))];
+  if (u.context) {
+    const win = contextWindow(u.context);
+    const pct = Math.min(100, Math.round((u.context / win) * 100));
+    out.push(h("span", { class: "st-ctx" },
+      h("span", { class: "st-bar" + (pct >= 80 ? " hot" : pct >= 50 ? " warm" : "") }, h("span", { style: `width:${pct}%` })),
+      ` ${pct}% ${fmtTok(u.context)}/${fmtTok(win)}`));
+  }
+  out.push(h("span", { class: "st-cost" }, fmtUSD(u.total?.cost ?? 0)));
+  return out;
+}
 const tokTotal = (t) => (t.input || 0) + (t.output || 0) + (t.cache_write || 0) + (t.cache_read || 0);
 
 function usageDialog(u, title) {
@@ -1981,10 +2012,9 @@ async function chatPage(id, { sid, key }) {
   let allGroups = [];
   const diffBtn = h("a", { class: "btn small", hidden: true, title: "変更の差分を見てコメントする" }, "差分");
   let lastUsage = null;
-  const costBtn = h("button", { class: "btn small cost", hidden: true, title: "このセッションのトークンと API 換算コスト", onclick: () => lastUsage && usageDialog(lastUsage, "このセッションの使用量") }, "");
   const menuBtn = h("button", { class: "btn small", title: "セッションの操作", onclick: () => session ? sessionMenu(id, session, allGroups, poll) : toast("まだセッションが登録されていません") }, "⋯");
   const bar = h("div", { class: "term-bar" },
-    h("a", { class: "btn small", href: `#/d/${id}` }, "←"), titleEl, statusEl, costBtn, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
+    h("a", { class: "btn small", href: `#/d/${id}` }, "←"), titleEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
   const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, "読み込み中…"));
   const scroller = h("div", { class: "chat" }, log);
   const approvalsEl = h("div", { class: "chat-dock" });
@@ -2072,7 +2102,10 @@ async function chatPage(id, { sid, key }) {
       if (ev === "drop") addFiles([...e.dataTransfer.files]);
     });
   }
-  mount.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, quickRow, composer)));
+  // Under the composer, like Claude Code's status line: model, context
+  // fill and cost (tap for the breakdown).
+  const statusLine = h("button", { type: "button", class: "chat-status", hidden: true, title: "トークンと API 換算コストの内訳", onclick: () => lastUsage && usageDialog(lastUsage, "このセッションの使用量") });
+  mount.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, quickRow, composer, statusLine)));
 
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
   input.addEventListener("input", autosize);
@@ -2305,8 +2338,8 @@ async function chatPage(id, { sid, key }) {
       const u = await d.get(`/api/sessions/${encodeURIComponent(sid)}/usage`).catch(() => null);
       if (u?.total?.messages) {
         lastUsage = u;
-        costBtn.hidden = false;
-        costBtn.textContent = usageLine(u);
+        statusLine.hidden = false;
+        statusLine.replaceChildren(...statusParts(u));
       }
     }
 
