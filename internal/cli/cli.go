@@ -116,6 +116,8 @@ spawns a collector — everything goes over HTTP.`,
 	root.AddCommand(approvalsCmd(rf))
 	root.AddCommand(installHooksCmd())
 	root.AddCommand(uninstallHooksCmd())
+	root.AddCommand(installStatusLineCmd())
+	root.AddCommand(uninstallStatusLineCmd())
 	root.AddCommand(tuiCmd(rf))
 	root.AddCommand(remoteCmd())
 	root.AddCommand(hubCmd())
@@ -726,6 +728,62 @@ func uninstallHooksCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("hooks removed from %s\n", in.Path)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&settingsPath, "settings", "", "override settings.json path")
+	return c
+}
+
+// installStatusLineCmd installs just the status line relay (install-hooks
+// includes it): the portal's status line then shows the values Claude Code
+// itself reports, while the terminal keeps the operator's own status line.
+func installStatusLineCmd() *cobra.Command {
+	var dryRun bool
+	var settingsPath string
+	c := &cobra.Command{
+		Use:   "install-statusline",
+		Short: "Relay Claude Code's status line data to ccdash (keeps your own statusLine command)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			in, err := hookcfg.DefaultInstall()
+			if err != nil {
+				return err
+			}
+			if settingsPath != "" {
+				in.Path = settingsPath
+			}
+			in.DryRun = dryRun
+			if err := in.InstallStatusLine(); err != nil {
+				return err
+			}
+			if !dryRun {
+				fmt.Printf("status line relay installed → %s (restart claude sessions to pick it up)\n", in.Path)
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "print merged settings.json to stdout instead of writing")
+	c.Flags().StringVar(&settingsPath, "settings", "", "override settings.json path (default: ~/.claude/settings.json)")
+	return c
+}
+
+func uninstallStatusLineCmd() *cobra.Command {
+	var settingsPath string
+	c := &cobra.Command{
+		Use:   "uninstall-statusline",
+		Short: "Remove the status line relay and restore your own statusLine setting",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			in, err := hookcfg.DefaultInstall()
+			if err != nil {
+				return err
+			}
+			if settingsPath != "" {
+				in.Path = settingsPath
+			}
+			if err := in.RemoveStatusLine(); err != nil {
+				return err
+			}
+			fmt.Printf("status line restored in %s\n", in.Path)
 			return nil
 		},
 	}

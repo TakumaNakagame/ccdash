@@ -56,6 +56,27 @@ func HookScriptPath() (string, error) {
 	return filepath.Join(dir, "hook.sh"), nil
 }
 
+// StatusLineScriptPath is the relay ccdash puts in Claude Code's statusLine:
+// it forwards the status JSON to the collector, then runs the operator's
+// own statusLine command. StatusLineOrigPath keeps that original setting so
+// uninstall can put it back. Written by `ccdash install-hooks` /
+// `ccdash install-statusline`.
+func StatusLineScriptPath() (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "statusline.sh"), nil
+}
+
+func StatusLineOrigPath() (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "statusline.orig.json"), nil
+}
+
 func ClaudeUserSettingsPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

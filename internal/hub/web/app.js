@@ -1136,25 +1136,6 @@ function screenAsk(rows) {
   return { kind: "ask", tabs, question: question.join(" "), options, multi, other, key: rows.slice(tabRow, footer).join("\n") };
 }
 
-// screenStatus returns the lines Claude Code draws under its input box
-// (the statusLine command's output, then the mode hint), or null when the
-// input box isn't on screen (a dialog, a fullscreen view).
-function screenStatus(rows) {
-  const rule = (r) => /^─{8,}$/.test(r.trim());
-  let r2 = -1;
-  for (let i = rows.length - 1; i >= 0; i--) if (rule(rows[i])) { r2 = i; break; }
-  if (r2 < 1) return null;
-  let r1 = -1;
-  for (let i = r2 - 1; i >= 0 && i >= r2 - 12; i--) if (rule(rows[i])) { r1 = i; break; }
-  if (r1 < 0 || !rows.slice(r1 + 1, r2).some((r) => r.trimStart().startsWith("❯"))) return null;
-  const lines = [];
-  for (const r of rows.slice(r2 + 1).map((x) => x.trim())) {
-    if (/^[●◯]\s/.test(r)) break; // the agent panel ("● main", "◯ general-purpose …") starts here
-    if (r) lines.push(r);
-  }
-  return lines.length ? lines : null;
-}
-
 function screenPrompt(rows) {
   const ask = screenAsk(rows);
   if (ask) return ask;
@@ -1695,15 +1676,44 @@ function modelName(m) {
 // so 200k unless the prompt already outgrew it (then the 1M window).
 const contextWindow = (ctx) => (ctx > 200000 ? 1000000 : 200000);
 
+// ctxPart: a context fill bar with "pct% used/size".
+function ctxPart(pct, used, size) {
+  pct = Math.max(0, Math.min(100, Math.round(pct)));
+  return h("span", { class: "st-ctx", title: "文脈（直近の応答時点）" },
+    h("span", { class: "st-bar" + (pct >= 80 ? " hot" : pct >= 50 ? " warm" : "") }, h("span", { style: `width:${pct}%` })),
+    ` ${pct}%` + (used ? ` ${fmtTok(used)}/${fmtTok(size)}` : ""));
+}
+const fmtDur = (ms) => {
+  const m = Math.floor(ms / 60000);
+  return m >= 60 ? `${Math.floor(m / 60)}h${m % 60}m` : `${m}m`;
+};
+
+// liveStatusParts: the chat's status line from Claude Code's statusLine
+// JSON (see https://code.claude.com/docs/en/statusline).
+function liveStatusParts(st) {
+  const out = [h("span", { class: "st-model" }, "◆ " + (st.model?.display_name || modelName(st.model?.id)))];
+  const cw = st.context_window;
+  if (cw?.context_window_size) {
+    const u = cw.current_usage;
+    const used = u ? (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0) : cw.total_input_tokens || 0;
+    const pct = cw.used_percentage ?? (used / cw.context_window_size) * 100;
+    out.push(ctxPart(pct, used, cw.context_window_size));
+  }
+  if (st.cost?.total_cost_usd != null) out.push(h("span", { class: "st-cost", title: "このセッションの概算コスト（Claude Code の推定）" }, fmtUSD(st.cost.total_cost_usd)));
+  const add = st.cost?.total_lines_added || 0, del = st.cost?.total_lines_removed || 0;
+  if (add || del) out.push(h("span", { class: "st-lines" }, h("span", { class: "add" }, `+${add}`), " ", h("span", { class: "del" }, `−${del}`)));
+  if (st.cost?.total_duration_ms) out.push(h("span", { class: "st-dur" }, "⏱ " + fmtDur(st.cost.total_duration_ms)));
+  const rl = st.rate_limits?.five_hour;
+  if (rl?.used_percentage != null) out.push(h("span", { class: "st-rate", title: "5 時間枠の使用率" }, `5h ${Math.round(rl.used_percentage)}%`));
+  return out;
+}
+
 // statusParts: the chat's status line for a SessionUsage.
 function statusParts(u) {
   const out = [h("span", { class: "st-model" }, "◆ " + modelName(u.model))];
   if (u.context) {
     const win = contextWindow(u.context);
-    const pct = Math.min(100, Math.round((u.context / win) * 100));
-    out.push(h("span", { class: "st-ctx" },
-      h("span", { class: "st-bar" + (pct >= 80 ? " hot" : pct >= 50 ? " warm" : "") }, h("span", { style: `width:${pct}%` })),
-      ` ${pct}% ${fmtTok(u.context)}/${fmtTok(win)}`));
+    out.push(ctxPart((u.context / win) * 100, u.context, win));
   }
   out.push(h("span", { class: "st-cost" }, fmtUSD(u.total?.cost ?? 0)));
   return out;
@@ -2140,21 +2150,20 @@ async function chatPage(id, { sid, key }) {
       if (ev === "drop") addFiles([...e.dataTransfer.files]);
     });
   }
-  // Right of the shortcuts: Claude Code's own status line read off the
-  // hosted claude's screen (so it says exactly what the terminal says), or
-  // — for a session not running here — model · context · cost from the
-  // transcript. Tap for the token / cost breakdown.
+  // Right of the shortcuts: the status Claude Code itself reports (relayed
+  // by ccdash's statusLine hook: model, context window, cost, lines, time,
+  // rate limits), or — when none arrived lately — model · context · cost
+  // from the transcript. Tap for the token / cost breakdown.
   const statusLine = h("button", { type: "button", class: "chat-status", hidden: true, title: "トークンと API 換算コストの内訳", onclick: () => lastUsage && usageDialog(lastUsage, "このセッションの使用量") });
-  let screenSt = null, statusSig = "";
+  let liveSt = null, statusSig = "";
   const paintStatus = () => {
-    const sig = screenSt ? "s:" + screenSt.join("\n") : lastUsage ? "u:" + JSON.stringify([lastUsage.model, lastUsage.context, lastUsage.total?.cost]) : "";
+    const fresh = liveSt && Date.now() - new Date(liveSt.at) < 15 * 60000 ? liveSt.data : null;
+    const sig = fresh ? "s:" + JSON.stringify([fresh.model, fresh.context_window, fresh.cost, fresh.rate_limits])
+      : lastUsage ? "u:" + JSON.stringify([lastUsage.model, lastUsage.context, lastUsage.total?.cost]) : "";
     if (sig === statusSig) return;
     statusSig = sig;
     statusLine.hidden = !sig;
-    statusLine.classList.toggle("screen", !!screenSt);
-    statusLine.replaceChildren(...(screenSt
-      ? screenSt.map((l, i) => h("span", { class: i ? "st-sub" : "st-line" }, l))
-      : lastUsage ? statusParts(lastUsage) : []));
+    statusLine.replaceChildren(...(fresh ? liveStatusParts(fresh) : lastUsage ? statusParts(lastUsage) : []));
   };
   mount.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, h("div", { class: "quick-bar" }, quickRow, statusLine), composer)));
 
@@ -2384,6 +2393,11 @@ async function chatPage(id, { sid, key }) {
       render(atBottom());
     }
 
+    // Claude Code's own status (every other poll; served from memory)
+    if (sid && agentTick % 2 === 0) {
+      liveSt = await d.get(`/api/sessions/${encodeURIComponent(sid)}/statusline`).catch(() => null);
+    }
+
     // usage (every seventh poll)
     if (sid && agentTick % 7 === 0) {
       const u = await d.get(`/api/sessions/${encodeURIComponent(sid)}/usage`).catch(() => null);
@@ -2410,10 +2424,6 @@ async function chatPage(id, { sid, key }) {
       const scr = await d.get(`/pty/${encodeURIComponent(ptyKey)}/text`).catch(() => null);
       const askPending = items.some((x) => x.kind === "tool" && x.name === "AskUserQuestion" && x.result == null);
       const pr = scr && !askPending && screenPrompt(scr.rows);
-      // The status line Claude Code itself draws (the operator's
-      // statusLine command) — kept while a dialog hides it.
-      const st = scr && screenStatus(scr.rows);
-      if (st) screenSt = st;
       if (!pr) promptEl.replaceChildren();
       else if (promptEl.dataset.key !== pr.key) {
         promptEl.dataset.key = pr.key;
@@ -2425,7 +2435,6 @@ async function chatPage(id, { sid, key }) {
       if (!pr) delete promptEl.dataset.key;
     } else {
       promptEl.replaceChildren();
-      screenSt = null;
     }
     paintStatus();
   }

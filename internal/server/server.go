@@ -61,6 +61,10 @@ type Server struct {
 	// only by `ccdash server`, which re-execs itself on that error.
 	CanRestart   bool
 	restartAsked atomic.Bool
+
+	// statusLines: latest relayed statusLine JSON per session (statusline.go).
+	statusMu    sync.Mutex
+	statusLines map[string]statusSnap
 }
 
 type approvalDecision struct {
@@ -129,6 +133,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/hooks/stop", wrap(s.handleStop))
 	s.mux.HandleFunc("/hooks/subagent-stop", wrap(s.handleSubagentStop))
 	s.mux.HandleFunc("/hooks/notification", wrap(s.handleNotification))
+	// Not rate-limited: it fires on every UI update of every running
+	// claude and only touches memory (the limiter guards the SQLite writer).
+	s.mux.HandleFunc("POST /hooks/statusline", s.requireToken(s.handleStatusLine))
 	s.mux.HandleFunc("/approvals/", wrap(s.handleApprovalDecide))
 	s.mux.HandleFunc("/pty/", wrap(s.handlePTY))
 	s.mux.HandleFunc("/shutdown", wrap(s.handleShutdown))
@@ -150,6 +157,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/titles", wrap(s.handleAPITitles))
 	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
 	s.mux.HandleFunc("GET /api/sessions/{id}/usage", wrap(s.handleAPISessionUsage))
+	s.mux.HandleFunc("GET /api/sessions/{id}/statusline", wrap(s.handleAPIStatusLine))
 	s.mux.HandleFunc("GET /api/usage", wrap(s.handleAPIUsage))
 	s.mux.HandleFunc("GET /api/usage/sessions", wrap(s.handleAPIUsageSessions))
 	s.mux.HandleFunc("GET /api/settings", wrap(s.handleAPISettingsList))

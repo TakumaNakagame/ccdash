@@ -462,7 +462,7 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
    cost, right) share the row above the composer. */
 .quick-bar { max-width: 820px; margin: 0 auto; padding: 8px 12px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .quick-bar .quick-row { max-width: none; margin: 0; padding: 0; flex: 1 1 200px; min-width: 0; }
-.chat-status { display: flex; gap: 12px; align-items: center; margin-left: auto; flex: none; background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; }
+.chat-status { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px 12px; align-items: center; margin-left: auto; flex: 0 1 auto; min-width: 0; background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; }
 .chat-status[hidden] { display: none; }
 .chat-status .st-model { color: var(--accent); font-weight: 600; }
 .chat-status .st-ctx { display: inline-flex; align-items: center; gap: 6px; }
@@ -474,7 +474,5 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .bubble.user details.paste { margin: 4px 0; }
 .bubble.user details.paste summary { cursor: pointer; opacity: .9; font-size: 13px; }
 .bubble.user details.paste pre { margin: 6px 0 0; padding: 8px; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-size: 12px; background: rgba(0, 0, 0, .18); border-radius: 6px; }
-.chat-status.screen { flex-direction: column; align-items: flex-end; gap: 0; max-width: 100%; min-width: 0; flex: 0 1 auto; }
-.chat-status.screen span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.chat-status .st-line { color: var(--text); }
-.chat-status .st-sub { font-size: 11px; }
+.chat-status .st-lines .add { color: #22c55e; }
+.chat-status .st-lines .del { color: #ef4444; }

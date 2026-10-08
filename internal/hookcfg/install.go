@@ -129,6 +129,9 @@ func (in *Install) Apply() (changed bool, err error) {
 		hooks[event] = mergeEvent(hooks[event], entry)
 	}
 	settings["hooks"] = hooks
+	if err := in.applyStatusLine(settings); err != nil {
+		return false, fmt.Errorf("status line relay: %w", err)
+	}
 
 	if in.DryRun {
 		buf, _ := json.MarshalIndent(settings, "", "  ")
@@ -150,7 +153,7 @@ func (in *Install) Remove() error {
 	}
 	hooks, _ := settings["hooks"].(map[string]any)
 	if hooks == nil {
-		return nil
+		return in.RemoveStatusLine()
 	}
 	for event := range Endpoints {
 		hooks[event] = removeManagedFromEvent(hooks[event])
@@ -162,8 +165,15 @@ func (in *Install) Remove() error {
 		}
 	}
 	settings["hooks"] = hooks
+	restored := false
+	if origPath, err := paths.StatusLineOrigPath(); err == nil {
+		restored = unwrapStatusLine(settings, origPath)
+	}
 	if err := writeSettings(in.Path, settings); err != nil {
 		return err
+	}
+	if restored {
+		removeStatusLineFiles()
 	}
 	// Best-effort: drop the forwarder script now that nothing references it.
 	if scriptPath, err := paths.HookScriptPath(); err == nil {
@@ -228,6 +238,13 @@ func NeedsResync(path string) (bool, error) {
 	scriptPath, err := paths.HookScriptPath()
 	if err != nil {
 		return false, err
+	}
+	if isManagedStatusLine(settings["statusLine"]) {
+		if p, err := paths.StatusLineScriptPath(); err == nil {
+			if _, err := os.Stat(p); err != nil {
+				return true, nil
+			}
+		}
 	}
 	for event, raw := range hooks {
 		arr, _ := raw.([]any)

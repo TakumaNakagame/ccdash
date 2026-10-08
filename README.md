@@ -81,7 +81,14 @@ with `pkill -f 'ccdash server'`.
 The optional `ccdash claude` wrapper passes args through to `claude` and
 also captures the tmux pane and wrapper PID for richer attach information.
 
-To unwire ccdash from Claude:
+`install-hooks` also puts a small relay in `statusLine`: it forwards the
+status JSON Claude Code hands its status line (model, context window, cost,
+lines changed, rate limits) to the collector — the portal draws its status
+line from it — and then runs your own `statusLine` command unchanged, so
+the terminal looks the same. `ccdash install-statusline` installs only that
+relay; `ccdash uninstall-statusline` puts your original setting back.
+
+To unwire ccdash from Claude (this restores your `statusLine` too):
 
 ```sh
 ccdash uninstall-hooks
@@ -467,6 +474,9 @@ mode) managing their own Claude Code sessions.
   marker (or, for the forwarder entries, point at `ccdash/hook.sh`) so
   `install-hooks` and `uninstall-hooks` round-trip them idempotently
   without disturbing other user hooks
+- `statusLine` points at `$XDG_STATE_HOME/ccdash/statusline.sh` (your
+  original setting is saved in `statusline.orig.json` and run by the relay);
+  the relay backgrounds its POST the same way
 - Only PermissionRequest is a blocking HTTP hook. Every other event runs
   `$XDG_STATE_HOME/ccdash/hook.sh`, which backgrounds a `curl` POST and
   returns at once, so a stopped or hung ccdash never slows a session down
