@@ -171,6 +171,8 @@ type model struct {
 	// shortcut; spawning claude -p costs an API round trip so we don't
 	// want it to fire on a typo.
 	awaitSummaryConfirm bool
+	// awaitRestartSessionConfirm gates ctrl+r (restart the hosted claude).
+	awaitRestartSessionConfirm bool
 	// awaitTitleGenConfirm is the ctrl+t banner: y titles titleGenSel,
 	// a titles the titleGenRecent batch (see titlegen.go).
 	awaitTitleGenConfirm bool
@@ -962,6 +964,8 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return attachDoneMsg{msg: "claude session ended"}
 			}
 		})
+	case sessionRestartedMsg:
+		return m, m.handleSessionRestarted(msg)
 	case attachDoneMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -1125,6 +1129,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.awaitTitleGenConfirm {
 		return m.handleKeyTitleGenConfirm(msg)
 	}
+	if m.awaitRestartSessionConfirm {
+		m.awaitRestartSessionConfirm = false
+		switch msg.String() {
+		case "y", "Y":
+			return m, m.restartSessionCurrent()
+		default:
+			m.flash = "restart cancelled"
+			return m, nil
+		}
+	}
 	if m.awaitSummaryConfirm {
 		m.awaitSummaryConfirm = false
 		switch msg.String() {
@@ -1278,6 +1292,17 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "f":
 		return m, m.toggleFavoriteCurrent()
+	case "c":
+		return m, m.stepColorCurrent(1)
+	case "C":
+		return m, m.stepColorCurrent(-1)
+	case "ctrl+r":
+		if !m.settings.AttachEnabled {
+			m.flash = "attach is OFF (settings ',')"
+			return m, nil
+		}
+		m.askRestartSession()
+		return m, nil
 	case "!":
 		m.attentionOnly = !m.attentionOnly
 		m.applyGroupFilter()
@@ -2835,7 +2860,7 @@ func (m *model) renderHeader() string {
 }
 
 func (m *model) renderFooter() string {
-	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm || m.awaitTitleGenConfirm {
+	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm || m.awaitTitleGenConfirm || m.awaitRestartSessionConfirm {
 		// y/n confirmation lands in a full-width yellow banner instead
 		// of the dim flash so operators don't miss the cue.
 		banner := confirmBannerStyle.Width(m.width).Render(m.flash)
@@ -2874,7 +2899,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  S skill  </> resize  enter attach  a/A/d allow/keep/deny  s sum  f fav  ! needs-you  t/T rename/group  ctrl+t auto-title  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
+	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  S skill  </> resize  enter attach  a/A/d allow/keep/deny  s sum  f fav  c/C color  ctrl+r restart  ! needs-you  t/T rename/group  ctrl+t auto-title  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
 	if m.pane == paneSessions {
 		if live := m.liveForCurrent(); live != nil && !live.exited {
 			if m.liveFocus {

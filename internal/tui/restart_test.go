@@ -38,7 +38,7 @@ func TestRestartConfirm(t *testing.T) {
 	}
 	rb, _ := m.restartBox()
 	box := ansi.Strip(rb)
-	for _, want := range []string{"1 live session(s)", "STOPPED", "fix the login bug", "1 pending approval", "resume"} {
+	for _, want := range []string{"1 live session(s)", "(claude --resume)", "fix the login bug", "1 pending approval", "resume"} {
 		if !strings.Contains(box, want) {
 			t.Errorf("modal missing %q:\n%s", want, box)
 		}

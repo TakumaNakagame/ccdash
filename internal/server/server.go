@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/takumanakagame/ccmanage/internal/accounts"
@@ -56,6 +57,10 @@ type Server struct {
 
 	// cancelFn stops the server's context (graceful shutdown).
 	cancelFn context.CancelFunc
+	// CanRestart lets POST /api/restart stop the server with ErrRestart; set
+	// only by `ccdash server`, which re-execs itself on that error.
+	CanRestart   bool
+	restartAsked atomic.Bool
 }
 
 type approvalDecision struct {
@@ -127,6 +132,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/approvals/", wrap(s.handleApprovalDecide))
 	s.mux.HandleFunc("/pty/", wrap(s.handlePTY))
 	s.mux.HandleFunc("/shutdown", wrap(s.handleShutdown))
+	s.mux.HandleFunc("POST /api/restart", wrap(s.handleRestart))
 
 	// Remote-mode API — consumed by internal/store.Remote so a TUI can run
 	// on a different host than the collector. Same rate-limit + token
@@ -136,6 +142,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/approvals", wrap(s.handleAPIApprovals))
 	s.mux.HandleFunc("POST /api/sessions/{id}/archive", wrap(s.handleAPIArchive))
 	s.mux.HandleFunc("POST /api/sessions/{id}/favorite", wrap(s.handleAPIFavorite))
+	s.mux.HandleFunc("POST /api/sessions/{id}/color", wrap(s.handleAPIColor))
 	s.mux.HandleFunc("POST /api/sessions/{id}/title", wrap(s.handleAPITitle))
 	s.mux.HandleFunc("POST /api/sessions/{id}/group", wrap(s.handleAPIGroup))
 	s.mux.HandleFunc("POST /api/sessions/{id}/seen", wrap(s.handleAPISeen))
@@ -237,6 +244,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		_ = s.srv.Shutdown(shutCtx) // closes every listener the server serves
 	}()
 	s.syncInstalledHooks()
+	go s.resumeSaved()
 	go s.discoveryLoop(ctx)
 	go s.hubLoop(ctx)
 	go s.attentionLoop(ctx)
@@ -256,6 +264,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			_ = s.srv.Shutdown(shutCtx)
 			cancel()
 		}
+	}
+	if firstErr == nil && s.restartAsked.Load() {
+		s.closeAllPTYs()
+		return ErrRestart
 	}
 	return firstErr
 }
@@ -979,6 +991,26 @@ func (s *Server) handleAPIArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.db.SetArchived(r.Context(), id, body.Archived); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+// handleAPIColor: {"color":"#rrggbb"} sets the session's color, "" clears it.
+func (s *Server) handleAPIColor(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Color string `json:"color"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if body.Color != "" && !model.ValidColor(body.Color) {
+		writeErr(w, http.StatusBadRequest, errors.New(`color must be "#rrggbb" or ""`))
+		return
+	}
+	if err := s.db.SetColor(r.Context(), r.PathValue("id"), strings.ToLower(body.Color)); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

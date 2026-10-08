@@ -36,6 +36,8 @@ type Store interface {
 
 	SetArchived(ctx context.Context, sessionID string, v bool) error
 	SetFavorite(ctx context.Context, sessionID string, v bool) error
+	// SetColor sets the session's color ("#rrggbb"; "" = back to automatic).
+	SetColor(ctx context.Context, sessionID, color string) error
 	// MarkSeen records that the operator looked at the session (clears an
 	// unread "done" attention mark).
 	MarkSeen(ctx context.Context, sessionID string) error

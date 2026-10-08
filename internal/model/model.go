@@ -38,6 +38,7 @@ type Session struct {
 	Account        string        `json:"account,omitempty"`      // account name from accounts.json (e.g. "personal", "enterprise")
 	Archived       bool          `json:"archived,omitempty"`
 	Favorite       bool          `json:"favorite,omitempty"`
+	ColorOverride  string        `json:"color,omitempty"` // operator-picked "#rrggbb"; see Color
 	Summary        string        `json:"summary,omitempty"`
 	SummaryStatus  string        `json:"summary_status,omitempty"` // "", "running", "done", "error"
 	SummaryAt      time.Time     `json:"summary_at,omitempty"`
@@ -80,18 +81,39 @@ func (s Session) Ref() string {
 	return fmt.Sprintf("#%d", s.Num)
 }
 
-// SessionPalette is the set of session colors: distinct hues that read on
-// dark and light backgrounds. The portal mirrors it (sessionColor in
-// internal/hub/web/app.js) — change both together.
+// SessionPalette is the set of session colors: distinct hues (plus light
+// variants) that read on dark and light backgrounds. The portal mirrors it
+// (SESSION_PALETTE in internal/hub/web/app.js) — change both together.
 var SessionPalette = []string{
-	"#ef4444", "#f97316", "#eab308", "#84cc16", "#22c55e", "#14b8a6",
-	"#06b6d4", "#3b82f6", "#6366f1", "#a855f7", "#ec4899",
+	"#ef4444", "#f97316", "#f59e0b", "#facc15", "#84cc16", "#22c55e",
+	"#10b981", "#14b8a6", "#06b6d4", "#0ea5e9", "#3b82f6", "#6366f1",
+	"#8b5cf6", "#a855f7", "#d946ef", "#ec4899", "#f43f5e", "#b45309",
+	"#94a3b8", "#fca5a5", "#fde68a", "#86efac", "#93c5fd", "#c4b5fd",
 }
 
-// Color is the session's stable accent color (hex), picked from
-// SessionPalette by an FNV-1a hash of the session ID, so the TUI and the
-// portal agree without storing anything. Empty for a row without an ID.
+// ValidColor reports whether c can be stored as a session color: a
+// "#rrggbb" hex (any, not only the palette — the palette is what the UIs
+// offer).
+func ValidColor(c string) bool {
+	if len(c) != 7 || c[0] != '#' {
+		return false
+	}
+	for _, r := range c[1:] {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// Color is the session's accent color (hex): the operator's pick when set,
+// else one from SessionPalette by an FNV-1a hash of the session ID, so the
+// TUI and the portal agree without storing anything. Empty for a row
+// without an ID.
 func (s Session) Color() string {
+	if s.ColorOverride != "" {
+		return s.ColorOverride
+	}
 	if s.SessionID == "" {
 		return ""
 	}

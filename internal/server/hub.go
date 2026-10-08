@@ -205,7 +205,7 @@ func (s *Server) hubHandler() http.Handler {
 
 var (
 	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|usage|usage/sessions|sessions/[^/]+/(transcript|usage))$`)
-	hubSessionEdit = regexp.MustCompile(`^/api/sessions/[^/]+/(archive|favorite|title|group|seen)$`)
+	hubSessionEdit = regexp.MustCompile(`^/api/sessions/[^/]+/(archive|favorite|color|title|group|seen)$`)
 	// claude -p runs; summarize.Kickoff / KickoffTitles refuse them
 	// themselves while summary_enabled is off.
 	hubSummarize   = regexp.MustCompile(`^/api/(sessions/[^/]+/summarize|titles)$`)
@@ -224,7 +224,9 @@ func hubAllowed(r *http.Request, cfg settings.Settings) (bool, string) {
 		return true, ""
 	case r.Method == http.MethodGet && (p == "/pty/" || p == "/pty"):
 		return true, ""
-	case strings.HasPrefix(p, "/pty/"):
+	case strings.HasPrefix(p, "/pty/"), r.Method == http.MethodPost && p == "/api/restart":
+		// /api/restart only re-execs the collector and resumes the claudes it
+		// hosts — what DELETE /pty + /pty/start could do one by one.
 		if !cfg.AttachEnabled {
 			return false, "attach is OFF on this device"
 		}

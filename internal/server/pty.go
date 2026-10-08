@@ -36,6 +36,7 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 	//   POST   /pty/{id}/register    → handlePTYRegister
 	//   POST   /pty/{id}/input       → handlePTYInput   (text / keys, no exclusive attach)
 	//   GET    /pty/{id}/text        → handlePTYText    (plain-text screen snapshot)
+	//   POST   /pty/{id}/restart     → handlePTYRestart (kill + claude --resume, restart.go)
 	//   DELETE /pty/{id}             → handlePTYClose
 	path := strings.TrimPrefix(r.URL.Path, "/pty/")
 	path = strings.TrimSuffix(path, "/")
@@ -74,11 +75,27 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 		s.handlePTYInput(w, r, id)
 	case action == "text" && r.Method == http.MethodGet:
 		s.handlePTYText(w, r, id)
+	case action == "restart" && r.Method == http.MethodPost:
+		s.handlePTYRestart(w, r, id)
 	case action == "" && r.Method == http.MethodDelete:
 		s.handlePTYClose(w, r, id)
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+// ptyStartReq is the body of POST /pty/start (and what startPTY takes).
+type ptyStartReq struct {
+	SessionID string `json:"sessionId"`
+	ResumeID  string `json:"resumeId"`
+	Cwd       string `json:"cwd"`
+	Prompt    string `json:"prompt"`
+	Cols      int    `json:"cols"`
+	Rows      int    `json:"rows"`
+	// PermissionMode is passed as --permission-mode. bypassPermissions
+	// / dontAsk are not offered: they'd let a remote start skip every
+	// safety prompt.
+	PermissionMode string `json:"permissionMode"`
 }
 
 // handlePTYStart creates a new PTY session or returns an existing alive one.
@@ -90,27 +107,32 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 // the viewer; zero falls back to 80x24.
 // Returns: {"ptyKey":"..."} — the key the TUI uses for subsequent calls.
 func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		SessionID string `json:"sessionId"`
-		ResumeID  string `json:"resumeId"`
-		Cwd       string `json:"cwd"`
-		Prompt    string `json:"prompt"`
-		Cols      int    `json:"cols"`
-		Rows      int    `json:"rows"`
-		// PermissionMode is passed as --permission-mode. bypassPermissions
-		// / dontAsk are not offered: they'd let a remote start skip every
-		// safety prompt.
-		PermissionMode string `json:"permissionMode"`
-	}
+	var req ptyStartReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
+	key, tag, code, err := s.startPTY(req)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if tag == 0 { // an existing alive entry
+		_ = json.NewEncoder(w).Encode(map[string]string{"ptyKey": key})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"ptyKey": key, "tag": tag})
+}
+
+// startPTY spawns claude in a new PTY (see handlePTYStart). It returns the
+// PTY key and hook tag — tag 0 when an alive entry for req.SessionID
+// already existed — or an HTTP status and error.
+func (s *Server) startPTY(req ptyStartReq) (string, int, int, error) {
 	switch req.PermissionMode {
 	case "", "manual", "acceptEdits", "auto", "plan":
 	default:
-		http.Error(w, "permissionMode must be manual, acceptEdits, auto or plan", http.StatusBadRequest)
-		return
+		return "", 0, http.StatusBadRequest, fmt.Errorf("permissionMode must be manual, acceptEdits, auto or plan")
 	}
 
 	// If we already have an alive entry for this sessionID, reuse it.
@@ -119,9 +141,7 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 		entry, ok := s.ptyMap[req.SessionID]
 		s.ptyMu.Unlock()
 		if ok && entry.sess.Alive() {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]string{"ptyKey": entry.ptyKey})
-			return
+			return entry.ptyKey, 0, 0, nil
 		}
 	}
 
@@ -135,8 +155,7 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(req.Prompt, "-") {
 		// claude would parse it as a flag, not a message.
-		http.Error(w, "prompt must not start with '-'", http.StatusBadRequest)
-		return
+		return "", 0, http.StatusBadRequest, fmt.Errorf("prompt must not start with '-'")
 	}
 	if req.Prompt != "" {
 		args = append(args, req.Prompt)
@@ -160,8 +179,7 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 	entry := newPTYEntry(sess, "", req.Cols, req.Rows)
 	entry.tag = tag
 	if err := sess.Start(); err != nil {
-		http.Error(w, fmt.Sprintf("pty start: %v", err), http.StatusInternalServerError)
-		return
+		return "", 0, http.StatusInternalServerError, fmt.Errorf("pty start: %v", err)
 	}
 	entry.startPumps()
 
@@ -190,9 +208,7 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 		s.ptyMu.Unlock()
 		log.Printf("pty: session %s exited", ptyKey)
 	}()
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ptyKey": ptyKey, "tag": tag})
+	return ptyKey, tag, 0, nil
 }
 
 // handlePTYStream upgrades the HTTP connection to a raw bidirectional PTY
@@ -491,11 +507,20 @@ func (s *Server) handlePTYClose(w http.ResponseWriter, r *http.Request, id strin
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleShutdown triggers a graceful server shutdown.
+// handleShutdown triggers a graceful server shutdown. With ?resume=1 the
+// hosted sessions are saved first, for the next collector to resume (the
+// TUI's "Restart ccdash"; see restart.go).
 func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
+	}
+	if r.URL.Query().Get("resume") == "1" {
+		if n, err := s.saveResumeList(r); err != nil {
+			log.Printf("shutdown: save resume list: %v", err)
+		} else {
+			log.Printf("shutdown: %d hosted sessions saved for resume", n)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 	if s.cancelFn != nil {

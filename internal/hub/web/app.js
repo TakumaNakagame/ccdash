@@ -384,16 +384,23 @@ function groupOf(s) {
   return s.user_group || s.repo || base(s.cwd) || "(none)";
 }
 
-// sessionColor: the session's stable accent color — the same FNV-1a hash
-// and palette as model.Session.Color, so the TUI shows the same color.
-const SESSION_PALETTE = ["#ef4444", "#f97316", "#eab308", "#84cc16", "#22c55e", "#14b8a6",
-  "#06b6d4", "#3b82f6", "#6366f1", "#a855f7", "#ec4899"];
+// sessionColor: the session's automatic accent color — the same FNV-1a
+// hash and palette as model.Session.Color, so the TUI shows the same color.
+// sessionColorOf prefers the operator's pick (s.color, set from ⋯ or the
+// TUI's c / C).
+const SESSION_PALETTE = [
+  "#ef4444", "#f97316", "#f59e0b", "#facc15", "#84cc16", "#22c55e",
+  "#10b981", "#14b8a6", "#06b6d4", "#0ea5e9", "#3b82f6", "#6366f1",
+  "#8b5cf6", "#a855f7", "#d946ef", "#ec4899", "#f43f5e", "#b45309",
+  "#94a3b8", "#fca5a5", "#fde68a", "#86efac", "#93c5fd", "#c4b5fd",
+];
 function sessionColor(sid) {
   if (!sid) return "";
   let x = 0x811c9dc5;
   for (const b of new TextEncoder().encode(sid)) x = Math.imul(x ^ b, 16777619) >>> 0;
   return SESSION_PALETTE[x % SESSION_PALETTE.length];
 }
+const sessionColorOf = (s) => s?.color || sessionColor(s?.session_id);
 
 function sessionTitle(s) {
   return s.custom_title || s.gen_title || s.title || "(無題)";
@@ -546,6 +553,7 @@ async function devicePage(id, opts = {}) {
   mount.append(h("div", { class: "page" + (opts.compact ? " compact" : "") },
     h("div", { class: "row" },
       h("h1", { class: "grow" }, name),
+      h("button", { class: "btn", title: "この端末の ccdash collector を再起動（ホスト中のセッションは自動で再開）", onclick: () => restartCollector(id, last) }, "↻ 再起動"),
       h("button", { class: "btn primary", onclick: () => newSession(id) }, "＋ 新規セッション")),
     status, usageCard, approvals, spawns,
     tabs,
@@ -628,6 +636,22 @@ async function devicePage(id, opts = {}) {
   every(3000, tick, bucket);
 }
 
+// restartCollector re-execs the device's collector (POST /api/restart). The
+// claudes it hosts are stopped and resumed by the new process; the tunnel
+// drops for a few seconds meanwhile.
+async function restartCollector(id, last) {
+  const hosted = (last?.ptys || []).filter((p) => p.alive && !p.key.startsWith("pid-")).length;
+  const fresh = (last?.ptys || []).filter((p) => p.alive && p.key.startsWith("pid-")).length;
+  if (!confirm(`この端末の ccdash collector を再起動しますか？\n\n` +
+    `・ホスト中のセッション ${hosted} 件はいったん停止し、再起動後に claude --resume で自動的に再開します（応答中の内容は中断されます）\n` +
+    (fresh ? `・まだ未登録（最初のメッセージ前）の ${fresh} 件は再開されません\n` : "") +
+    `・数秒〜数十秒、この端末に接続できなくなります`)) return;
+  try {
+    const r = await dev(id).post("/api/restart", {});
+    toast(`再起動しています… ${r?.resuming ?? hosted} 件を再開します`, 6000);
+  } catch (e) { toast(e.message); }
+}
+
 function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
   const chips = [];
   if (live) chips.push(h("span", { class: "chip live" }, "live"));
@@ -653,7 +677,7 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
     check.addEventListener("change", () => sel.toggle(s.session_id, check.checked));
   }
   return h("div", { class: "item" + (here ? " selected" : "") + (check?.checked ? " checked" : ""), "data-sid": s.session_id,
-    style: `--sess:${sessionColor(s.session_id)}`, onclick: (e) => {
+    style: `--sess:${sessionColorOf(s)}`, onclick: (e) => {
     if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
     location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`;
   } },
@@ -1199,6 +1223,13 @@ function sessionMenu(id, s, groups, refresh) {
       h("datalist", { id: "group-names" }, groups.map((g) => h("option", { value: g }))),
       h("label", {}, "タイトル（空にすると自動のものに戻す）"),
       h("div", { class: "row" }, title, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/title", { title: title.value.trim() }, "タイトルを保存しました"); } }, "保存")),
+      h("label", {}, "色（一覧・グリッドの縦線。TUI の c / C と共通）"),
+      h("div", { class: "swatches" },
+        SESSION_PALETTE.map((c) => h("button", {
+          type: "button", class: "swatch" + (sessionColorOf(s) === c ? " on" : ""), style: `--c:${c}`, title: c,
+          onclick: () => { close(); post("/color", { color: c }, "色を変更しました"); },
+        })),
+        h("button", { type: "button", class: "btn small", disabled: !s.color, onclick: () => { close(); post("/color", { color: "" }, "色を自動に戻しました"); } }, "自動に戻す")),
       h("label", {}, "グループ（空にすると repo 名に戻す）"),
       h("div", { class: "row" }, group, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/group", { group: group.value.trim() }, "グループを保存しました"); } }, "保存")),
       h("div", { class: "menu-grid" },
@@ -1259,7 +1290,7 @@ function gridTile(c) {
   const log = h("div", { class: "tile-log" }, h("div", { class: "muted small" }, "読み込み中…"));
   const input = h("input", { placeholder: "返信（Enter で送信）", enterkeyhint: "send" });
   const form = h("form", { class: "tile-reply" }, input, h("button", { class: "btn small primary" }, "送信"));
-  const el = h("div", { class: "tile", style: `--sess:${sessionColor(sid)}` },
+  const el = h("div", { class: "tile", style: `--sess:${sessionColorOf(c.session)}` },
     h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, resumeBtn, openBtn, closeBtn), reason, log, form,
     h("div", { class: "tile-resize", title: "ドラッグで大きさを変更" }));
   title.addEventListener("dblclick", () => el.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
@@ -1940,13 +1971,20 @@ async function chatPage(id, { sid, key }) {
     if (!confirm("このセッションの claude を終了しますか？（後から再開できます）")) return;
     try { await d.del(`/pty/${encodeURIComponent(ptyKey)}`); toast("終了しました"); } catch (e) { toast(e.message); }
   } }, "終了");
+  const restartBtn = h("button", { class: "btn small", hidden: true, title: "claude を終了して --resume で起動し直す", onclick: async () => {
+    if (!confirm("このセッションの claude を再起動しますか？（終了して claude --resume で起動し直します。応答中の内容は中断されます）")) return;
+    restartBtn.disabled = true;
+    try { await d.post(`/pty/${encodeURIComponent(ptyKey)}/restart`, {}); toast("再起動しました"); }
+    catch (e) { toast(e.message); }
+    finally { restartBtn.disabled = false; setTimeout(poll, 800); }
+  } }, "再起動");
   let allGroups = [];
   const diffBtn = h("a", { class: "btn small", hidden: true, title: "変更の差分を見てコメントする" }, "差分");
   let lastUsage = null;
   const costBtn = h("button", { class: "btn small cost", hidden: true, title: "このセッションのトークンと API 換算コスト", onclick: () => lastUsage && usageDialog(lastUsage, "このセッションの使用量") }, "");
   const menuBtn = h("button", { class: "btn small", title: "セッションの操作", onclick: () => session ? sessionMenu(id, session, allGroups, poll) : toast("まだセッションが登録されていません") }, "⋯");
   const bar = h("div", { class: "term-bar" },
-    h("a", { class: "btn small", href: `#/d/${id}` }, "←"), titleEl, statusEl, costBtn, diffBtn, termBtn, endBtn, menuBtn);
+    h("a", { class: "btn small", href: `#/d/${id}` }, "←"), titleEl, statusEl, costBtn, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
   const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, "読み込み中…"));
   const scroller = h("div", { class: "chat" }, log);
   const approvalsEl = h("div", { class: "chat-dock" });
@@ -2212,7 +2250,7 @@ async function chatPage(id, { sid, key }) {
 
     const title = session ? (session.num ? `#${session.num} ` : "") + sessionTitle(session) : sid ? sid : "新規セッション";
     titleEl.textContent = title;
-    titleEl.style.setProperty("--sess", sessionColor(sid));
+    titleEl.style.setProperty("--sess", session ? sessionColorOf(session) : sessionColor(sid));
     crumbs({ text: "端末", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: title });
     // A ccdash-hosted claude is alive even when discovery still files the
     // session as recent/stopped (no hook fired since it was resumed).
@@ -2224,6 +2262,7 @@ async function chatPage(id, { sid, key }) {
     termBtn.hidden = !hosted;
     termBtn.href = sid ? `#/d/${id}/s/${encodeURIComponent(sid)}/term` : `#/d/${id}/p/${encodeURIComponent(ptyKey)}/term`;
     endBtn.hidden = !hosted;
+    restartBtn.hidden = !hosted || !sid; // nothing to resume before the first prompt
     stopBtn.hidden = !(hosted && session?.status === "active");
     input.placeholder = hosted ? "メッセージ" : "送信するとこのセッションを再開します";
 

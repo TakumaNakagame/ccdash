@@ -440,7 +440,16 @@ talk to loopback, remote clients use the --listen address.`,
 			ctx, cancel := signalContext(cmd.Context())
 			defer cancel()
 			s := server.New(d, bindAddr)
-			return s.ListenAndServe(ctx)
+			s.CanRestart = true
+			err = s.ListenAndServe(ctx)
+			if errors.Is(err, server.ErrRestart) {
+				// POST /api/restart: the hosted sessions are saved and their
+				// PTYs closed; come back as the (possibly updated) binary,
+				// which resumes them.
+				_ = d.Close()
+				return reexecSelf()
+			}
+			return err
 		},
 	}
 	c.Flags().StringVar(&addr, "addr", fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort), "bind address")
@@ -811,10 +820,19 @@ func restartIfAsked(err error) error {
 	if !errors.Is(err, tui.ErrRestart) {
 		return err
 	}
+	return reexecSelf()
+}
+
+// reexecSelf replaces this process with the ccdash binary at its path,
+// same arguments — the newly installed one after an update.
+func reexecSelf() error {
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("restart: %w", err)
 	}
+	// Linux reports a replaced binary as "<path> (deleted)"; the new one
+	// sits at <path>.
+	self = strings.TrimSuffix(self, " (deleted)")
 	if err := syscall.Exec(self, os.Args, os.Environ()); err != nil {
 		return fmt.Errorf("restart: exec %s: %w", self, err)
 	}
@@ -830,7 +848,9 @@ func stopServer(addr string) {
 		return
 	}
 	if tok, _ := loadToken(); tok != "" {
-		req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/shutdown", nil)
+		// resume=1: the collector saves its hosted sessions so the fresh
+		// one this restart spawns resumes them.
+		req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/shutdown?resume=1", nil)
 		if err == nil {
 			req.Header.Set("X-Ccdash-Token", tok)
 			if resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req); err == nil {

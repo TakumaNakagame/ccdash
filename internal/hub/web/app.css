@@ -456,3 +456,6 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .item[style*="--sess"] { box-shadow: inset 4px 0 0 var(--sess); }
 .tile[style*="--sess"] { border-left: 4px solid var(--sess); }
 .sess-title::before { content: ""; display: inline-block; width: 4px; height: 1em; margin-right: 8px; vertical-align: -0.12em; border-radius: 2px; background: var(--sess, transparent); }
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
+.swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; background: var(--c); cursor: pointer; padding: 0; }
+.swatch.on { border-color: var(--text, #fff); box-shadow: 0 0 0 2px var(--bg, #000) inset; }

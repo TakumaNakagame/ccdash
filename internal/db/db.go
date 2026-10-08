@@ -121,6 +121,7 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN attention TEXT`,
 		`ALTER TABLE sessions ADD COLUMN attention_reason TEXT`,
 		`ALTER TABLE sessions ADD COLUMN attention_at INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN color TEXT`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -381,7 +382,8 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
 		       COALESCE(s.account,''),
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
-		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0)
+		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
+		       COALESCE(s.color,'')
 		FROM sessions s
 		WHERE COALESCE(s.archived,0) = ?
 		ORDER BY COALESCE(s.favorite,0) DESC, s.last_seen DESC
@@ -405,7 +407,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.Summary, &s.SummaryStatus, &sumAt,
 			&first, &last, &status, &s.PendingCount, &s.Account,
 			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
-			&s.Attention, &s.AttentionReason, &attAt); err != nil {
+			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride); err != nil {
 			return nil, err
 		}
 		finishAttention(&s, attAt)
@@ -442,7 +444,8 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
 		       COALESCE(s.account,''),
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
-		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0)
+		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
+		       COALESCE(s.color,'')
 		FROM sessions s
 		WHERE s.session_id = ?
 	`, sessionID)
@@ -459,7 +462,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&s.Summary, &s.SummaryStatus, &sumAt,
 		&first, &last, &status, &s.PendingCount, &s.Account,
 		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
-		&s.Attention, &s.AttentionReason, &attAt)
+		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Session{}, false, nil
 	}
@@ -528,6 +531,13 @@ func (d *DB) SetArchived(ctx context.Context, sessionID string, archived bool) e
 		v = 1
 	}
 	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET archived = ? WHERE session_id = ?`, v, sessionID)
+	return err
+}
+
+// SetColor stores the operator's color for a session (a "#rrggbb"), or
+// clears it with "" so Session.Color falls back to the hashed one.
+func (d *DB) SetColor(ctx context.Context, sessionID, color string) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET color = NULLIF(?, '') WHERE session_id = ?`, color, sessionID)
 	return err
 }
 

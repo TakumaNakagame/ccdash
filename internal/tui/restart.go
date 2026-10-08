@@ -101,7 +101,7 @@ func (m *model) restartBox() (string, []modalButton) {
 		lines = append(lines, "", pendingStyle.Render("Before you restart:"))
 		live := m.liveSessionTitles()
 		if len(live) > 0 {
-			lines = append(lines, bullet(fmt.Sprintf("%d live session(s) hosted by ccdash will be STOPPED. Any reply or tool call in progress is cut off midway:", len(live)))...)
+			lines = append(lines, bullet(fmt.Sprintf("%d live session(s) hosted by ccdash will be stopped and resumed automatically (claude --resume). Any reply or tool call in progress is cut off midway:", len(live)))...)
 			const maxShown = 5
 			for i, t := range live {
 				if i == maxShown {
@@ -116,7 +116,7 @@ func (m *model) restartBox() (string, []modalButton) {
 		if n := m.pendingApprovalCount(); n > 0 {
 			lines = append(lines, bullet(fmt.Sprintf("%d pending approval(s) held by ccdash will be released.", n))...)
 		}
-		lines = append(lines, bullet("Conversations are kept: select a session and press enter to resume it.")...)
+		lines = append(lines, bullet("Conversations are kept. A claude that hasn't got a session yet (no prompt sent) is not resumed.")...)
 		lines = append(lines, bullet("Sessions started outside ccdash (your own terminal / tmux) are not affected.")...)
 		lines = append(lines, bullet("Hook events sent during the few seconds of restart are lost.")...)
 	}

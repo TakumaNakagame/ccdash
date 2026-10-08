@@ -19,7 +19,7 @@ func (m *model) modalOpen() bool {
 	return m.pane != paneSessions ||
 		m.editingTitle || m.editingGroup || m.editingSearch ||
 		m.editingNewSession || m.editingSkill || m.restartConfirm || m.dupConfirm ||
-		m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm
+		m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm || m.awaitRestartSessionConfirm
 }
 
 // listSessionAt maps a terminal position to the session row under it, or
