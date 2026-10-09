@@ -95,6 +95,14 @@ func (l *Local) RenameProject(ctx context.Context, from, to string) error {
 	return l.db.RenameProject(ctx, from, to)
 }
 
+func (l *Local) MoveProject(ctx context.Context, project string, delta int) error {
+	return l.db.MoveProject(ctx, project, delta)
+}
+
+func (l *Local) SetProjectOrder(ctx context.Context, names []string) error {
+	return l.db.SetProjectOrder(ctx, names)
+}
+
 func (l *Local) SetProjectColor(ctx context.Context, project, color string) error {
 	return l.db.SetProjectColor(ctx, project, color)
 }

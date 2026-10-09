@@ -1312,6 +1312,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.startProjectEdit()
 	case "P":
 		return m, m.rerollProjectColor()
+	case "[":
+		return m, m.moveProjectCurrent(-1)
+	case "]":
+		return m, m.moveProjectCurrent(1)
 	case "ctrl+t":
 		m.startTitleGen()
 		return m, nil
@@ -1445,21 +1449,19 @@ func (m *model) applyGroupFilter() {
 
 // projectsFirst moves the sessions that belong to a project to the newest
 // end of the list (the top; the bottom with newest_at_bottom, since the
-// caller reverses afterwards), one block per project: the project with the
-// most recent activity first, its sessions newest first. Everything else
-// keeps its order (favorites, then by date). Returns a new slice when it
-// reorders anything.
+// caller reverses afterwards), one block per project. The order is stable
+// — activity never moves anything: projects by their operator-set order
+// ([ / ], new projects at the newest end), their sessions newest-started
+// first. Everything else keeps its order
+// (favorites, then by date). Returns a new slice when it reorders anything.
 func projectsFirst(src []mdl.Session) []mdl.Session {
-	latest := map[string]time.Time{}
+	order := map[string]int{}
 	for _, s := range src {
-		if s.Project == "" {
-			continue
-		}
-		if t, ok := latest[s.Project]; !ok || s.LastSeen.After(t) {
-			latest[s.Project] = s.LastSeen
+		if s.Project != "" {
+			order[s.Project] = s.ProjectOrder
 		}
 	}
-	if len(latest) == 0 {
+	if len(order) == 0 {
 		return src
 	}
 	var in, rest []mdl.Session
@@ -1473,13 +1475,15 @@ func projectsFirst(src []mdl.Session) []mdl.Session {
 	sort.SliceStable(in, func(i, j int) bool {
 		a, b := in[i], in[j]
 		if a.Project != b.Project {
-			la, lb := latest[a.Project], latest[b.Project]
-			if !la.Equal(lb) {
-				return la.After(lb)
+			if oa, ob := order[a.Project], order[b.Project]; oa != ob {
+				return oa < ob
 			}
 			return a.Project < b.Project
 		}
-		return a.LastSeen.After(b.LastSeen)
+		if !a.FirstSeen.Equal(b.FirstSeen) {
+			return a.FirstSeen.After(b.FirstSeen)
+		}
+		return a.Num > b.Num
 	})
 	return append(in, rest...)
 }
@@ -2117,6 +2121,29 @@ func (m *model) commitProjectEdit() tea.Cmd {
 			return attachDoneMsg{msg: "removed " + shortID(sid) + " from its project"}
 		}
 		return attachDoneMsg{msg: "project: " + project}
+	}
+}
+
+// moveProjectCurrent ([ / ]) moves the selected session's project block one
+// place up (dir -1) or down (dir 1) on screen. The stored order counts
+// from the newest end, which is the bottom with newest_at_bottom.
+func (m *model) moveProjectCurrent(dir int) tea.Cmd {
+	if len(m.sessions) == 0 {
+		return nil
+	}
+	project := m.sessions[m.selSess].Project
+	if project == "" {
+		m.flash = "not in a project — [ / ] move project blocks"
+		return nil
+	}
+	if m.settings.NewestAtBottom {
+		dir = -dir
+	}
+	return func() tea.Msg {
+		if err := m.store.MoveProject(m.ctx, project, dir); err != nil {
+			return attachDoneMsg{err: err}
+		}
+		return attachDoneMsg{msg: "moved project " + project}
 	}
 }
 

@@ -421,19 +421,15 @@ function inkOn(bg) {
   return 0.299 * (v >> 16 & 255) + 0.587 * (v >> 8 & 255) + 0.114 * (v & 255) > 150 ? "#111111" : "#ffffff";
 }
 // projectsFirst mirrors the TUI: project members go to the top, one block
-// per project (most recent activity first, newest session first inside);
-// the rest keep their order.
+// per project, in a stable order that activity never changes — projects by
+// their operator-set order (project_order; ▲▼ on the band), their sessions
+// newest-started first; the rest keep their order.
 function projectsFirst(rows) {
-  const latest = new Map();
-  for (const s of rows) {
-    if (!s.project) continue;
-    const t = new Date(s.last_seen).getTime();
-    if (!latest.has(s.project) || t > latest.get(s.project)) latest.set(s.project, t);
-  }
-  if (!latest.size) return rows;
+  const t = (v) => (v ? new Date(v).getTime() : 0);
+  if (!rows.some((s) => s.project)) return rows;
   const inP = rows.filter((s) => s.project).sort((a, b) =>
-    a.project === b.project ? new Date(b.last_seen) - new Date(a.last_seen)
-      : (latest.get(b.project) - latest.get(a.project)) || a.project.localeCompare(b.project));
+    a.project === b.project ? (t(b.first_seen) - t(a.first_seen)) || ((b.num || 0) - (a.num || 0))
+      : ((a.project_order || 0) - (b.project_order || 0)) || a.project.localeCompare(b.project));
   return [...inP, ...rows.filter((s) => !s.project)];
 }
 // projectPicker: choose a project for one or more sessions. Existing
@@ -482,12 +478,14 @@ async function projectPicker(id, { current = "", count = 1 } = {}, pick) {
   });
 }
 
-function projectHeader(name, color, members, onNew) {
+function projectHeader(name, color, members, onNew, onMove) {
   const running = members.filter((s) => s.status === "active" || s.status === "idle").length;
   const needs = members.filter((s) => s.attention === "needs_you").length;
   const meta = [`${members.length} セッション`, running ? `${running} 稼働中` : null, needs ? `${needs} 要対応` : null].filter(Boolean).join(" · ");
   return h("div", { class: "bucket project", style: `--proj:${color};--ink:${inkOn(color)}` },
     h("span", { class: "proj-label" }, "PROJECT"), h("b", {}, name), h("span", { class: "proj-meta" }, meta),
+    onMove ? h("button", { type: "button", class: "proj-new", title: "プロジェクトを上へ", onclick: (e) => { e.stopPropagation(); onMove(-1); } }, "▲") : null,
+    onMove ? h("button", { type: "button", class: "proj-new", title: "プロジェクトを下へ", onclick: (e) => { e.stopPropagation(); onMove(1); } }, "▼") : null,
     onNew ? h("button", { type: "button", class: "proj-new", title: "このプロジェクトで新規セッション", onclick: (e) => { e.stopPropagation(); onNew(); } }, "＋") : null);
 }
 
@@ -690,7 +688,10 @@ async function devicePage(id, opts = {}) {
         out.push(s.project
           ? projectHeader(s.project, projectColorOf(s.project, s.project_color), ordered.filter((x) => x.project === s.project),
             // The project's directory: where its most recent session works.
-            () => newSession(id, { cwd: s.cwd, project: s.project }))
+            () => newSession(id, { cwd: s.cwd, project: s.project }),
+            async (delta) => {
+              try { await dev(id).post("/api/projects/order", { project: s.project, delta }); refreshNow(); } catch (e) { toast(e.message); }
+            })
           : h("div", { class: "bucket" }, b));
       }
       out.push(sessionRow(id, s, live.has(s.session_id), info, !tab, sel, briefs[s.session_id]));

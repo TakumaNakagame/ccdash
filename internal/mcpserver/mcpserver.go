@@ -37,7 +37,7 @@ const instructions = `ccdash watches the Claude Code sessions of one machine (it
 Use the read tools to see the operator's projects, which sessions are running, which
 need the operator (approvals, questions), and what a session has been doing recently.
 Sessions are referred to as "#N" (their short number) or by session id.
-The organizing tools (set_project, rename_project, set_project_color, set_title, set_archived)
+The organizing tools (set_project, rename_project, order_projects, set_project_color, set_title, set_archived)
 change what the operator sees in ccdash; projects are just names, created on first use.`
 
 // Server serves one stdio connection.
@@ -191,6 +191,14 @@ var writeTools = []map[string]any{
 		"annotations": writeHint,
 	},
 	{
+		"name":        "order_projects",
+		"description": "Set the order projects appear in (first = top of the list). Listed projects go first in the given order; the rest follow in their current order.",
+		"inputSchema": required(map[string]any{
+			"projects": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		}, "projects"),
+		"annotations": writeHint,
+	},
+	{
 		"name":        "set_project_color",
 		"description": `Set a project's color: "#rrggbb", or "random" for one that keeps apart from the other projects' colors.`,
 		"inputSchema": required(map[string]any{
@@ -228,7 +236,7 @@ var readTools = []map[string]any{
 	},
 	{
 		"name":        "list_projects",
-		"description": "The operator's projects (named sets of sessions) with their session counts, running / needs-you counts and latest activity.",
+		"description": "The operator's projects (named sets of sessions) in their list order, with session counts, running / needs-you counts and latest activity.",
 		"inputSchema": schema(map[string]any{}),
 		"annotations": readOnlyHint,
 	},
@@ -276,6 +284,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		To              string   `json:"to"`
 		Color           string   `json:"color"`
 		Title           *string  `json:"title"`
+		Projects        []string `json:"projects"`
 		Archived        *bool    `json:"archived"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
@@ -297,6 +306,13 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		v, err = s.setProject(ctx, args.Sessions, args.Project)
 	case "rename_project":
 		v, err = s.renameProject(ctx, args.From, args.To)
+	case "order_projects":
+		if len(args.Projects) == 0 {
+			return "", fmt.Errorf("projects is required")
+		}
+		if err = s.st.SetProjectOrder(ctx, args.Projects); err == nil {
+			v, err = s.listProjects(ctx)
+		}
 	case "set_project_color":
 		v, err = s.setProjectColor(ctx, args.Project, args.Color)
 	case "set_title":
@@ -490,7 +506,6 @@ func (s *Server) listProjects(ctx context.Context) (any, error) {
 		}
 		out = append(out, *r)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return rows[out[i].Name].latest.After(rows[out[j].Name].latest) })
 	return map[string]any{"projects": out}, nil
 }
 

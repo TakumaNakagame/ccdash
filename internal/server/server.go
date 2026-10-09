@@ -153,6 +153,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/projects", wrap(s.handleAPIProjects))
 	s.mux.HandleFunc("POST /api/projects/color", wrap(s.handleAPIProjectColor))
 	s.mux.HandleFunc("POST /api/projects/rename", wrap(s.handleAPIProjectRename))
+	s.mux.HandleFunc("POST /api/projects/order", wrap(s.handleAPIProjectOrder))
 	s.mux.HandleFunc("POST /api/titles", wrap(s.handleAPITitles))
 	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
 	s.mux.HandleFunc("GET /api/sessions/{id}/usage", wrap(s.handleAPISessionUsage))
@@ -1126,6 +1127,35 @@ func (s *Server) handleAPIProjectRename(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := s.db.RenameProject(r.Context(), from, to); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+// handleAPIProjectOrder: {"project", "delta"} moves one project; {"order":
+// [names]} puts those first in that order.
+func (s *Server) handleAPIProjectOrder(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Project string   `json:"project"`
+		Delta   int      `json:"delta"`
+		Order   []string `json:"order"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	var err error
+	switch {
+	case len(body.Order) > 0:
+		err = s.db.SetProjectOrder(r.Context(), body.Order)
+	case body.Project != "":
+		err = s.db.MoveProject(r.Context(), body.Project, body.Delta)
+	default:
+		http.Error(w, "project+delta or order is required", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	writeOK(w, nil)

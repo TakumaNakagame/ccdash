@@ -43,6 +43,7 @@ func TestHubAllowed(t *testing.T) {
 		{"POST", "/api/projects/color", on, true},
 		{"GET", "/api/projects", on, true},
 		{"POST", "/api/projects/rename", on, true},
+		{"POST", "/api/projects/order", on, true},
 		{"POST", "/api/projects/x/color", on, false},
 		{"POST", "/api/titles", on, true},
 		{"POST", "/api/sessions/abc/seen", on, true},

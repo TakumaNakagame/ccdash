@@ -49,6 +49,7 @@ var helpSections = []helpSection{
 	{"Organize", []helpEntry{
 		{"p", "put in a project (empty = remove)"},
 		{"P", "new color for the project"},
+		{"[ / ]", "move the project up / down"},
 		{"t", "rename"},
 		{"ctrl+t", "generate titles (claude -p)"},
 		{"T", "assign a tab group"},

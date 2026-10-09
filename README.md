@@ -126,6 +126,7 @@ ccdash --version               # report the current version
 | `!` | show only sessions that need you (`?`: approval, question, menu on screen) or finished a turn you haven't looked at (`✓`) |
 | `p` | put the session in a project: existing projects as colored candidates (`↑` `↓` to pick), a new name creates one, `✕ remove from …` takes it out |
 | `n` on a project member | the directory picker starts in the project's directory (its latest session's cwd) and the new session joins the project |
+| `[` / `]` | move the selected session's project block up / down (activity never reorders projects) |
 | `P` | re-roll the project's color (kept apart from other projects' colors) |
 | `x` | archive / unarchive |
 | `X` | toggle archive view (operator-archived sessions) |

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,27 @@ func TestProjects(t *testing.T) {
 	a2, _, _ := d.GetSession(ctx, "a")
 	if a2.ProjectColor == a.ProjectColor {
 		t.Fatalf("re-roll kept %s", a.ProjectColor)
+	}
+	// Order: infra was created last, so it comes first; moves reorder.
+	order := func() string {
+		ps, _ := d.ListProjects(ctx)
+		var n []string
+		for _, p := range ps {
+			n = append(n, p.Name)
+		}
+		return strings.Join(n, ",")
+	}
+	if got := order(); got != "infra,web" {
+		t.Fatalf("order = %s", got)
+	}
+	if err := d.MoveProject(ctx, "web", -1); err != nil || order() != "web,infra" {
+		t.Fatalf("move: %v %s", err, order())
+	}
+	if err := d.SetProjectOrder(ctx, []string{"infra"}); err != nil || order() != "infra,web" {
+		t.Fatalf("set order: %v %s", err, order())
+	}
+	if err := d.SetProjectOrder(ctx, []string{"nope"}); err == nil {
+		t.Fatal("unknown project accepted")
 	}
 	// Rename, then merge into an existing project.
 	if err := d.RenameProject(ctx, "infra", "ops"); err != nil {

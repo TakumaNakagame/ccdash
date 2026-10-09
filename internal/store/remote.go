@@ -180,6 +180,16 @@ func (r *Remote) RenameProject(ctx context.Context, from, to string) error {
 		map[string]any{"from": from, "to": to}, nil)
 }
 
+func (r *Remote) MoveProject(ctx context.Context, project string, delta int) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/projects/order", nil,
+		map[string]any{"project": project, "delta": delta}, nil)
+}
+
+func (r *Remote) SetProjectOrder(ctx context.Context, names []string) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/projects/order", nil,
+		map[string]any{"order": names}, nil)
+}
+
 func (r *Remote) SetProjectColor(ctx context.Context, project, color string) error {
 	return r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/projects/color", nil,
 		map[string]any{"project": project, "color": color}, nil)

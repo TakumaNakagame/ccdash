@@ -17,35 +17,38 @@ const (
 )
 
 type Session struct {
-	SessionID      string        `json:"session_id"`
-	Cwd            string        `json:"cwd"`
-	Repo           string        `json:"repo,omitempty"`
-	Branch         string        `json:"branch,omitempty"`
-	Commit         string        `json:"commit,omitempty"`
-	WrapperPID     int           `json:"wrapper_pid,omitempty"`
-	ProcPID        int           `json:"proc_pid,omitempty"`
-	Pane           string        `json:"pane,omitempty"`
-	TmuxPane       string        `json:"tmux_pane,omitempty"`
-	TmuxSession    string        `json:"tmux_session,omitempty"`
-	TranscriptPath string        `json:"transcript_path,omitempty"`
-	Model          string        `json:"model,omitempty"`
-	Num            int64         `json:"num,omitempty"`       // short sequential ID shown as "#N"; unique, assigned on insert
-	Title          string        `json:"title,omitempty"`     // auto-derived from transcript (first prompt)
-	GenTitle       string        `json:"gen_title,omitempty"` // claude -p generated title (ctrl+t); beats Title
-	GenTitleAt     time.Time     `json:"gen_title_at,omitempty"`
-	TitleStatus    string        `json:"title_status,omitempty"` // "", "running", "done", "error" for title generation
-	CustomTitle    string        `json:"custom_title,omitempty"` // operator override; takes precedence
-	UserGroup      string        `json:"user_group,omitempty"`   // operator-named group; overrides repo-based grouping. Rendered as a tab in the strip.
-	Account        string        `json:"account,omitempty"`      // account name from accounts.json (e.g. "personal", "enterprise")
-	Archived       bool          `json:"archived,omitempty"`
-	Favorite       bool          `json:"favorite,omitempty"`
-	ColorOverride  string        `json:"color,omitempty"`         // operator-picked "#rrggbb"; see Color
-	Project        string        `json:"project,omitempty"`       // operator-named project; groups sessions at the top of the list
-	ProjectColor   string        `json:"project_color,omitempty"` // the project's "#rrggbb" (projects table)
-	FirstSeen      time.Time     `json:"first_seen"`
-	LastSeen       time.Time     `json:"last_seen"`
-	Status         SessionStatus `json:"status"`
-	PendingCount   int           `json:"pending_count,omitempty"`
+	SessionID      string    `json:"session_id"`
+	Cwd            string    `json:"cwd"`
+	Repo           string    `json:"repo,omitempty"`
+	Branch         string    `json:"branch,omitempty"`
+	Commit         string    `json:"commit,omitempty"`
+	WrapperPID     int       `json:"wrapper_pid,omitempty"`
+	ProcPID        int       `json:"proc_pid,omitempty"`
+	Pane           string    `json:"pane,omitempty"`
+	TmuxPane       string    `json:"tmux_pane,omitempty"`
+	TmuxSession    string    `json:"tmux_session,omitempty"`
+	TranscriptPath string    `json:"transcript_path,omitempty"`
+	Model          string    `json:"model,omitempty"`
+	Num            int64     `json:"num,omitempty"`       // short sequential ID shown as "#N"; unique, assigned on insert
+	Title          string    `json:"title,omitempty"`     // auto-derived from transcript (first prompt)
+	GenTitle       string    `json:"gen_title,omitempty"` // claude -p generated title (ctrl+t); beats Title
+	GenTitleAt     time.Time `json:"gen_title_at,omitempty"`
+	TitleStatus    string    `json:"title_status,omitempty"` // "", "running", "done", "error" for title generation
+	CustomTitle    string    `json:"custom_title,omitempty"` // operator override; takes precedence
+	UserGroup      string    `json:"user_group,omitempty"`   // operator-named group; overrides repo-based grouping. Rendered as a tab in the strip.
+	Account        string    `json:"account,omitempty"`      // account name from accounts.json (e.g. "personal", "enterprise")
+	Archived       bool      `json:"archived,omitempty"`
+	Favorite       bool      `json:"favorite,omitempty"`
+	ColorOverride  string    `json:"color,omitempty"`         // operator-picked "#rrggbb"; see Color
+	Project        string    `json:"project,omitempty"`       // operator-named project; groups sessions at the top of the list
+	ProjectColor   string    `json:"project_color,omitempty"` // the project's "#rrggbb" (projects table)
+	// ProjectOrder is the project's place in the list (lower = nearer the
+	// newest end). Set by the operator, never by activity.
+	ProjectOrder int `json:"project_order,omitempty"`
+	FirstSeen        time.Time     `json:"first_seen"`
+	LastSeen         time.Time     `json:"last_seen"`
+	Status           SessionStatus `json:"status"`
+	PendingCount     int           `json:"pending_count,omitempty"`
 	// Attention is what the session wants from the operator: "needs_you"
 	// (an approval, a question, a menu on screen) or "done" (finished a turn
 	// the operator hasn't looked at yet); "" otherwise. See internal/server

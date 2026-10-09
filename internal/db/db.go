@@ -129,6 +129,7 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN color TEXT`,
 		`ALTER TABLE sessions ADD COLUMN project TEXT`,
 		`ALTER TABLE sessions ADD COLUMN auto_archived INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE projects ADD COLUMN ord INTEGER`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -151,6 +152,11 @@ func (d *DB) migrate() error {
 	// thanks to the IS NULL guard.
 	if _, err := d.sql.Exec(`UPDATE sessions SET user_group = user_tab WHERE (user_group IS NULL OR user_group = '') AND user_tab IS NOT NULL AND user_tab <> ''`); err != nil {
 		return fmt.Errorf("migrate user_tab → user_group: %w", err)
+	}
+	// Projects without a display order take one by creation, newest first
+	// (lower ord = nearer the newest end of the list).
+	if _, err := d.sql.Exec(`UPDATE projects SET ord = -created_at WHERE ord IS NULL`); err != nil {
+		return fmt.Errorf("migrate project order: %w", err)
 	}
 	if err := d.backfillNums(); err != nil {
 		return fmt.Errorf("backfill session numbers: %w", err)
@@ -392,7 +398,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.transcript_path,''), COALESCE(s.model,''),
 		       COALESCE(s.title,''), COALESCE(s.custom_title,''), COALESCE(s.user_group,''),
 		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
-		       COALESCE(s.project,''), COALESCE(p.color,''),
+		       COALESCE(s.project,''), COALESCE(p.color,''), COALESCE(p.ord,0),
 		       s.first_seen, s.last_seen, s.status,
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
 		       COALESCE(s.account,''),
@@ -419,7 +425,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.TranscriptPath, &s.Model,
 			&s.Title, &s.CustomTitle, &s.UserGroup,
 			&arch, &fav,
-			&s.Project, &s.ProjectColor,
+			&s.Project, &s.ProjectColor, &s.ProjectOrder,
 			&first, &last, &status, &s.PendingCount, &s.Account,
 			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
 			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride); err != nil {
@@ -451,7 +457,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       COALESCE(s.transcript_path,''), COALESCE(s.model,''),
 		       COALESCE(s.title,''), COALESCE(s.custom_title,''), COALESCE(s.user_group,''),
 		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
-		       COALESCE(s.project,''), COALESCE(p.color,''),
+		       COALESCE(s.project,''), COALESCE(p.color,''), COALESCE(p.ord,0),
 		       s.first_seen, s.last_seen, s.status,
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
 		       COALESCE(s.account,''),
@@ -471,7 +477,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&s.TranscriptPath, &s.Model,
 		&s.Title, &s.CustomTitle, &s.UserGroup,
 		&arch, &fav,
-		&s.Project, &s.ProjectColor,
+		&s.Project, &s.ProjectColor, &s.ProjectOrder,
 		&first, &last, &status, &s.PendingCount, &s.Account,
 		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
 		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride)
@@ -730,7 +736,9 @@ func (d *DB) ensureProject(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	_, err = d.sql.ExecContext(ctx, `INSERT OR IGNORE INTO projects (name, color, created_at) VALUES (?, ?, ?)`,
+	// A new project goes to the newest end: one below the lowest ord.
+	_, err = d.sql.ExecContext(ctx, `INSERT OR IGNORE INTO projects (name, color, created_at, ord)
+		VALUES (?, ?, ?, (SELECT COALESCE(MIN(ord), 0) - 1 FROM projects))`,
 		name, model.PickColor(used, ""), time.Now().UTC().Unix())
 	return err
 }
@@ -744,7 +752,7 @@ func (d *DB) ListProjects(ctx context.Context) ([]model.Project, error) {
 		SELECT p.name, COALESCE(p.color,''),
 		       (SELECT COUNT(*) FROM sessions s WHERE s.project = p.name AND COALESCE(s.archived,0) = 0)
 		FROM projects p
-		ORDER BY p.created_at DESC, p.name`)
+		ORDER BY COALESCE(p.ord,0), p.name`)
 	if err != nil {
 		return nil, err
 	}
@@ -758,6 +766,73 @@ func (d *DB) ListProjects(ctx context.Context) ([]model.Project, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// SetProjectOrder puts the named projects first, in that order, followed
+// by every other project in its current order, and renumbers them all.
+func (d *DB) SetProjectOrder(ctx context.Context, names []string) error {
+	ps, err := d.ListProjects(ctx)
+	if err != nil {
+		return err
+	}
+	known := map[string]bool{}
+	for _, p := range ps {
+		known[p.Name] = true
+	}
+	var order []string
+	seen := map[string]bool{}
+	for _, n := range names {
+		if !known[n] {
+			return fmt.Errorf("no project %q", n)
+		}
+		if !seen[n] {
+			seen[n] = true
+			order = append(order, n)
+		}
+	}
+	for _, p := range ps {
+		if !seen[p.Name] {
+			order = append(order, p.Name)
+		}
+	}
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i, n := range order {
+		if _, err := tx.ExecContext(ctx, `UPDATE projects SET ord = ? WHERE name = ?`, i, n); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// MoveProject moves a project delta places in the display order (negative
+// = toward the newest end of the list).
+func (d *DB) MoveProject(ctx context.Context, name string, delta int) error {
+	ps, err := d.ListProjects(ctx)
+	if err != nil {
+		return err
+	}
+	names := make([]string, len(ps))
+	at := -1
+	for i, p := range ps {
+		names[i] = p.Name
+		if p.Name == name {
+			at = i
+		}
+	}
+	if at < 0 {
+		return fmt.Errorf("no project %q", name)
+	}
+	to := min(max(at+delta, 0), len(names)-1)
+	if to == at {
+		return nil
+	}
+	names = append(names[:at], names[at+1:]...)
+	names = append(names[:to], append([]string{name}, names[to:]...)...)
+	return d.SetProjectOrder(ctx, names)
 }
 
 // RenameProject renames a project, or merges it into to when a project of

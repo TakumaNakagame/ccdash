@@ -33,12 +33,14 @@ func TestHelpListsProjectAndTitleKeys(t *testing.T) {
 func TestProjectsFirst(t *testing.T) {
 	now := time.Now()
 	at := func(h int) time.Time { return now.Add(-time.Duration(h) * time.Hour) }
+	// Activity (LastSeen) must not matter: project a is newer than b,
+	// a-new started after a-old.
 	in := []mdl.Session{
 		{SessionID: "fav", Favorite: true, LastSeen: at(1)},
 		{SessionID: "plain", LastSeen: at(0)},
-		{SessionID: "a-old", Project: "a", LastSeen: at(30)},
-		{SessionID: "b", Project: "b", LastSeen: at(5)},
-		{SessionID: "a-new", Project: "a", LastSeen: at(2)},
+		{SessionID: "a-old", Project: "a", ProjectOrder: -2, FirstSeen: at(40), LastSeen: at(0)},
+		{SessionID: "b", Project: "b", ProjectOrder: 5, FirstSeen: at(50), LastSeen: at(0)},
+		{SessionID: "a-new", Project: "a", ProjectOrder: -2, FirstSeen: at(30), LastSeen: at(9)},
 	}
 	var got []string
 	for _, s := range projectsFirst(in) {

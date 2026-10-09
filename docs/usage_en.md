@@ -255,8 +255,11 @@ apart from the other projects' colors.
 
 Project members are moved to the newest end of the list (the top, or the
 bottom with **Newest at bottom**), separate from the date buckets. Each
-project is one block, ordered by its most recent activity, headed by a
-full-width band in the project's color:
+project is one block and the order never changes with activity: new
+projects appear at the newest end, `[` / `]` move the selected session's
+project up / down (▲ ▼ on the band in the portal, `order_projects` over
+MCP), and sessions inside a block are newest-started first. Each block is
+headed by a full-width band in the project's color:
 
 ```
  PROJECT feature-x  3 sessions · 1 running · 1 needs you
@@ -653,11 +656,12 @@ Tools:
 | Tool | What it returns |
 |---|---|
 | `overview` | sessions that need you, finished-but-unseen ones, running sessions grouped by project, today's usage estimate |
-| `list_projects` | projects with session / running / needs-you counts and latest activity |
+| `list_projects` | projects in list order with session / running / needs-you counts and latest activity |
 | `list_sessions` | sessions newest first; filters: `project`, `query`, `running_only`, `attention_only`, `include_archived`, `limit` |
 | `get_session` | one session (`#N` or id) with pending approvals and its recent prompts, replies and tool calls |
 | `set_project` | put sessions into a project (a new name creates it) or take them out (`""`) |
 | `rename_project` | rename a project; renaming onto an existing one merges them |
+| `order_projects` | set the project order (listed ones first) |
 | `set_project_color` | `#rrggbb` or `random` |
 | `set_title` | rename a session (`""` = back to the automatic title) |
 | `set_archived` | archive / unarchive sessions |

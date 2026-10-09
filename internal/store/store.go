@@ -54,6 +54,11 @@ type Store interface {
 	// RenameProject renames a project, merging it into an existing one of
 	// the new name.
 	RenameProject(ctx context.Context, from, to string) error
+	// MoveProject moves a project delta places in the list order
+	// (negative = toward the newest end); SetProjectOrder puts the named
+	// projects first in that order.
+	MoveProject(ctx context.Context, project string, delta int) error
+	SetProjectOrder(ctx context.Context, names []string) error
 	// SetProjectColor sets a project's color ("#rrggbb", or "random").
 	SetProjectColor(ctx context.Context, project, color string) error
 
