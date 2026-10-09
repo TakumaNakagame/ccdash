@@ -19,6 +19,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/takumanakagame/ccmanage/internal/accounts"
@@ -128,6 +129,10 @@ type model struct {
 	// groupEditProject switches the editingGroup prompt (input + picker
 	// of existing names) from the tab group (T) to the project (p).
 	groupEditProject bool
+	// projectCands are the projects offered by the p prompt, fetched when
+	// it opens (ListProjects: includes projects whose sessions are all
+	// archived).
+	projectCands []mdl.Project
 	// groupSel remembers the selected session ID per group so switching
 	// tabs returns the cursor to where the operator left it.
 	groupSel map[string]string
@@ -975,6 +980,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.flash = fmt.Sprintf("generating %d title(s)…", len(msg.sessionIDs))
 		return m, m.refresh()
+	case projectsMsg:
+		m.projectCands = []mdl.Project(msg)
+		return m, nil
 	case transcriptLoadedMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -2043,17 +2051,56 @@ func (m *model) startProjectEdit() tea.Cmd {
 	}
 	m.editingGroup = true
 	m.groupEditProject = true
-	m.titleBuffer = m.sessions[m.selSess].Project
+	m.titleBuffer = ""
 	m.groupCandIdx = -1
-	return nil
+	m.projectCands = nil
+	st, ctx := m.store, m.ctx
+	return func() tea.Msg {
+		ps, err := st.ListProjects(ctx)
+		if err != nil {
+			return projectsMsg(nil)
+		}
+		return projectsMsg(ps)
+	}
+}
+
+// removeProjectLabel is the p picker's last entry for a session already in
+// a project: choosing it takes the session out. (An empty input means
+// "no change", so a stray enter never drops a session from its project.)
+func removeProjectLabel(cur string) string { return "✕ remove from " + cur }
+
+// projectsMsg carries the p prompt's candidates.
+type projectsMsg []mdl.Project
+
+// projectColorByName finds a candidate's color ("" when unknown).
+func (m *model) projectColorByName(name string) string {
+	for _, p := range m.projectCands {
+		if p.Name == name {
+			return mdl.ProjectColorOf(p.Name, p.Color)
+		}
+	}
+	for _, s := range m.allSessions {
+		if s.Project == name {
+			return mdl.ProjectColorOf(s.Project, s.ProjectColor)
+		}
+	}
+	return ""
 }
 
 func (m *model) commitProjectEdit() tea.Cmd {
 	if len(m.sessions) == 0 {
 		return nil
 	}
-	sid := m.sessions[m.selSess].SessionID
+	cur := m.sessions[m.selSess]
+	sid := cur.SessionID
 	project := strings.TrimSpace(m.titleBuffer)
+	switch {
+	case project == "":
+		m.flash = "project unchanged"
+		return nil
+	case project == removeProjectLabel(cur.Project):
+		project = ""
+	}
 	return func() tea.Msg {
 		if err := m.store.SetProject(m.ctx, sid, project); err != nil {
 			return attachDoneMsg{err: err}
@@ -2091,11 +2138,11 @@ func (m *model) rerollProjectColor() tea.Cmd {
 func (m *model) filteredGroupCandidates() []string {
 	seen := map[string]struct{}{}
 	var all []string
+	if m.groupEditProject {
+		return m.filteredProjectCandidates()
+	}
 	for _, s := range m.allSessions {
 		v := s.UserGroup
-		if m.groupEditProject {
-			v = s.Project
-		}
 		if v == "" {
 			continue
 		}
@@ -2120,6 +2167,45 @@ func (m *model) filteredGroupCandidates() []string {
 	out := all[:0]
 	for _, c := range all {
 		if strings.HasPrefix(strings.ToLower(c), prefix) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// filteredProjectCandidates lists the projects for the p prompt: the
+// fetched ones (newest first) plus any only seen on session rows, narrowed
+// by a case-insensitive substring of the input. The selected session's
+// current project is left out (choosing it would change nothing).
+func (m *model) filteredProjectCandidates() []string {
+	cur := ""
+	if len(m.sessions) > 0 {
+		cur = m.sessions[m.selSess].Project
+	}
+	seen := map[string]bool{cur: true, "": true}
+	var all []string
+	add := func(n string) {
+		if !seen[n] {
+			seen[n] = true
+			all = append(all, n)
+		}
+	}
+	for _, p := range m.projectCands {
+		add(p.Name)
+	}
+	for _, s := range m.allSessions {
+		add(s.Project)
+	}
+	if cur != "" {
+		all = append(all, removeProjectLabel(cur))
+	}
+	q := strings.ToLower(strings.TrimSpace(m.titleBuffer))
+	if q == "" || m.groupCandIdx >= 0 {
+		return all
+	}
+	out := all[:0]
+	for _, c := range all {
+		if strings.Contains(strings.ToLower(c), q) {
 			out = append(out, c)
 		}
 	}
@@ -2896,7 +2982,7 @@ func (m *model) renderFooter() string {
 	if m.editingGroup {
 		prompt := "tab: " + m.titleBuffer + "▏"
 		if m.groupEditProject {
-			prompt = "project: " + m.titleBuffer + "▏"
+			return m.projectPromptFooter()
 		}
 		hint := subtitleStyle.Render("↑↓ pick · enter assign · esc cancel · empty=clear")
 		cands := m.filteredGroupCandidates()
@@ -2950,6 +3036,61 @@ func (m *model) renderFooter() string {
 		return subtitleStyle.Render(m.flash) + "\n" + footerStyle.Render(keys)
 	}
 	return footerStyle.Render(keys)
+}
+
+// projectPromptFooter is the p prompt: the existing projects as chips in
+// their colors (↑↓ picks one), then the input. Typing a name that isn't
+// listed creates that project on enter.
+func (m *model) projectPromptFooter() string {
+	cands := m.filteredProjectCandidates()
+	cur := ""
+	if len(m.sessions) > 0 {
+		cur = m.sessions[m.selSess].Project
+	}
+	var chips []string
+	for i, c := range cands {
+		if c == removeProjectLabel(cur) {
+			st := subtitleStyle
+			if i == m.groupCandIdx {
+				st = pendingStyle
+			}
+			chips = append(chips, st.Render(c))
+			continue
+		}
+		bg := m.projectColorByName(c)
+		st := lipgloss.NewStyle().Background(lipgloss.Color(bg)).Foreground(lipgloss.Color(mdl.InkOn(bg)))
+		label := " " + c + " "
+		if i == m.groupCandIdx {
+			label = "▶" + c + " "
+			st = st.Bold(true).Underline(true)
+		}
+		chips = append(chips, st.Render(label))
+	}
+	line1 := subtitleStyle.Render("projects: ")
+	switch {
+	case len(cands) > 0:
+		line1 += strings.Join(chips, " ")
+	case len(m.projectCands) == 0 && strings.TrimSpace(m.titleBuffer) == "":
+		line1 += subtitleStyle.Render("(none yet — type a name to create one)")
+	default:
+		line1 += subtitleStyle.Render("(no match)")
+	}
+	line1 = ansi.Truncate(line1, m.width, "…")
+	name := strings.TrimSpace(m.titleBuffer)
+	hint := "↑↓ pick · enter put in project · esc cancel"
+	if name != "" && m.groupCandIdx < 0 && !m.projectExists(name) {
+		hint = "enter: create project \"" + name + "\" · ↑↓ pick · esc cancel"
+	}
+	prompt := "project: " + m.titleBuffer + "▏"
+	if cur != "" {
+		prompt = "project (now " + cur + "): " + m.titleBuffer + "▏"
+	}
+	return line1 + "\n" + pendingStyle.Render(prompt) + "  " + subtitleStyle.Render(hint)
+}
+
+// projectExists reports whether name is an existing project.
+func (m *model) projectExists(name string) bool {
+	return m.projectColorByName(name) != ""
 }
 
 // renderTabBar lays out a browser-style strip of project / user-tab labels
@@ -3539,6 +3680,11 @@ func (m *model) renderSessionsList(width, height int) string {
 	for i, s := range m.sessions {
 		bucket := bucketFor(s, now)
 		if bucket != prevBucket {
+			// A blank line around each project block keeps neighbouring
+			// projects (and the date groups after them) apart.
+			if len(rows) > 0 && (s.Project != "" || strings.HasPrefix(prevBucket, projectBucketPrefix)) {
+				rows = append(rows, rowEntry{lines: []string{""}, sessionIdx: -1})
+			}
 			var header string
 			switch {
 			case s.Project != "":
@@ -3627,6 +3773,10 @@ func (m *model) renderSessionsList(width, height int) string {
 
 const bucketFavorites = "Favorites"
 
+// projectBucketPrefix marks bucketFor labels that are projects (a NUL can't
+// collide with a date label).
+const projectBucketPrefix = "\x00project:"
+
 // projectStat is what a project header shows about its sessions in view.
 type projectStat struct {
 	total, running, needsYou int
@@ -3685,7 +3835,7 @@ func renderProjectHeader(s mdl.Session, st projectStat, width int) string {
 // bucketed by last_seen.
 func bucketFor(s mdl.Session, now time.Time) string {
 	if s.Project != "" {
-		return "\x00project:" + s.Project
+		return projectBucketPrefix + s.Project
 	}
 	if s.Favorite {
 		return bucketFavorites

@@ -245,9 +245,12 @@ with `x` stay archived.
 
 A project is an operator-named set of sessions — e.g. the three sessions
 working on one feature across repos. Press `p` on a session to put it in
-one: the prompt lists the existing project names (`↑` `↓` to pick one, or
-type a new name); submitting an empty name removes the session from its
-project. `P` re-rolls the project's color; new projects get a color kept
+one: the prompt shows the existing projects as chips in their colors —
+including projects whose sessions are all archived — (`↑` `↓` to pick one;
+typing filters them), and typing a name that isn't listed creates that
+project on `enter`. The last chip, `✕ remove from <project>`, takes the
+session out; an empty input changes nothing. Blank lines keep the project
+blocks apart in the list. `P` re-rolls the project's color; new projects get a color kept
 apart from the other projects' colors.
 
 Project members are moved to the newest end of the list (the top, or the
@@ -270,7 +273,14 @@ Every session gets a short sequential number shown in front of its title,
 e.g. `#4839 ccdash 改善`. Existing sessions are numbered in the order they
 first appeared; search accepts `#4839` (or `4839`) to jump to one.
 
-`ctrl+t` asks `claude -p` for a short, ticket-style title. The banner
+Sessions are **titled automatically**: once a session has had two typed
+prompts — or one, followed by 2 minutes of quiet — the collector titles it
+with the same batched `claude -p` run (up to 10 sessions per call, at most
+one call a minute, only sessions active in the last 24 h, once per session;
+a failed attempt isn't retried). Turn it off with **Auto-generate titles**
+(`auto_title`); it also needs **Title generation via claude -p**.
+
+`ctrl+t` asks `claude -p` for a title on demand (or again). The banner
 offers two targets:
 
 - `y` — the selected session only

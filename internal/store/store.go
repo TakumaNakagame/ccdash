@@ -48,6 +48,9 @@ type Store interface {
 	// SetProject puts the session into a project ("" takes it out); a new
 	// name creates the project with its own color.
 	SetProject(ctx context.Context, sessionID, project string) error
+	// ListProjects returns every project (picker candidates), including
+	// ones whose sessions are all archived.
+	ListProjects(ctx context.Context) ([]model.Project, error)
 	// SetProjectColor sets a project's color ("#rrggbb", or "random").
 	SetProjectColor(ctx context.Context, project, color string) error
 

@@ -204,7 +204,7 @@ func (s *Server) hubHandler() http.Handler {
 }
 
 var (
-	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|usage|usage/sessions|sessions/[^/]+/(transcript|usage|statusline))$`)
+	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|projects|usage|usage/sessions|sessions/[^/]+/(transcript|usage|statusline))$`)
 	hubSessionEdit = regexp.MustCompile(`^/api/(sessions/[^/]+/(archive|favorite|color|title|group|project|seen)|projects/color)$`)
 	// claude -p runs; summarize.KickoffTitles refuses them itself while
 	// summary_enabled is off.

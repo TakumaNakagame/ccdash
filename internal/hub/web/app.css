@@ -459,6 +459,10 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .list .bucket.project:first-child { margin-top: 0; }
 .bucket.project .proj-label { font-size: 10px; font-weight: 700; letter-spacing: .08em; opacity: .75; }
 .bucket.project .proj-meta { margin-left: auto; font-size: 12px; opacity: .85; }
+.proj-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+.proj-chip { display: inline-flex; gap: 6px; align-items: center; padding: 5px 12px; border-radius: 999px; border: 0; font: inherit; font-size: 13px; font-weight: 600; background: var(--proj); color: var(--ink); cursor: pointer; }
+.proj-chip.static { cursor: default; }
+.proj-chip .n { font-size: 11px; font-weight: 400; opacity: .75; }
 .item.in-project { border-left: 6px solid var(--proj); background: color-mix(in srgb, var(--proj) 9%, transparent); }
 .item.in-project.selected { background: color-mix(in srgb, var(--proj) 18%, transparent); }
 .tile[style*="--sess"] { border-left: 4px solid var(--sess); }

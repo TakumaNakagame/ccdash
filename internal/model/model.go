@@ -55,6 +55,15 @@ type Session struct {
 	AttentionAt     time.Time `json:"attention_at,omitzero"`
 }
 
+// Project is an operator-named set of sessions (projects table).
+type Project struct {
+	Name  string `json:"name"`
+	Color string `json:"color,omitempty"`
+	// Sessions counts the project's sessions in the working set
+	// (not archived).
+	Sessions int `json:"sessions"`
+}
+
 const (
 	AttentionNeedsYou = "needs_you"
 	AttentionDone     = "done"

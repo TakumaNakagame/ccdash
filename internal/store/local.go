@@ -87,6 +87,10 @@ func (l *Local) SetProject(ctx context.Context, sessionID, project string) error
 	return l.db.SetProject(ctx, sessionID, project)
 }
 
+func (l *Local) ListProjects(ctx context.Context) ([]model.Project, error) {
+	return l.db.ListProjects(ctx)
+}
+
 func (l *Local) SetProjectColor(ctx context.Context, project, color string) error {
 	return l.db.SetProjectColor(ctx, project, color)
 }

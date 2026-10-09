@@ -37,7 +37,13 @@ type Discovered struct {
 	// LastPrompt is when the operator last typed a prompt (falls back to
 	// LastModified). This is the session's time in the list.
 	LastPrompt time.Time
+	// Prompts counts the operator-typed prompts, capped at PromptCap
+	// (enough to decide when a session is worth an automatic title).
+	Prompts int
 }
+
+// PromptCap is where Discovered.Prompts stops counting.
+const PromptCap = 2
 
 // Scan walks ~/.claude/projects looking for transcript files. The base
 // argument lets callers override the directory for tests; pass "" for the
@@ -98,6 +104,7 @@ func readTranscript(path string) (Discovered, error) {
 		return d, err
 	}
 	d.LastModified, d.LastPrompt = tailTimes(path, info)
+	d.Prompts = countPrompts(path, info.Size())
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -169,6 +176,54 @@ func tailTimes(path string, info os.FileInfo) (lastEntry, lastPrompt time.Time) 
 	tailCache[path] = tailEntry{size: info.Size(), mtime: info.ModTime(), lastEntry: lastEntry, lastPrompt: lastPrompt}
 	tailMu.Unlock()
 	return lastEntry, lastPrompt
+}
+
+// promptCache remembers, per transcript, how far countPrompts has read and
+// how many prompts it saw, so each tick only reads what was appended —
+// and nothing at all once the count reached PromptCap.
+var promptCache = map[string]promptEntry{}
+
+type promptEntry struct {
+	offset  int64
+	prompts int
+}
+
+// countPrompts returns how many operator-typed prompts the transcript
+// holds, up to PromptCap, reading only complete lines past the cached
+// offset.
+func countPrompts(path string, size int64) int {
+	tailMu.Lock()
+	c := promptCache[path]
+	tailMu.Unlock()
+	if c.prompts >= PromptCap || size == c.offset {
+		return c.prompts
+	}
+	if size < c.offset { // rewritten
+		c = promptEntry{}
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return c.prompts
+	}
+	defer f.Close()
+	if _, err := f.Seek(c.offset, io.SeekStart); err != nil {
+		return c.prompts
+	}
+	r := bufio.NewReaderSize(f, 1<<20)
+	for c.prompts < PromptCap {
+		line, err := r.ReadBytes('\n')
+		if err != nil { // EOF or a partial last line: read it next time
+			break
+		}
+		c.offset += int64(len(line))
+		if _, prompt := lineTimes(line); prompt {
+			c.prompts++
+		}
+	}
+	tailMu.Lock()
+	promptCache[path] = c
+	tailMu.Unlock()
+	return c.prompts
 }
 
 // scanTail reads growing windows from the end of the file until it has

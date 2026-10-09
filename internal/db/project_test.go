@@ -47,6 +47,15 @@ func TestProjects(t *testing.T) {
 	if c.ProjectColor == "" || c.ProjectColor == a.ProjectColor {
 		t.Fatalf("infra color %q vs web %q", c.ProjectColor, a.ProjectColor)
 	}
+	ps, err := d.ListProjects(ctx)
+	if err != nil || len(ps) != 2 {
+		t.Fatalf("ListProjects = %v, %v", ps, err)
+	}
+	for _, p := range ps {
+		if want := map[string]int{"web": 2, "infra": 1}[p.Name]; p.Sessions != want || p.Color == "" {
+			t.Fatalf("project %+v, want %d sessions", p, want)
+		}
+	}
 	if err := d.SetProjectColor(ctx, "web", ColorRandom); err != nil {
 		t.Fatal(err)
 	}

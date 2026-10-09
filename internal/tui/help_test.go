@@ -49,3 +49,25 @@ func TestProjectsFirst(t *testing.T) {
 		t.Fatalf("order = %v, want %s", got, want)
 	}
 }
+
+func TestProjectCandidates(t *testing.T) {
+	m := &model{
+		sessions:     []mdl.Session{{SessionID: "a", Project: "web"}},
+		allSessions:  []mdl.Session{{SessionID: "a", Project: "web"}, {SessionID: "b", Project: "infra"}},
+		projectCands: []mdl.Project{{Name: "archived-only"}, {Name: "web"}},
+		groupCandIdx: -1,
+	}
+	got := strings.Join(m.filteredProjectCandidates(), ",")
+	if want := "archived-only,infra," + removeProjectLabel("web"); got != want {
+		t.Fatalf("candidates = %q, want %q", got, want)
+	}
+	m.titleBuffer = "INF"
+	if got := strings.Join(m.filteredProjectCandidates(), ","); got != "infra" {
+		t.Fatalf("filtered = %q", got)
+	}
+	// An empty input is "no change", not "remove".
+	m.titleBuffer = ""
+	if cmd := m.commitProjectEdit(); cmd != nil {
+		t.Fatal("empty input should not touch the project")
+	}
+}

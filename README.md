@@ -21,7 +21,7 @@ control over approvals.
 | **Per-session controls** | Rename, custom user-named group assignment, archive / unarchive, attach via `tmux switch-pane` or `claude --resume`. |
 | **Approvals** | When enabled, pending permission requests appear in a yellow banner; press `a` / `A` (keep) / `d` to allow / keep-allow-for-session / deny without leaving the dashboard. |
 | **Projects** | `p` puts sessions in an operator-named project: members move to the newest end of the list, one block per project under a full-width band in the project's color, each row with a color gutter. |
-| **Generated titles** | `ctrl+t` asks `claude -p` for short, ticket-style titles from a redacted digest of the transcript. |
+| **Generated titles** | Sessions are titled automatically by `claude -p` after their first exchange or two (`auto_title`); `ctrl+t` (re)generates on demand. Titles come from a redacted digest of the transcript. |
 | **Auto-archive** | Once a day, sessions idle longer than N days (default 7) are archived — favorites, project members and running sessions are kept; resuming one brings it back. |
 | **Tabs** | Browser-style strip across the top filters by repo or operator-named group. Slides on overflow. |
 | **Search** | `/` filters the list by case-insensitive substring across title, tab, repo, project, session id. |
@@ -123,7 +123,7 @@ ccdash --version               # report the current version
 | `c` / `C` | next color / re-roll for the session's bar (shared with the portal). Running sessions get a stored color that stands apart from the other running ones; `C` re-rolls by the same rule |
 | `ctrl+r` | restart the session's ccdash-hosted claude (kill + `claude --resume`), after `y` |
 | `!` | show only sessions that need you (`?`: approval, question, menu on screen) or finished a turn you haven't looked at (`✓`) |
-| `p` | put the session in a project (picker of existing names, `↑` `↓` to pick, empty = remove) |
+| `p` | put the session in a project: existing projects as colored candidates (`↑` `↓` to pick), a new name creates one, `✕ remove from …` takes it out |
 | `P` | re-roll the project's color (kept apart from other projects' colors) |
 | `x` | archive / unarchive |
 | `X` | toggle archive view (operator-archived sessions) |

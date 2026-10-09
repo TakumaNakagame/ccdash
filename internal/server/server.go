@@ -39,6 +39,9 @@ type Server struct {
 	srv     *http.Server
 	token   string // shared secret; required on every hook + decision request
 	limiter *tokenBucket
+	// titler tracks discovery's prompt counts for automatic titles
+	// (autotitle.go).
+	titler autoTitler
 
 	// pending tracks PermissionRequest hooks that are still blocking
 	// inside the handler waiting for an operator decision. The TUI POSTs
@@ -147,6 +150,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/group", wrap(s.handleAPIGroup))
 	s.mux.HandleFunc("POST /api/sessions/{id}/seen", wrap(s.handleAPISeen))
 	s.mux.HandleFunc("POST /api/sessions/{id}/project", wrap(s.handleAPIProject))
+	s.mux.HandleFunc("GET /api/projects", wrap(s.handleAPIProjects))
 	s.mux.HandleFunc("POST /api/projects/color", wrap(s.handleAPIProjectColor))
 	s.mux.HandleFunc("POST /api/titles", wrap(s.handleAPITitles))
 	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
@@ -358,6 +362,7 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 		}
 		// After the scan, so last_seen / status are current.
 		s.maybeAutoArchive(ctx, time.Now())
+		s.maybeAutoTitle(ctx, time.Now())
 	}()
 
 	accs, err := accounts.Load()
@@ -382,6 +387,7 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 		s.aliasPTYsByParent(ctx, procs)
 
 		for _, d := range discovered {
+			s.titler.note(d)
 			sess := &model.Session{
 				SessionID:      d.SessionID,
 				Cwd:            d.Cwd,
@@ -1089,6 +1095,15 @@ func (s *Server) handleAPIProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeOK(w, nil)
+}
+
+func (s *Server) handleAPIProjects(w http.ResponseWriter, r *http.Request) {
+	ps, err := s.db.ListProjects(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, ps)
 }
 
 // handleAPIProjectColor: {"project": name, "color": "#rrggbb" | "random"}.

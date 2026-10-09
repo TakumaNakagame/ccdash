@@ -735,6 +735,31 @@ func (d *DB) ensureProject(ctx context.Context, name string) error {
 	return err
 }
 
+// ListProjects returns every project, the most recently created first,
+// with how many working-set (non-archived) sessions each has. Projects
+// whose sessions are all archived are still listed, so the picker keeps
+// offering them.
+func (d *DB) ListProjects(ctx context.Context) ([]model.Project, error) {
+	rows, err := d.sql.QueryContext(ctx, `
+		SELECT p.name, COALESCE(p.color,''),
+		       (SELECT COUNT(*) FROM sessions s WHERE s.project = p.name AND COALESCE(s.archived,0) = 0)
+		FROM projects p
+		ORDER BY p.created_at DESC, p.name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Project{}
+	for rows.Next() {
+		var p model.Project
+		if err := rows.Scan(&p.Name, &p.Color, &p.Sessions); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // projectColors lists every project's color except skip's.
 func (d *DB) projectColors(ctx context.Context, skip string) ([]string, error) {
 	rows, err := d.sql.QueryContext(ctx, `SELECT COALESCE(color,'') FROM projects WHERE name <> ?`, skip)

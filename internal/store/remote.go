@@ -167,6 +167,14 @@ func (r *Remote) SetProject(ctx context.Context, sessionID, project string) erro
 		map[string]any{"project": project}, nil)
 }
 
+func (r *Remote) ListProjects(ctx context.Context) ([]model.Project, error) {
+	var out []model.Project
+	if err := r.doJSON(ctx, 5*time.Second, http.MethodGet, "/api/projects", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *Remote) SetProjectColor(ctx context.Context, project, color string) error {
 	return r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/projects/color", nil,
 		map[string]any{"project": project, "color": color}, nil)

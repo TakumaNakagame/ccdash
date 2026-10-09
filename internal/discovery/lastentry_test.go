@@ -112,3 +112,28 @@ func TestCleanTitlePasted(t *testing.T) {
 		t.Errorf("task notification became a title: %q", got)
 	}
 }
+
+// TestCountPrompts: typed prompts are counted incrementally up to
+// PromptCap; tool results and a partial last line don't count.
+func TestCountPrompts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	user := func(c string) string {
+		return `{"type":"user","timestamp":"2026-09-01T10:00:00Z","message":{"role":"user","content":` + c + `}}` + "\n"
+	}
+	write := func(s string) int {
+		f, _ := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		_, _ = f.WriteString(s)
+		f.Close()
+		info, _ := os.Stat(path)
+		return countPrompts(path, info.Size())
+	}
+	if n := write(user(`"first"`) + user(`[{"type":"tool_result","content":"x"}]`)); n != 1 {
+		t.Fatalf("after one prompt: %d", n)
+	}
+	if n := write(`{"type":"user","timestamp":"2026-09-01T10:00:00Z","message":{"content":"half`); n != 1 {
+		t.Fatalf("partial line counted: %d", n)
+	}
+	if n := write(`"}}` + "\n" + user(`"third"`)); n != PromptCap {
+		t.Fatalf("after more prompts: %d, want %d", n, PromptCap)
+	}
+}
