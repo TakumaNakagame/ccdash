@@ -33,6 +33,9 @@ type dirCand struct {
 func (m *model) openDirPicker() {
 	start := strings.TrimSpace(m.settings.NewSessionDir)
 	switch {
+	case m.spawnProject != "" && m.projectDir(m.spawnProject) != "":
+		// Inside a project: start where the project's sessions work.
+		start = tildePath(m.projectDir(m.spawnProject))
 	case start != "":
 	case m.remote.Enabled:
 		// The local home dir means nothing on the remote host; the remote
@@ -48,6 +51,18 @@ func (m *model) openDirPicker() {
 	m.pickSel = -1
 	m.pickScroll = 0
 	m.editingNewSession = true
+}
+
+// projectDir is where a project's work happens: the cwd of its most
+// recently active session ("" when none is known).
+func (m *model) projectDir(project string) string {
+	var best mdl.Session
+	for _, s := range m.allSessions {
+		if s.Project == project && s.Cwd != "" && s.LastSeen.After(best.LastSeen) {
+			best = s
+		}
+	}
+	return best.Cwd
 }
 
 // closeDirPicker hides the picker and clears its state.
@@ -428,6 +443,9 @@ func (m *model) dirPickerBox() (box string, caretX, caretY int) {
 		Padding(0, 1).
 		Width(w - 2)
 	title := " new claude session "
+	if m.spawnProject != "" {
+		title = " new claude session · project " + runewidth.Truncate(m.spawnProject, inner-34, "…") + " "
+	}
 	if m.spawnPrompt != "" {
 		title = " new claude session · " + runewidth.Truncate(m.spawnPrompt, inner-24, "…") + " "
 	}

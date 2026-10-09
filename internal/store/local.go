@@ -91,6 +91,10 @@ func (l *Local) ListProjects(ctx context.Context) ([]model.Project, error) {
 	return l.db.ListProjects(ctx)
 }
 
+func (l *Local) RenameProject(ctx context.Context, from, to string) error {
+	return l.db.RenameProject(ctx, from, to)
+}
+
 func (l *Local) SetProjectColor(ctx context.Context, project, color string) error {
 	return l.db.SetProjectColor(ctx, project, color)
 }

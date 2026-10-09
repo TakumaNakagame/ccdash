@@ -175,6 +175,11 @@ func (r *Remote) ListProjects(ctx context.Context) ([]model.Project, error) {
 	return out, nil
 }
 
+func (r *Remote) RenameProject(ctx context.Context, from, to string) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/projects/rename", nil,
+		map[string]any{"from": from, "to": to}, nil)
+}
+
 func (r *Remote) SetProjectColor(ctx context.Context, project, color string) error {
 	return r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/projects/color", nil,
 		map[string]any{"project": project, "color": color}, nil)

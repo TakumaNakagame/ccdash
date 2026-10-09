@@ -482,12 +482,13 @@ async function projectPicker(id, { current = "", count = 1 } = {}, pick) {
   });
 }
 
-function projectHeader(name, color, members) {
+function projectHeader(name, color, members, onNew) {
   const running = members.filter((s) => s.status === "active" || s.status === "idle").length;
   const needs = members.filter((s) => s.attention === "needs_you").length;
   const meta = [`${members.length} セッション`, running ? `${running} 稼働中` : null, needs ? `${needs} 要対応` : null].filter(Boolean).join(" · ");
   return h("div", { class: "bucket project", style: `--proj:${color};--ink:${inkOn(color)}` },
-    h("span", { class: "proj-label" }, "PROJECT"), h("b", {}, name), h("span", { class: "proj-meta" }, meta));
+    h("span", { class: "proj-label" }, "PROJECT"), h("b", {}, name), h("span", { class: "proj-meta" }, meta),
+    onNew ? h("button", { type: "button", class: "proj-new", title: "このプロジェクトで新規セッション", onclick: (e) => { e.stopPropagation(); onNew(); } }, "＋") : null);
 }
 
 function sessionTitle(s) {
@@ -687,7 +688,9 @@ async function devicePage(id, opts = {}) {
       if (b !== bucket) {
         bucket = b;
         out.push(s.project
-          ? projectHeader(s.project, projectColorOf(s.project, s.project_color), ordered.filter((x) => x.project === s.project))
+          ? projectHeader(s.project, projectColorOf(s.project, s.project_color), ordered.filter((x) => x.project === s.project),
+            // The project's directory: where its most recent session works.
+            () => newSession(id, { cwd: s.cwd, project: s.project }))
           : h("div", { class: "bucket" }, b));
       }
       out.push(sessionRow(id, s, live.has(s.session_id), info, !tab, sel, briefs[s.session_id]));
@@ -865,12 +868,13 @@ function newSession(id, preset = {}) {
       let first = prompt.value.trim();
       if (first.startsWith("-")) first = " " + first;
       try {
-        const r = await dev(id).post("/pty/start", { cwd: path.value, cols: 120, rows: 36, prompt: first, permissionMode: mode.value });
+        const r = await dev(id).post("/pty/start", { cwd: path.value, cols: 120, rows: 36, prompt: first, permissionMode: mode.value, project: preset.project || "" });
         close();
         location.hash = `#/d/${id}/p/${encodeURIComponent(r.ptyKey)}`;
       } catch (err) { toast(err.message); }
     };
     body.append(h("h1", {}, "新規セッション"),
+      preset.project ? h("p", { class: "muted small" }, `プロジェクト「${preset.project}」に入ります`) : null,
       h("div", { class: "row" }, path, h("button", { type: "button", class: "btn", onclick: () => load(path.value) }, "移動")),
       dirs,
       h("div", { class: "col" }, prompt, skillBox, mode),

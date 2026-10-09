@@ -49,3 +49,37 @@ func TestMaybeAutoTitle(t *testing.T) {
 		t.Fatal("ready session not titled on the next run")
 	}
 }
+
+// TestApplyPTYProjects: a spawn started for a project joins it once its
+// session-ID alias and row exist; an existing project is kept.
+func TestApplyPTYProjects(t *testing.T) {
+	s, d, _ := newTestServer(t)
+	ctx := context.Background()
+	fresh := &ptyEntry{project: "web"}
+	kept := &ptyEntry{project: "web"}
+	s.ptyMap["pid-1"] = fresh
+	s.ptyMap["pid-2"] = kept
+	s.applyPTYProjects(ctx) // no alias yet: nothing to do
+	if fresh.projectDone {
+		t.Fatal("applied before the alias")
+	}
+	s.ptyMap["new-sid"] = fresh
+	s.ptyMap["old-sid"] = kept
+	s.applyPTYProjects(ctx) // alias but no row yet
+	if fresh.projectDone {
+		t.Fatal("applied before the row")
+	}
+	for _, id := range []string{"new-sid", "old-sid"} {
+		if err := d.UpsertSession(ctx, &model.Session{SessionID: id, Cwd: "/w", Status: model.StatusIdle}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = d.SetProject(ctx, "old-sid", "infra")
+	s.applyPTYProjects(ctx)
+	if got, _, _ := d.GetSession(ctx, "new-sid"); got.Project != "web" || !fresh.projectDone {
+		t.Fatalf("new-sid project = %q", got.Project)
+	}
+	if got, _, _ := d.GetSession(ctx, "old-sid"); got.Project != "infra" {
+		t.Fatalf("old-sid project overwritten: %q", got.Project)
+	}
+}

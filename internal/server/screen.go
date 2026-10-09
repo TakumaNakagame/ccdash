@@ -62,14 +62,18 @@ type ptyEntry struct {
 	// emuMu guards emu and the cursor mirror below. Every emulator call
 	// except Read goes through it; Read is served by the response pump
 	// which never takes the lock.
-	emuMu     sync.Mutex
-	emu       *vt.Emulator
-	tag       int            // hook tag handed to the child; see ptyTagBase
-	sf        strFilter      // scrubs C1-looking bytes out of OSC etc.; see strfilter.go
-	trace     io.WriteCloser // raw child output dump; nil unless CCDASH_PTY_TRACE_DIR is set
-	curHidden bool
-	curStyle  vt.CursorStyle
-	curBlink  bool
+	emuMu sync.Mutex
+	emu   *vt.Emulator
+	tag   int // hook tag handed to the child; see ptyTagBase
+	// project / projectDone: the project the spawn joins (applyPTYProjects);
+	// guarded by Server.ptyMu.
+	project     string
+	projectDone bool
+	sf          strFilter      // scrubs C1-looking bytes out of OSC etc.; see strfilter.go
+	trace       io.WriteCloser // raw child output dump; nil unless CCDASH_PTY_TRACE_DIR is set
+	curHidden   bool
+	curStyle    vt.CursorStyle
+	curBlink    bool
 
 	// rawMu guards raw, the optional fullscreen relay sink.
 	rawMu sync.Mutex

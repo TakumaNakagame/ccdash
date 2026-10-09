@@ -204,6 +204,8 @@ tool 呼び出しと結果は視覚的に結合 (空行無し、結果はイン�
 
 メンバーの各行の左端にはプロジェクト色の 1 セル幅の帯が付きます。検索 (`/`) はプロジェクト名にもマッチします。
 
+プロジェクトに入っているセッションを選んで `n` を押すと、ディレクトリ選択はそのプロジェクトのディレクトリ (最近動いたメンバーの cwd) から始まり、起動した新しいセッションは自動でそのプロジェクトに入ります (collector が session ID を知った時点で割り当て)。ポータルではプロジェクト見出しの **＋** が同じことをします。
+
 ### セッション番号とタイトル自動生成 (`Ctrl+T`)
 
 各セッションには連番の ID が振られ、`#4839 ccdash 改善` のようにタイトルの前に表示されます。既存セッションは最初に現れた順に採番済み。検索で `#4839` (または `4839`) と打つとそのセッションに絞れます。
@@ -450,3 +452,28 @@ curl -H "Authorization: Bearer $TOKEN" \
 ```
 
 ポータルにできることは端末側の設定で制限される: **Attach** OFF なら閲覧のみ、**Approval blocking** OFF なら承認不可、**Hub connection** OFF なら端末はオフライン扱い。
+
+## 16. MCP サーバー (`ccdash mcp`)
+
+`ccdash mcp` は stdio で動く MCP サーバーで、ダッシュボードが見ている情報を Claude から参照・整理できるようにします。一度だけ登録します。
+
+```sh
+claude mcp add --scope user ccdash -- ccdash mcp        # この端末の collector
+claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` のリモート collector
+```
+
+ツール:
+
+| ツール | 返す内容 |
+|---|---|
+| `overview` | 要対応のセッション、終わったが未確認のもの、プロジェクト別の稼働中セッション、今日の利用額の目安 |
+| `list_projects` | プロジェクトとそのセッション数・稼働数・要対応数・最終活動 |
+| `list_sessions` | 新しい順のセッション。絞り込み: `project` / `query` / `running_only` / `attention_only` / `include_archived` / `limit` |
+| `get_session` | 1 セッション (`#N` か ID) の詳細、承認待ち、最近のプロンプト・返答・ツール呼び出し |
+| `set_project` | セッションをプロジェクトに入れる (新しい名前なら作成)、`""` で外す |
+| `rename_project` | プロジェクト名の変更。既存のプロジェクト名にすると統合 |
+| `set_project_color` | `#rrggbb` か `random` |
+| `set_title` | セッションのタイトル変更 (`""` で自動のタイトルに戻す) |
+| `set_archived` | アーカイブ／解除 |
+
+claude の起動・停止や承認の判断はできません。`ccdash mcp --read-only` にすると上の 4 つ (参照系) だけになります。

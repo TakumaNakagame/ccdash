@@ -266,6 +266,10 @@ type model struct {
 	// spawnPrompt is the first message for the next `n` spawn — set by
 	// the skill picker (`S`, "/<skill>") and consumed by spawnNewSession.
 	spawnPrompt string
+	// spawnProject is the project the next `n` spawn joins: the selected
+	// session's project when n was pressed. The server assigns it once the
+	// new claude's session ID is known (ptyStartReq.Project).
+	spawnProject string
 	// restartConfirm shows the "Restart ccdash" confirmation window;
 	// restartRequested makes Run return ErrRestart (see restart.go).
 	// listLineSess maps each visible line of the session list (from its
@@ -432,10 +436,10 @@ func (m *model) spawnNewSession(expanded string, created bool) tea.Cmd {
 	if g, ok := m.liveScreenGeom(); ok {
 		cols, rows = g.w, g.h
 	}
-	prompt := m.spawnPrompt
-	m.spawnPrompt = ""
+	prompt, project := m.spawnPrompt, m.spawnProject
+	m.spawnPrompt, m.spawnProject = "", ""
 	return func() tea.Msg {
-		ptyKey, tag, err := postPTYStart("", "", cwd, prompt, cols, rows)
+		ptyKey, tag, err := postPTYStart("", "", cwd, prompt, project, cols, rows)
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}
@@ -1350,6 +1354,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.spawnPrompt = ""
+		m.spawnProject = ""
+		if len(m.sessions) > 0 {
+			m.spawnProject = m.sessions[m.selSess].Project
+		}
 		m.openDirPicker()
 		return m, nil
 	case "S":
@@ -2439,13 +2447,14 @@ type ptyStartedMsg struct {
 
 // postPTYStart calls POST /pty/start on the local server and returns the ptyKey.
 // sessionId and resumeId may be empty for brand-new sessions.
-func postPTYStart(sessionID, resumeID, cwd, prompt string, cols, rows int) (string, int, error) {
+func postPTYStart(sessionID, resumeID, cwd, prompt, project string, cols, rows int) (string, int, error) {
 	addr := fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)
 	body, _ := json.Marshal(map[string]any{
 		"sessionId": sessionID,
 		"resumeId":  resumeID,
 		"cwd":       cwd,
 		"prompt":    prompt,
+		"project":   project,
 		"cols":      cols,
 		"rows":      rows,
 	})
@@ -2518,7 +2527,7 @@ func (m *model) attachSession(force bool) tea.Cmd {
 	}
 	m.flash = "starting claude --resume " + shortID(sid) + "…"
 	return func() tea.Msg {
-		ptyKey, _, err := postPTYStart(sid, sid, cwd, "", cols, rows)
+		ptyKey, _, err := postPTYStart(sid, sid, cwd, "", "", cols, rows)
 		if err != nil {
 			return attachDoneMsg{err: err}
 		}

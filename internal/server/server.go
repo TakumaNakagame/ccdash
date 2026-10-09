@@ -152,6 +152,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/project", wrap(s.handleAPIProject))
 	s.mux.HandleFunc("GET /api/projects", wrap(s.handleAPIProjects))
 	s.mux.HandleFunc("POST /api/projects/color", wrap(s.handleAPIProjectColor))
+	s.mux.HandleFunc("POST /api/projects/rename", wrap(s.handleAPIProjectRename))
 	s.mux.HandleFunc("POST /api/titles", wrap(s.handleAPITitles))
 	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
 	s.mux.HandleFunc("GET /api/sessions/{id}/usage", wrap(s.handleAPISessionUsage))
@@ -363,6 +364,7 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 		// After the scan, so last_seen / status are current.
 		s.maybeAutoArchive(ctx, time.Now())
 		s.maybeAutoTitle(ctx, time.Now())
+		s.applyPTYProjects(ctx)
 	}()
 
 	accs, err := accounts.Load()
@@ -1104,6 +1106,29 @@ func (s *Server) handleAPIProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeOK(w, ps)
+}
+
+// handleAPIProjectRename: {"from", "to"}; renaming onto an existing
+// project merges into it.
+func (s *Server) handleAPIProjectRename(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	from, to := strings.TrimSpace(body.From), strings.TrimSpace(body.To)
+	if from == "" || to == "" {
+		http.Error(w, "from and to are required", http.StatusBadRequest)
+		return
+	}
+	if err := s.db.RenameProject(r.Context(), from, to); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
 }
 
 // handleAPIProjectColor: {"project": name, "color": "#rrggbb" | "random"}.

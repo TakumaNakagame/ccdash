@@ -267,6 +267,11 @@ full-width band in the project's color:
 and every member row carries a one-cell gutter in that color. Search
 (`/`) matches project names too.
 
+Press `n` on a project member and the directory picker starts in the
+project's directory (the cwd of its most recently active session); the new
+session joins the project automatically once the collector learns its
+session ID. In the portal, the **＋** on a project band does the same.
+
 ### Session numbers and generated titles (`ctrl+t`)
 
 Every session gets a short sequential number shown in front of its title,
@@ -632,3 +637,30 @@ curl -H "Authorization: Bearer $TOKEN" \
 What the portal may do is limited by the device's own settings: with
 **Attach** off it can only read; with **Approval blocking** off it can't
 decide approvals; with **Hub connection** off the device is offline.
+
+## 16. MCP server (`ccdash mcp`)
+
+`ccdash mcp` is a Model Context Protocol server on stdio, so Claude can
+see what the dashboard sees and organize it. Register it once:
+
+```sh
+claude mcp add --scope user ccdash -- ccdash mcp        # this machine's collector
+claude mcp add --scope user ccdash -- ccdash mcp -r     # the remote collector from `ccdash remote set`
+```
+
+Tools:
+
+| Tool | What it returns |
+|---|---|
+| `overview` | sessions that need you, finished-but-unseen ones, running sessions grouped by project, today's usage estimate |
+| `list_projects` | projects with session / running / needs-you counts and latest activity |
+| `list_sessions` | sessions newest first; filters: `project`, `query`, `running_only`, `attention_only`, `include_archived`, `limit` |
+| `get_session` | one session (`#N` or id) with pending approvals and its recent prompts, replies and tool calls |
+| `set_project` | put sessions into a project (a new name creates it) or take them out (`""`) |
+| `rename_project` | rename a project; renaming onto an existing one merges them |
+| `set_project_color` | `#rrggbb` or `random` |
+| `set_title` | rename a session (`""` = back to the automatic title) |
+| `set_archived` | archive / unarchive sessions |
+
+It never starts or stops claude and never answers approvals. Add
+`--read-only` (`ccdash mcp --read-only`) to offer only the first four.

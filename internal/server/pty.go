@@ -96,6 +96,9 @@ type ptyStartReq struct {
 	// / dontAsk are not offered: they'd let a remote start skip every
 	// safety prompt.
 	PermissionMode string `json:"permissionMode"`
+	// Project puts the new session into this project once its session ID
+	// is known (applyPTYProjects).
+	Project string `json:"project"`
 }
 
 // handlePTYStart creates a new PTY session or returns an existing alive one.
@@ -178,6 +181,7 @@ func (s *Server) startPTY(req ptyStartReq) (string, int, int, error) {
 	// must exist before Start so the sink is wired for the first bytes.
 	entry := newPTYEntry(sess, "", req.Cols, req.Rows)
 	entry.tag = tag
+	entry.project = strings.TrimSpace(req.Project)
 	if err := sess.Start(); err != nil {
 		return "", 0, http.StatusInternalServerError, fmt.Errorf("pty start: %v", err)
 	}
@@ -459,6 +463,41 @@ func (s *Server) aliasPTYsByParent(ctx context.Context, procs map[string]procmap
 		} else if e, ok := pending[parents[pe.PID]]; ok {
 			s.ptyMap[sid] = e
 		}
+	}
+}
+
+// applyPTYProjects puts a spawned session into the project it was started
+// for (ptyStartReq.Project) once the PTY has a session-ID alias and the
+// session has a row. Runs on the discovery tick; each PTY is handled once,
+// and a session that already has a project keeps it.
+func (s *Server) applyPTYProjects(ctx context.Context) {
+	type job struct {
+		e       *ptyEntry
+		sid     string
+		project string
+	}
+	var jobs []job
+	s.ptyMu.Lock()
+	for k, e := range s.ptyMap {
+		if e.project != "" && !e.projectDone && !strings.HasPrefix(k, "pid-") {
+			jobs = append(jobs, job{e, k, e.project})
+		}
+	}
+	s.ptyMu.Unlock()
+	for _, j := range jobs {
+		sess, ok, err := s.db.GetSession(ctx, j.sid)
+		if err != nil || !ok {
+			continue // no row yet: next tick
+		}
+		if sess.Project == "" {
+			if err := s.db.SetProject(ctx, j.sid, j.project); err != nil {
+				log.Printf("pty project %s: %v", j.sid, err)
+				continue
+			}
+		}
+		s.ptyMu.Lock()
+		j.e.projectDone = true
+		s.ptyMu.Unlock()
 	}
 }
 

@@ -760,6 +760,38 @@ func (d *DB) ListProjects(ctx context.Context) ([]model.Project, error) {
 	return out, rows.Err()
 }
 
+// RenameProject renames a project, or merges it into to when a project of
+// that name already exists (its sessions move over, from's row goes; to
+// keeps its color).
+func (d *DB) RenameProject(ctx context.Context, from, to string) error {
+	if from == "" || to == "" {
+		return fmt.Errorf("both project names are required")
+	}
+	if from == to {
+		return nil
+	}
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE name = ?`, to).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE name = ?`, from); err != nil {
+			return err
+		}
+	} else if _, err := tx.ExecContext(ctx, `UPDATE projects SET name = ? WHERE name = ?`, to, from); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET project = ? WHERE project = ?`, to, from); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // projectColors lists every project's color except skip's.
 func (d *DB) projectColors(ctx context.Context, skip string) ([]string, error) {
 	rows, err := d.sql.QueryContext(ctx, `SELECT COALESCE(color,'') FROM projects WHERE name <> ?`, skip)

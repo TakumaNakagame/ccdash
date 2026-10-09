@@ -23,6 +23,7 @@ control over approvals.
 | **Projects** | `p` puts sessions in an operator-named project: members move to the newest end of the list, one block per project under a full-width band in the project's color, each row with a color gutter. |
 | **Generated titles** | Sessions are titled automatically by `claude -p` after their first exchange or two (`auto_title`); `ctrl+t` (re)generates on demand. Titles come from a redacted digest of the transcript. |
 | **Auto-archive** | Once a day, sessions idle longer than N days (default 7) are archived — favorites, project members and running sessions are kept; resuming one brings it back. |
+| **MCP server** | `ccdash mcp` lets Claude see projects, sessions, what needs you and a session's recent conversation, and organize them (put sessions in projects, create / rename / merge / recolor projects, retitle, archive). No starting / stopping claude, no approvals; `--read-only` keeps only the viewing tools. Register with `claude mcp add --scope user ccdash -- ccdash mcp`. |
 | **Tabs** | Browser-style strip across the top filters by repo or operator-named group. Slides on overflow. |
 | **Search** | `/` filters the list by case-insensitive substring across title, tab, repo, project, session id. |
 | **Settings page** | `,` opens a persisted preferences modal: layout (auto / vertical / horizontal), refresh rate, title-generation timeout, auto-archive days, secure-mode toggles, and an "observation only" preset. |
@@ -124,6 +125,7 @@ ccdash --version               # report the current version
 | `ctrl+r` | restart the session's ccdash-hosted claude (kill + `claude --resume`), after `y` |
 | `!` | show only sessions that need you (`?`: approval, question, menu on screen) or finished a turn you haven't looked at (`✓`) |
 | `p` | put the session in a project: existing projects as colored candidates (`↑` `↓` to pick), a new name creates one, `✕ remove from …` takes it out |
+| `n` on a project member | the directory picker starts in the project's directory (its latest session's cwd) and the new session joins the project |
 | `P` | re-roll the project's color (kept apart from other projects' colors) |
 | `x` | archive / unarchive |
 | `X` | toggle archive view (operator-archived sessions) |

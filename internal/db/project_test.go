@@ -63,6 +63,22 @@ func TestProjects(t *testing.T) {
 	if a2.ProjectColor == a.ProjectColor {
 		t.Fatalf("re-roll kept %s", a.ProjectColor)
 	}
+	// Rename, then merge into an existing project.
+	if err := d.RenameProject(ctx, "infra", "ops"); err != nil {
+		t.Fatal(err)
+	}
+	if c2, _, _ := d.GetSession(ctx, "c"); c2.Project != "ops" || c2.ProjectColor != c.ProjectColor {
+		t.Fatalf("renamed: %q/%q", c2.Project, c2.ProjectColor)
+	}
+	if err := d.RenameProject(ctx, "ops", "web"); err != nil {
+		t.Fatal(err)
+	}
+	if c3, _, _ := d.GetSession(ctx, "c"); c3.Project != "web" || c3.ProjectColor != a2.ProjectColor {
+		t.Fatalf("merged: %q/%q", c3.Project, c3.ProjectColor)
+	}
+	if ps, _ := d.ListProjects(ctx); len(ps) != 1 {
+		t.Fatalf("after merge: %+v", ps)
+	}
 	if err := d.SetProject(ctx, "a", ""); err != nil {
 		t.Fatal(err)
 	}

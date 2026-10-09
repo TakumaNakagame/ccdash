@@ -51,6 +51,9 @@ type Store interface {
 	// ListProjects returns every project (picker candidates), including
 	// ones whose sessions are all archived.
 	ListProjects(ctx context.Context) ([]model.Project, error)
+	// RenameProject renames a project, merging it into an existing one of
+	// the new name.
+	RenameProject(ctx context.Context, from, to string) error
 	// SetProjectColor sets a project's color ("#rrggbb", or "random").
 	SetProjectColor(ctx context.Context, project, color string) error
 

@@ -26,6 +26,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/clientcfg"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/hookcfg"
+	"github.com/takumanakagame/ccmanage/internal/mcpserver"
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/selfupdate"
 	"github.com/takumanakagame/ccmanage/internal/server"
@@ -122,6 +123,7 @@ spawns a collector — everything goes over HTTP.`,
 	root.AddCommand(remoteCmd())
 	root.AddCommand(hubCmd())
 	root.AddCommand(updateCmd(version))
+	root.AddCommand(mcpCmd(rf, version))
 	return root
 }
 
@@ -559,6 +561,37 @@ ccdash to also record tmux pane / session and the wrapper PID.`,
 			return wrapper.Exec(cmd.Context(), args)
 		},
 	}
+	return c
+}
+
+// mcpCmd serves ccdash's MCP tools on stdio, for
+// `claude mcp add ccdash -- ccdash mcp` (add -r to read a remote collector).
+func mcpCmd(rf *remoteFlags, version string) *cobra.Command {
+	var readOnly bool
+	c := &cobra.Command{
+		Use:   "mcp",
+		Short: "Let Claude see and organize ccdash (projects, sessions, status) as an MCP server (stdio)",
+		Long: `Runs a Model Context Protocol server on stdin/stdout so Claude Code can see what
+ccdash sees — projects, sessions, what needs you, a session's recent conversation — and
+organize it: put sessions into projects, create / rename / merge projects, recolor them,
+retitle and archive sessions. It never starts or stops claude or answers approvals;
+--read-only keeps only the viewing tools. Register it once with:
+
+  claude mcp add --scope user ccdash -- ccdash mcp
+
+(append -r to read the remote collector configured with 'ccdash remote set').`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// stdout carries the protocol; keep logs off it.
+			log.SetOutput(os.Stderr)
+			st, closeFn, err := openStore(rf)
+			if err != nil {
+				return err
+			}
+			defer closeFn()
+			return mcpserver.New(st, version, readOnly).Serve(cmd.Context(), os.Stdin, os.Stdout)
+		},
+	}
+	c.Flags().BoolVar(&readOnly, "read-only", false, "only offer the viewing tools")
 	return c
 }
 
