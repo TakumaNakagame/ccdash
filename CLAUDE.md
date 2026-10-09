@@ -72,7 +72,7 @@ internal/wrapper/               optional `ccdash claude` exec wrapper that adds 
 internal/attach/                pty-based fullscreen `claude --resume` runner with Ctrl+D mid-session detach
 internal/paths/                 state dir / db / settings paths (XDG-aware)
 internal/gitinfo/               `git -C cwd rev-parse` lookups for repo/branch/commit
-internal/mcpserver/             `ccdash mcp`: read-only MCP tools over store.Store (stdio)
+internal/mcpserver/             `ccdash mcp`: MCP tools (view + organize; --read-only) over store.Store (stdio)
 internal/model/                 plain data types (Session / Event / Approval) and DisplayTitle
 docs/usage_en.md                hands-on usage guide (English)
 docs/usage_jp.md                hands-on usage guide (Japanese)
