@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -17,6 +21,11 @@ func TestParseTitles(t *testing.T) {
 	}
 	if got[3] != "ccdash 改善" || got[7] != "Fix login test" || len(got) != 2 {
 		t.Fatalf("parseTitles = %v", got)
+	}
+	// Output of the shell's rc files before the reply, brackets included.
+	noisy := "Loading ~/.zshrc\n[env] security level B\n" + `[{"id": 5, "title": "Alert D4U"}]` + "\n"
+	if got, err := parseTitles(noisy); err != nil || got[5] != "Alert D4U" {
+		t.Fatalf("noisy: %v, %v", got, err)
 	}
 	if _, err := parseTitles("sorry, no"); err == nil {
 		t.Fatal("want an error without a JSON array")
@@ -45,6 +54,11 @@ printf ']'
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// Exec the fake directly: an interactive shell's rc files would put the
+	// real claude back in front of it.
+	orig := newClaudeCmd
+	newClaudeCmd = func(args ...string) *exec.Cmd { return exec.Command(filepath.Join(dir, "claude"), args...) }
+	t.Cleanup(func() { newClaudeCmd = orig })
 }
 
 func writeTranscript(t *testing.T, text string) string {
@@ -101,4 +115,29 @@ func TestKickoffTitlesGateAndEmpty(t *testing.T) {
 	if err := KickoffTitles(ctx, d, []string{"s1"}); !errors.Is(err, ErrDisabled) {
 		t.Fatalf("gated: err = %v, want ErrDisabled", err)
 	}
+}
+
+// TestRunWithContextKillsGroup: on timeout the whole process group goes,
+// not just the shell (its claude child used to be left running).
+func TestRunWithContextKillsGroup(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "child")
+	cmd := exec.Command("/bin/sh", "-c", "sleep 30 & echo $! > "+pidFile+"; wait")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := runWithContext(ctx, cmd); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	for i := 0; i < 50; i++ {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("child %d survived the timeout", pid)
 }

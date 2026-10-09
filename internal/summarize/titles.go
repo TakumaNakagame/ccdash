@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mattn/go-runewidth"
 
+	"github.com/takumanakagame/ccmanage/internal/attach"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/redact"
@@ -144,17 +146,19 @@ what the work is about, like a commit subject or a ticket name — e.g.
 Reply with ONLY a JSON array, no prose, no code fence:
 [{"id": <session id number>, "title": "<title>"}]`
 
-	cmd := exec.CommandContext(ctx,
-		"claude",
-		"--setting-sources", "project",
-		"-p", instruction,
-	)
+	// Through the login shell like the hosted PTYs (attach.ViaShell), so a
+	// `claude` shell function that adds a proxy / auth header applies here
+	// too; a bare exec of the binary skipped it and hung until the timeout.
+	cmd := newClaudeCmd("--setting-sources", "project", "-p", instruction)
+	cmd.Env = attach.SafeEnv()
+	// The shell and claude share a process group so the timeout kills both.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Dir = os.TempDir()
 	cmd.Stdin = strings.NewReader(in.String())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := runWithContext(ctx, cmd); err != nil {
 		hint := strings.TrimSpace(stderr.String())
 		if i := strings.IndexByte(hint, '\n'); i > 0 {
 			hint = hint[:i]
@@ -167,19 +171,56 @@ Reply with ONLY a JSON array, no prose, no code fence:
 	return parseTitles(stdout.String())
 }
 
-// parseTitles extracts the JSON array from claude's reply — tolerating a
-// stray code fence or sentence around it — and cleans each title.
-func parseTitles(out string) (map[int64]string, error) {
-	i, j := strings.IndexByte(out, '['), strings.LastIndexByte(out, ']')
-	if i < 0 || j < i {
-		return nil, fmt.Errorf("no JSON array in reply: %q", truncate(out, 120))
+// newClaudeCmd builds the title subprocess. A variable so tests can swap it.
+var newClaudeCmd = attach.ViaShell
+
+// runWithContext runs cmd and kills its whole process group when ctx ends
+// (the shell's claude child would otherwise outlive a plain Kill).
+func runWithContext(ctx context.Context, cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
 	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+		return ctx.Err()
+	}
+}
+
+// parseTitles extracts the JSON array from claude's reply — tolerating a
+// stray code fence or sentence around it, and whatever the shell's rc files
+// printed before it — and cleans each title.
+func parseTitles(out string) (map[int64]string, error) {
+	j := strings.LastIndexByte(out, ']')
 	var items []struct {
 		ID    int64  `json:"id"`
 		Title string `json:"title"`
 	}
-	if err := json.Unmarshal([]byte(out[i:j+1]), &items); err != nil {
-		return nil, fmt.Errorf("parse reply: %w", err)
+	var perr error
+	found := false
+	for i := strings.IndexByte(out, '['); i >= 0 && i < j; {
+		if err := json.Unmarshal([]byte(out[i:j+1]), &items); err == nil {
+			found = true
+			break
+		} else if perr == nil {
+			perr = err
+		}
+		k := strings.IndexByte(out[i+1:], '[')
+		if k < 0 {
+			break
+		}
+		i += 1 + k
+	}
+	if !found {
+		if perr != nil {
+			return nil, fmt.Errorf("parse reply: %w", perr)
+		}
+		return nil, fmt.Errorf("no JSON array in reply: %q", truncate(out, 120))
 	}
 	res := map[int64]string{}
 	for _, it := range items {
