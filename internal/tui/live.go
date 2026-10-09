@@ -33,6 +33,9 @@ type liveScreen struct {
 	rows   []string // one ANSI row per screen line, exactly w cols wide
 	w, h   int
 	cur    screen.Cursor
+	// scroll is how far the server has this view scrolled back into the
+	// scrollback (wheel on a child that doesn't track the mouse).
+	scroll int
 	// exited is set when the child died; the last screen stays visible
 	// with a note until the server drops the entry.
 	exited  bool
@@ -380,6 +383,7 @@ func (l *liveScreen) applyFrame(f screen.Frame) {
 		}
 	}
 	l.cur = f.Cursor
+	l.scroll = f.Scroll
 }
 
 // closeLive tears down the current stream (if any).
@@ -517,6 +521,8 @@ func (m *model) renderLivePane(live *liveScreen, width, height int) string {
 	switch {
 	case live.connecting:
 		hdr = statusIdle.Render("⬡ live") + "  " + subtitleStyle.Render(shortID(m.currentSessionID())+" · connecting…")
+	case live.scroll > 0 && !live.exited:
+		hdr = statusIdle.Render(fmt.Sprintf("⬡ live · ↑ %d lines back", live.scroll)) + "  " + subtitleStyle.Render("wheel down to return · typing jumps back")
 	case live.exited:
 		hdr = statusStop.Render("⬡ ended") + "  " + subtitleStyle.Render(shortID(m.currentSessionID())+" · screen frozen until the server drops it")
 	case m.liveFocus:

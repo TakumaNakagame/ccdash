@@ -32,11 +32,18 @@ func shellQuote(s string) string {
 // specific variables stripped so they are not inherited by the child PTY.
 // Variables like VSCODE_INJECTION or WARP_* signal to claude that it is inside
 // a specific IDE/terminal, activating code paths that break inside a ccdash PTY.
+// The same goes for the variables Claude Code sets for its own children: a
+// collector (re)started from a claude's shell would otherwise hand every
+// hosted claude CLAUDECODE=1 (a nested session) and that claude's effort.
 func SafeEnv() []string {
 	stripPfx := []string{"WARP_", "GHOSTTY_", "ITERM_", "KITTY_", "TABBY_", "CLAUDE_CODE_", "VSCODE_"}
 	stripKey := map[string]bool{
 		"TERM_PROGRAM":         true,
 		"TERM_PROGRAM_VERSION": true,
+		"CLAUDECODE":           true,
+		"CLAUDE_PID":           true,
+		"CLAUDE_EFFORT":        true,
+		"CLAUDE_PROJECT_DIR":   true,
 	}
 	src := os.Environ()
 	out := make([]string, 0, len(src))

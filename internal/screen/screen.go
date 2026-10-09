@@ -75,6 +75,9 @@ type Frame struct {
 	Full   bool   `json:"full,omitempty"`
 	Lines  []Line `json:"lines,omitempty"`
 	Cursor Cursor `json:"cur"`
+	// Scroll is how many lines the view is scrolled back into the
+	// scrollback (0 = live). The cursor is hidden while scrolled.
+	Scroll int `json:"scroll,omitempty"`
 	// Err carries the child's exit error text on FrameTypeExit / the stream
 	// error on FrameTypeClosed.
 	Err string `json:"err,omitempty"`

@@ -410,3 +410,66 @@ func TestPTYStartPrompt(t *testing.T) {
 		t.Fatalf("flag-like prompt: status %d, want 400", resp.StatusCode)
 	}
 }
+
+// A child that doesn't track the mouse gets wheel events as scrollback
+// scrolling of that viewer's view; one that does gets them forwarded.
+func TestWheelScrollsScrollbackWithoutMouseMode(t *testing.T) {
+	e := newPTYEntry(attach.New(exec.Command("true")), "test", 10, 3)
+	go e.responsePump() // drains what SendMouse writes; no PTY attached
+	t.Cleanup(func() { _ = e.emu.InputPipe().(interface{ Close() error }).Close() })
+	for i := 1; i <= 8; i++ {
+		_, _ = fmt.Fprintf(e, "l%d\r\n", i)
+	}
+	// Screen: l7 l8 "" ; scrollback: l1..l6.
+	v := &screenViewer{entry: e, kick: make(chan struct{}, 1)}
+	plain := func(f screen.Frame) []string {
+		var out []string
+		for _, ln := range f.Lines {
+			out = append(out, strings.TrimSpace(ansi.Strip(ln.S)))
+		}
+		return out
+	}
+	e.wheel(v, uv.Mouse{Button: uv.MouseWheelUp})
+	v.needFull.Store(true)
+	f := v.buildFrame()
+	if f.Scroll != 3 || f.Cursor.Visible {
+		t.Fatalf("scroll = %d cursor visible = %v, want 3 / hidden", f.Scroll, f.Cursor.Visible)
+	}
+	if got := plain(f); strings.Join(got, ",") != "l4,l5,l6" {
+		t.Fatalf("scrolled rows = %v, want l4..l6", got)
+	}
+
+	// New output while scrolled keeps the same lines in view.
+	_, _ = fmt.Fprintf(e, "l9\r\n")
+	v.needFull.Store(true)
+	if f := v.buildFrame(); f.Scroll != 4 || strings.Join(plain(f), ",") != "l4,l5,l6" {
+		t.Fatalf("after output: scroll=%d rows=%v, want 4 / l4..l6", f.Scroll, plain(f))
+	}
+
+	// Scrolling up is capped at the scrollback's start; down returns live.
+	for range 10 {
+		e.wheel(v, uv.Mouse{Button: uv.MouseWheelUp})
+	}
+	if v.scroll != e.emu.ScrollbackLen() {
+		t.Fatalf("scroll = %d, want capped at %d", v.scroll, e.emu.ScrollbackLen())
+	}
+	for range 10 {
+		e.wheel(v, uv.Mouse{Button: uv.MouseWheelDown})
+	}
+	v.needFull.Store(true)
+	if f := v.buildFrame(); f.Scroll != 0 || plain(f)[0] != "l8" {
+		t.Fatalf("back to live: scroll=%d rows=%v", f.Scroll, plain(f))
+	}
+
+	// Mouse tracking on: the wheel belongs to the child.
+	_, _ = fmt.Fprint(e, "\x1b[?1000h\x1b[?1006h")
+	e.wheel(v, uv.Mouse{Button: uv.MouseWheelUp})
+	if v.scroll != 0 {
+		t.Fatalf("scroll = %d with mouse tracking on, want 0", v.scroll)
+	}
+	_, _ = fmt.Fprint(e, "\x1b[?1000l")
+	e.wheel(v, uv.Mouse{Button: uv.MouseWheelUp})
+	if v.scroll != 3 {
+		t.Fatalf("scroll = %d after mouse tracking off, want 3", v.scroll)
+	}
+}

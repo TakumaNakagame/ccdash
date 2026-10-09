@@ -74,6 +74,10 @@ type ptyEntry struct {
 	curHidden   bool
 	curStyle    vt.CursorStyle
 	curBlink    bool
+	// mouseModes mirrors the child's mouse-tracking modes (guarded by
+	// emuMu). With none set the emulator drops wheel events, so the
+	// screen stream scrolls its own scrollback instead; see wheelScrolls.
+	mouseModes map[ansi.Mode]bool
 
 	// rawMu guards raw, the optional fullscreen relay sink.
 	rawMu sync.Mutex
@@ -105,6 +109,14 @@ type screenViewer struct {
 
 	// needFull is set by resize (any goroutine) and consumed by serve.
 	needFull atomic.Bool
+
+	// scroll is how many lines this viewer is scrolled back into the
+	// main screen's scrollback (0 = live). Wheel input moves it when the
+	// child doesn't track the mouse; typing returns to 0. lastSB is the
+	// scrollback length at the previous frame so a scrolled view stays
+	// put while new output arrives. Both guarded by entry.emuMu.
+	scroll int
+	lastSB int
 }
 
 // newPTYEntry wires an attach.Session (already constructed, not yet
@@ -120,8 +132,9 @@ func newPTYEntry(sess *attach.Session, key string, cols, rows int) *ptyEntry {
 		sess:     sess,
 		ptyKey:   key,
 		emu:      vt.NewEmulator(cols, rows),
-		curBlink: true,
-		viewers:  map[*screenViewer]struct{}{},
+		curBlink:   true,
+		viewers:    map[*screenViewer]struct{}{},
+		mouseModes: map[ansi.Mode]bool{},
 	}
 	e.emu.SetCallbacks(vt.Callbacks{
 		CursorVisibility: func(visible bool) { e.curHidden = !visible },
@@ -129,6 +142,12 @@ func newPTYEntry(sess *attach.Session, key string, cols, rows int) *ptyEntry {
 			e.curStyle = style
 			e.curBlink = blink
 		},
+		EnableMode: func(m ansi.Mode) {
+			if isMouseMode(m) {
+				e.mouseModes[m] = true
+			}
+		},
+		DisableMode: func(m ansi.Mode) { delete(e.mouseModes, m) },
 	})
 	e.trace = openPTYTrace(key)
 	sess.InitialSize = &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}
@@ -295,9 +314,62 @@ func (e *ptyEntry) removeViewer(v *screenViewer) {
 	e.viewersMu.Unlock()
 }
 
-// snapshot renders the emulator into per-row strings (each exactly width
-// columns, style reset at the end) plus the cursor state.
+// isMouseMode reports whether m is one of the modes under which the
+// emulator forwards mouse events to the child (vt.Emulator.SendMouse).
+func isMouseMode(m ansi.Mode) bool {
+	switch m {
+	case ansi.ModeMouseX10, ansi.ModeMouseNormal, ansi.ModeMouseHighlight,
+		ansi.ModeMouseButtonEvent, ansi.ModeMouseAnyEvent:
+		return true
+	}
+	return false
+}
+
+// wheelScrollStep is how many lines one wheel notch scrolls back.
+const wheelScrollStep = 3
+
+// wheel handles a wheel event from v. A child that tracks the mouse
+// (Claude Code's fullscreen renderer) gets it; otherwise — the classic
+// renderer, a shell — the emulator would drop it, so it scrolls v's view
+// through the main screen's scrollback the way a real terminal does.
+func (e *ptyEntry) wheel(v *screenViewer, m uv.Mouse) {
+	e.emuMu.Lock()
+	defer e.emuMu.Unlock()
+	if e.exited.Load() {
+		return
+	}
+	if len(e.mouseModes) > 0 {
+		e.emu.SendMouse(uv.MouseWheelEvent(m))
+		return
+	}
+	if e.emu.IsAltScreen() {
+		return
+	}
+	switch m.Button {
+	case uv.MouseWheelUp:
+		v.scroll = min(v.scroll+wheelScrollStep, e.emu.ScrollbackLen())
+	case uv.MouseWheelDown:
+		v.scroll = max(v.scroll-wheelScrollStep, 0)
+	default:
+		return
+	}
+	v.lastSB = e.emu.ScrollbackLen()
+	select {
+	case v.kick <- struct{}{}:
+	default:
+	}
+}
+
+// snapshot renders the live emulator screen into per-row strings (each
+// exactly width columns, style reset at the end) plus the cursor state.
 func (e *ptyEntry) snapshot() (rows []string, w, h int, cur screen.Cursor) {
+	rows, w, h, _, cur = e.snapshotFor(nil)
+	return rows, w, h, cur
+}
+
+// snapshotFor is snapshot as seen by viewer v: scrolled back into the
+// scrollback when v.scroll > 0. A nil v gets the live screen.
+func (e *ptyEntry) snapshotFor(v *screenViewer) (rows []string, w, h, scroll int, cur screen.Cursor) {
 	e.emuMu.Lock()
 	raw := e.emu.Render()
 	pos := e.emu.CursorPosition()
@@ -309,9 +381,31 @@ func (e *ptyEntry) snapshot() (rows []string, w, h int, cur screen.Cursor) {
 		Shape:   int(e.curStyle),
 		Blink:   e.curBlink,
 	}
+	var back []string
+	if v != nil && v.scroll > 0 {
+		if e.emu.IsAltScreen() {
+			v.scroll = 0
+		} else {
+			sb := e.emu.Scrollback()
+			n := sb.Len()
+			// Keep the same lines in view while output keeps coming.
+			v.scroll = min(v.scroll+max(n-v.lastSB, 0), n)
+			v.lastSB = n
+			for i := n - v.scroll; i < n && len(back) < h; i++ {
+				back = append(back, sb.Line(i).Render())
+			}
+		}
+	}
+	if v != nil {
+		scroll = v.scroll
+	}
 	e.emuMu.Unlock()
 	rows = padRows(raw, w, h)
-	return rows, w, h, cur
+	if scroll > 0 {
+		rows = padRows(strings.Join(append(back, rows...)[:h], "\n"), w, h)
+		cur.Visible = false
+	}
+	return rows, w, h, scroll, cur
 }
 
 // padRows splits a rendered screen into exactly h rows of exactly w
@@ -356,11 +450,11 @@ func diffRows(prev, cur []string, full bool) []screen.Line {
 // buildFrame produces the next frame for v. Must be called from v's own
 // goroutine (it mutates v.last).
 func (v *screenViewer) buildFrame() screen.Frame {
-	rows, w, h, cur := v.entry.snapshot()
+	rows, w, h, scroll, cur := v.entry.snapshotFor(v)
 	full := v.needFull.Swap(false) || v.lastW != w || v.lastH != h
 	lines := diffRows(v.last, rows, full)
 	v.last, v.lastW, v.lastH = rows, w, h
-	f := screen.Frame{Type: screen.FrameTypeFrame, W: w, H: h, Full: full, Lines: lines, Cursor: cur}
+	f := screen.Frame{Type: screen.FrameTypeFrame, W: w, H: h, Full: full, Lines: lines, Cursor: cur, Scroll: scroll}
 	if v.entry.exited.Load() {
 		f.Type = screen.FrameTypeExit
 		if p := v.entry.exitErr.Load(); p != nil {
@@ -453,6 +547,19 @@ func (s *Server) handlePTYScreen(w http.ResponseWriter, r *http.Request, id stri
 		if err := dec.Decode(&in); err != nil {
 			break
 		}
+		switch in.Type {
+		case screen.InputTypeWheel:
+			if in.Mouse != nil {
+				entry.wheel(v, *in.Mouse)
+			}
+			continue
+		case screen.InputTypeKey, screen.InputTypePaste:
+			// Typing goes to the live screen, like a terminal snapping
+			// back to the bottom.
+			entry.emuMu.Lock()
+			v.scroll = 0
+			entry.emuMu.Unlock()
+		}
 		entry.applyInput(in)
 	}
 	// Tell serve() to stop and wait for it so we don't close conn under an
@@ -484,15 +591,6 @@ func (e *ptyEntry) applyInput(in screen.Input) {
 		e.emuMu.Lock()
 		if !e.exited.Load() {
 			e.emu.Paste(in.Text)
-		}
-		e.emuMu.Unlock()
-	case screen.InputTypeWheel:
-		if in.Mouse == nil {
-			return
-		}
-		e.emuMu.Lock()
-		if !e.exited.Load() {
-			e.emu.SendMouse(uv.MouseWheelEvent(*in.Mouse))
 		}
 		e.emuMu.Unlock()
 	case screen.InputTypeResize:
