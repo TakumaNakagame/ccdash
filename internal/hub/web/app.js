@@ -124,6 +124,14 @@ function crumbs(...parts) {
   });
 }
 
+// autoFocus focuses el only where a keyboard is at hand (a fine pointer
+// that can hover: desktops). On phones, focusing an input on its own pops
+// the on-screen keyboard over the page; let the user tap when they mean to
+// type.
+function autoFocus(el) {
+  if (el && matchMedia("(hover: hover) and (pointer: fine)").matches) el.focus();
+}
+
 function dialog(build) {
   const dlg = $("#dlg"), body = $("#dlg-body");
   body.replaceChildren();
@@ -481,7 +489,7 @@ async function projectPicker(id, { current = "", count = 1 } = {}, pick) {
         current || count > 1 ? h("button", { type: "button", class: "btn", onclick: () => choose("") }, "プロジェクトから外す") : null,
         h("button", { class: "btn" }, "キャンセル")));
     paint();
-    setTimeout(() => input.focus(), 0);
+    setTimeout(() => autoFocus(input), 0);
   });
 }
 
@@ -1738,7 +1746,7 @@ function gridPage() {
     body.append(h("h1", {}, "グリッドに追加"), q, list,
       h("div", { class: "row" }, h("span", { class: "grow" }), h("button", { class: "btn", type: "button", onclick: close }, "閉じる")));
     draw();
-    setTimeout(() => q.focus(), 0);
+    setTimeout(() => autoFocus(q), 0);
   });
   grid.addEventListener("tile-max", (e) => {
     const k = [...tiles].find(([, t]) => t.el === e.target)?.[0];
@@ -2584,7 +2592,7 @@ async function chatPage(id, { sid, key }) {
   }
 
   every(1500, poll);
-  input.focus();
+  autoFocus(input);
 }
 
 // ---------- terminal ----------
@@ -2638,7 +2646,7 @@ function terminal(id, key, title, chatHref) {
   try { term.loadAddon(new WebLinksAddon.WebLinksAddon()); } catch {}
   term.open(mount);
   fit.fit();
-  term.focus();
+  autoFocus(term);
 
   const connect = () => {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
