@@ -449,9 +449,9 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		s.Status = model.SessionStatus(status)
 		s.Archived = arch != 0
 		s.Favorite = fav != 0
-	if fav != 0 && pinAt > 0 {
-		s.PinnedAt = time.UnixMilli(pinAt).UTC()
-	}
+		if fav != 0 && pinAt > 0 {
+			s.PinnedAt = time.UnixMilli(pinAt).UTC()
+		}
 		if fav != 0 && pinAt > 0 {
 			s.PinnedAt = time.UnixMilli(pinAt).UTC()
 		}
