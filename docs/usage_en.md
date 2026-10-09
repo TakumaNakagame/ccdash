@@ -640,6 +640,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 What the portal may do is limited by the device's own settings: with
 **Attach** off it can only read; with **Approval blocking** off it can't
 decide approvals; with **Hub connection** off the device is offline.
+- **On a phone**: swipe right to go back (session → device list → board; from the left edge too when installed as an app, elsewhere in the browser, whose own gesture owns the edge). Opening a session no longer pops the keyboard.
 
 ## 16. MCP server (`ccdash mcp`)
 

@@ -497,3 +497,6 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .bubble.user details.paste pre { margin: 6px 0 0; padding: 8px; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-size: 12px; background: rgba(0, 0, 0, .18); border-radius: 6px; }
 .chat-status .st-lines .add { color: #22c55e; }
 .chat-status .st-lines .del { color: #ef4444; }
+
+/* swipe back (touch, single column): the page follows the finger */
+#view.swiping { box-shadow: -8px 0 24px rgba(0, 0, 0, .35); background: var(--bg); position: relative; z-index: 1; }

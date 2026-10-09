@@ -264,6 +264,94 @@ function route() {
   return devicesPage();
 }
 
+// ---------- swipe back ----------
+
+// parentHash is where "back" leads from the current view: diff → its chat,
+// a session or spawn → the device, a device → the board, the grid → where
+// it was opened from. "" on the board.
+function parentHash() {
+  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  if (parts[0] === "grid") return beforeGrid || "#/";
+  if (parts[0] !== "d" || !parts[1]) return "";
+  const dev = `#/d/${parts[1]}`;
+  if (parts[2] === "s" && parts[3] && parts[4] === "diff") return `${dev}/s/${parts[3]}`;
+  if (parts[2]) return dev;
+  return "#/";
+}
+
+// hashTrail mirrors this tab's in-app history so going back can use
+// history.back() (keeping the browser's own back / forward consistent)
+// when the previous entry is the parent.
+const hashTrail = [location.hash || "#/"];
+function noteHash() {
+  const cur = location.hash || "#/";
+  if (hashTrail[hashTrail.length - 2] === cur) hashTrail.pop();
+  else if (hashTrail[hashTrail.length - 1] !== cur) hashTrail.push(cur);
+}
+function goBack() {
+  const parent = parentHash();
+  if (!parent) return;
+  if (hashTrail[hashTrail.length - 2] === parent) history.back();
+  else location.replace(parent);
+}
+
+// Swipe right to go back, like a native app: the page follows the finger
+// and lets go past a third of the width (or a quick flick). Touch screens
+// in the single-column layout only. Swipes that start in something that
+// scrolls sideways or takes input are left alone, and outside an installed
+// app the left edge belongs to the browser's own back gesture.
+function blocksSwipe(el) {
+  for (let n = el; n && n !== document.body; n = n.parentElement) {
+    if (n.matches?.("input, textarea, select, dialog, .xterm, .tabs, pre, .grid")) return true;
+    const ox = getComputedStyle(n).overflowX;
+    if ((ox === "auto" || ox === "scroll") && n.scrollWidth > n.clientWidth + 2) return true;
+  }
+  return false;
+}
+function installSwipeBack() {
+  if (!matchMedia("(pointer: coarse)").matches) return;
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  let sx = 0, sy = 0, st = 0, dx = 0, state = "idle"; // idle | maybe | drag
+  const reset = (animate) => {
+    view.style.transition = animate ? "transform .2s ease-out" : "none";
+    view.style.transform = "";
+    view.classList.remove("swiping");
+  };
+  addEventListener("touchstart", (e) => {
+    state = "idle";
+    if (e.touches.length !== 1 || wideQuery.matches || $("#dlg").open || !parentHash()) return;
+    const t = e.touches[0];
+    if (!standalone && t.clientX < 24) return;
+    if (blocksSwipe(e.target)) return;
+    sx = t.clientX; sy = t.clientY; st = e.timeStamp; dx = 0; state = "maybe";
+  }, { passive: true });
+  addEventListener("touchmove", (e) => {
+    if (state === "idle") return;
+    const t = e.touches[0], mx = t.clientX - sx, my = t.clientY - sy;
+    if (state === "maybe") {
+      if (Math.abs(my) > 10 && Math.abs(my) >= Math.abs(mx)) { state = "idle"; return; }
+      if (mx < 14 || mx < Math.abs(my) * 1.5) return;
+      state = "drag";
+      view.classList.add("swiping");
+    }
+    e.preventDefault(); // hold the page still vertically while dragging
+    dx = Math.max(0, mx);
+    view.style.transition = "none";
+    view.style.transform = `translateX(${dx}px)`;
+  }, { passive: false });
+  const end = (e) => {
+    if (state !== "drag") { state = "idle"; return; }
+    state = "idle";
+    const flick = dx > 40 && dx / Math.max(1, e.timeStamp - st) > 0.6;
+    if (dx < innerWidth / 3 && !flick) return reset(true);
+    view.style.transition = "transform .15s ease-out";
+    view.style.transform = `translateX(${innerWidth}px)`;
+    setTimeout(() => { reset(false); goBack(); }, 150);
+  };
+  addEventListener("touchend", end);
+  addEventListener("touchcancel", () => { if (state === "drag") reset(true); state = "idle"; });
+}
+
 // ---------- devices ----------
 
 // The board: every connected device's sessions that need the operator,
@@ -2791,7 +2879,8 @@ function updateBadge(b) {
     if (e.data?.type === "open" && e.data.url) location.href = e.data.url;
   });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
-  window.addEventListener("hashchange", route);
+  window.addEventListener("hashchange", () => { noteHash(); route(); });
+  installSwipeBack();
   wideQuery.addEventListener("change", () => { closeSplit(); route(); });
   route();
 })();
