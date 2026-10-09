@@ -530,6 +530,15 @@ function dateBucket(s) {
   return `${t.getFullYear()}年${t.getMonth() + 1}月`;
 }
 
+// revealInStrip scrolls a horizontal strip so el is visible, without
+// touching any other scroll position (unlike scrollIntoView).
+function revealInStrip(strip, el) {
+  if (!strip || !el) return;
+  const sr = strip.getBoundingClientRect(), er = el.getBoundingClientRect();
+  if (er.left < sr.left) strip.scrollLeft += er.left - sr.left - 8;
+  else if (er.right > sr.right) strip.scrollLeft += er.right - sr.right + 8;
+}
+
 const tabKey = (id) => `ccdash.tab.${id}`;
 function loadTab(id) { try { return localStorage.getItem(tabKey(id)) || ""; } catch { return ""; } }
 function saveTab(id, g) { try { localStorage.setItem(tabKey(id), g); } catch {} }
@@ -659,7 +668,7 @@ async function devicePage(id, opts = {}) {
     h("div", { class: "row", style: "margin-bottom:8px" }, filter, archBtn),
     selBar, list, more, settingsBox));
 
-  let last = null, tab = loadTab(id), limit = 100, briefs = {}, briefsAt = 0;
+  let last = null, tab = loadTab(id), limit = 100, briefs = {}, briefsAt = 0, shownTab = null;
   const render = () => {
     if (!last) return;
     if (deferWhileSelecting(list, render)) return;
@@ -677,7 +686,13 @@ async function devicePage(id, opts = {}) {
         onclick: () => { tab = g; limit = 100; saveTab(id, g); render(); },
       }, running ? h("span", { class: "dot on" }) : null, g || "最新", h("span", { class: "count" }, n));
     }));
-    tabs.querySelector(".tab.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // Bring the active tab into view only when it changes, and only by
+    // scrolling the strip sideways: scrollIntoView also scrolls the page,
+    // which yanked a reader back up to the tabs on every 3 s refresh.
+    if (shownTab !== tab) {
+      shownTab = tab;
+      revealInStrip(tabs, tabs.querySelector(".tab.on"));
+    }
 
     const q = filter.value.trim().toLowerCase();
     const rows = sessions
