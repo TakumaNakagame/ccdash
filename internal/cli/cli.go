@@ -574,8 +574,8 @@ func mcpCmd(rf *remoteFlags, version string) *cobra.Command {
 		Long: `Runs a Model Context Protocol server on stdin/stdout so Claude Code can see what
 ccdash sees — projects, sessions, what needs you, a session's recent conversation — and
 organize it: put sessions into projects, create / rename / merge projects, recolor them,
-retitle and archive sessions. It never starts or stops claude or answers approvals;
---read-only keeps only the viewing tools. Register it once with:
+retitle and archive sessions, and start a new claude session in a directory (like 'n').
+It never stops claude or answers approvals; --read-only keeps only the viewing tools. Register it once with:
 
   claude mcp add --scope user ccdash -- ccdash mcp
 

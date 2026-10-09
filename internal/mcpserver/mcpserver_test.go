@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +78,7 @@ func TestServe(t *testing.T) {
 	if r[0].Result.ProtocolVersion != "2025-03-26" {
 		t.Errorf("initialize: %s", lines[0])
 	}
-	if len(r[1].Result.Tools) != 10 {
+	if len(r[1].Result.Tools) != 11 {
 		t.Errorf("tools/list: %s", lines[1])
 	}
 	body := func(i int) string { return r[i].Result.Content[0].Text }
@@ -147,5 +149,44 @@ func TestOrganize(t *testing.T) {
 	}
 	if len(ro.tools()) != 4 {
 		t.Fatalf("read-only tools: %d", len(ro.tools()))
+	}
+}
+
+func TestStartSession(t *testing.T) {
+	attach := "1"
+	var got map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/settings":
+			_ = json.NewEncoder(w).Encode(map[string]string{"attach_enabled": attach})
+		case "/pty/start":
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			_, _ = w.Write([]byte(`{"ptyKey":"pid-42","tag":1000001}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	s := New(store.NewRemote(ts.URL, "tok"), "test", false)
+	ctx := context.Background()
+
+	out, err := s.call(ctx, "start_session", json.RawMessage(`{"cwd":"/w/new/","project":"infra","prompt":"read task.md"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "pid-42") || got["cwd"] != "/w/new" || got["project"] != "infra" || got["prompt"] != "read task.md" {
+		t.Errorf("out=%s req=%v", out, got)
+	}
+	for _, bad := range []string{`{"cwd":"rel/dir"}`, `{"cwd":"/w","prompt":"-x"}`} {
+		if _, err := s.call(ctx, "start_session", json.RawMessage(bad)); err == nil {
+			t.Errorf("%s: want error", bad)
+		}
+	}
+	attach = "0"
+	if _, err := s.call(ctx, "start_session", json.RawMessage(`{"cwd":"/w"}`)); err == nil || !strings.Contains(err.Error(), "OFF") {
+		t.Errorf("attach off: %v", err)
+	}
+	if _, err := New(store.NewRemote(ts.URL, "tok"), "test", true).call(ctx, "start_session", json.RawMessage(`{"cwd":"/w"}`)); err == nil {
+		t.Error("read-only: want error")
 	}
 }

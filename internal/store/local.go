@@ -125,14 +125,32 @@ func (l *Local) AllSettings(ctx context.Context) (map[string]string, error) {
 // is a goroutine sitting on a channel in server.Server.pending; only the
 // HTTP route can reach it.
 func (l *Local) DecideApproval(ctx context.Context, id int64, behavior, reason string, keep bool) error {
-	body, err := json.Marshal(map[string]any{"behavior": behavior, "reason": reason, "keep": keep})
+	return l.postCollector(ctx, fmt.Sprintf("/approvals/%d/decide", id),
+		map[string]any{"behavior": behavior, "reason": reason, "keep": keep}, nil)
+}
+
+// StartSession POSTs to the collector's own /pty/start, like the TUI's `n`.
+func (l *Local) StartSession(ctx context.Context, req StartRequest) (string, error) {
+	var out struct {
+		PtyKey string `json:"ptyKey"`
+	}
+	if err := l.postCollector(ctx, "/pty/start", req, &out); err != nil {
+		return "", err
+	}
+	return out.PtyKey, nil
+}
+
+// postCollector POSTs body as JSON to the loopback collector and decodes a
+// 2xx reply into out when out is non-nil.
+func (l *Local) postCollector(ctx context.Context, path string, body, out any) error {
+	b, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	u := fmt.Sprintf("http://%s:%d/approvals/%d/decide", paths.DefaultHost, paths.DefaultPort, id)
+	u := fmt.Sprintf("http://%s:%d%s", paths.DefaultHost, paths.DefaultPort, path)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(b))
 	if err != nil {
 		return err
 	}
@@ -149,7 +167,10 @@ func (l *Local) DecideApproval(ctx context.Context, id int64, behavior, reason s
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
 	}
-	return nil
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 // GenerateTitles delegates to summarize.KickoffTitles, shared with the

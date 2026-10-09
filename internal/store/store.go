@@ -28,6 +28,18 @@ type TailResult struct {
 	Size     int64
 }
 
+// StartRequest is a fresh claude session for the collector to spawn in a
+// hosted PTY (POST /pty/start) — what the TUI's `n` does.
+type StartRequest struct {
+	Cwd    string `json:"cwd"`
+	Prompt string `json:"prompt,omitempty"`
+	// Project puts the new session into this project once its session ID
+	// is known.
+	Project string `json:"project,omitempty"`
+	// PermissionMode is "", manual, acceptEdits, auto or plan.
+	PermissionMode string `json:"permissionMode,omitempty"`
+}
+
 // Store is implemented by Local (internal/store/local.go) and Remote
 // (internal/store/remote.go). See the package doc for the split.
 type Store interface {
@@ -68,6 +80,12 @@ type Store interface {
 	// Local — because the pending hold lives in the collector process's
 	// memory (server.Server.pending), not in SQLite.
 	DecideApproval(ctx context.Context, id int64, behavior, reason string, keep bool) error
+
+	// StartSession asks the collector to spawn claude in a hosted PTY and
+	// returns its PTY key ("pid-<N>" until the session ID is known). Like
+	// DecideApproval this always goes over HTTP: the PTY lives in the
+	// collector process.
+	StartSession(ctx context.Context, req StartRequest) (string, error)
 
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error

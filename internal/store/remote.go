@@ -205,6 +205,16 @@ func (r *Remote) DecideApproval(ctx context.Context, id int64, behavior, reason 
 		map[string]any{"behavior": behavior, "reason": reason, "keep": keep}, nil)
 }
 
+func (r *Remote) StartSession(ctx context.Context, req StartRequest) (string, error) {
+	var out struct {
+		PtyKey string `json:"ptyKey"`
+	}
+	if err := r.doJSON(ctx, 10*time.Second, http.MethodPost, "/pty/start", nil, req, &out); err != nil {
+		return "", err
+	}
+	return out.PtyKey, nil
+}
+
 func (r *Remote) GetSetting(ctx context.Context, key string) (string, error) {
 	all, err := r.AllSettings(ctx)
 	if err != nil {

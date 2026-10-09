@@ -665,6 +665,7 @@ Tools:
 | `set_project_color` | `#rrggbb` or `random` |
 | `set_title` | rename a session (`""` = back to the automatic title) |
 | `set_archived` | archive / unarchive sessions |
+| `start_session` | start a new claude session in a directory (absolute path), like the TUI's `n`; optional `project`, first `prompt`, `permission_mode`. Refused while the Attach setting is OFF |
 
-It never starts or stops claude and never answers approvals. Add
+It never stops claude and never answers approvals. Add
 `--read-only` (`ccdash mcp --read-only`) to offer only the first four.

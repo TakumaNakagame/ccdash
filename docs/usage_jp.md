@@ -476,5 +476,6 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | `set_project_color` | `#rrggbb` か `random` |
 | `set_title` | セッションのタイトル変更 (`""` で自動のタイトルに戻す) |
 | `set_archived` | アーカイブ／解除 |
+| `start_session` | 指定ディレクトリ (絶対パス) で新しい claude セッションを起動 (TUI の `n` と同じ)。`project` / 最初の `prompt` / `permission_mode` を指定可。設定の Attach が OFF なら使えない |
 
-claude の起動・停止や承認の判断はできません。`ccdash mcp --read-only` にすると上の 4 つ (参照系) だけになります。
+claude の停止や承認の判断はできません。`ccdash mcp --read-only` にすると上の 4 つ (参照系) だけになります。

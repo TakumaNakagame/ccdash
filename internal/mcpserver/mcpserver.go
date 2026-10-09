@@ -2,10 +2,11 @@
 // stdio that lets Claude see what ccdash sees — projects, sessions, what
 // needs the operator, a session's recent conversation — and organize it:
 // put sessions into projects, create / rename / merge projects, recolor
-// them, retitle and archive sessions. It goes through store.Store, so it
-// works against the local DB or a remote collector (-r) alike. It never
-// starts or stops claude and never answers approvals; --read-only drops
-// the organizing tools.
+// them, retitle and archive sessions — and start a new claude session in a
+// directory (start_session, like the TUI's `n`). It goes through
+// store.Store, so it works against the local DB or a remote collector (-r)
+// alike. It never stops claude and never answers approvals; --read-only
+// drops the organizing tools and start_session.
 //
 // The protocol subset is small enough to speak by hand: newline-delimited
 // JSON-RPC 2.0 with initialize, ping, tools/list and tools/call.
@@ -17,12 +18,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/takumanakagame/ccmanage/internal/settings"
 	"github.com/takumanakagame/ccmanage/internal/store"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
@@ -38,7 +41,9 @@ Use the read tools to see the operator's projects, which sessions are running, w
 need the operator (approvals, questions), and what a session has been doing recently.
 Sessions are referred to as "#N" (their short number) or by session id.
 The organizing tools (set_project, rename_project, order_projects, set_project_color, set_title, set_archived)
-change what the operator sees in ccdash; projects are just names, created on first use.`
+change what the operator sees in ccdash; projects are just names, created on first use.
+start_session opens a new claude session in a directory (optionally in a project, with a
+first prompt); the operator sees and drives it in ccdash.`
 
 // Server serves one stdio connection.
 type Server struct {
@@ -173,6 +178,17 @@ func required(props map[string]any, req ...string) map[string]any {
 
 var writeTools = []map[string]any{
 	{
+		"name":        "start_session",
+		"description": "Start a new claude session in a directory, hosted by the ccdash collector (what `n` does in the TUI). The session shows up in ccdash, live in its right pane, where the operator drives it. Optionally put it into a project and give it a first prompt.",
+		"inputSchema": required(map[string]any{
+			"cwd":             map[string]any{"type": "string", "description": "absolute path of an existing directory on the collector's machine"},
+			"project":         map[string]any{"type": "string", "description": "put the new session into this project (created on first use)"},
+			"prompt":          map[string]any{"type": "string", "description": "first message to send claude; empty = just open it"},
+			"permission_mode": map[string]any{"type": "string", "enum": []string{"manual", "acceptEdits", "auto", "plan"}, "description": "claude --permission-mode; default = claude's own"},
+		}, "cwd"),
+		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false},
+	},
+	{
 		"name":        "set_project",
 		"description": "Put sessions into a project (a new name creates the project with its own color), or take them out with an empty project.",
 		"inputSchema": required(map[string]any{
@@ -286,6 +302,9 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		Title           *string  `json:"title"`
 		Projects        []string `json:"projects"`
 		Archived        *bool    `json:"archived"`
+		Cwd             string   `json:"cwd"`
+		Prompt          string   `json:"prompt"`
+		PermissionMode  string   `json:"permission_mode"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -302,6 +321,8 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		}
 	}
 	switch name {
+	case "start_session":
+		v, err = s.startSession(ctx, args.Cwd, args.Project, args.Prompt, args.PermissionMode)
 	case "set_project":
 		v, err = s.setProject(ctx, args.Sessions, args.Project)
 	case "rename_project":
@@ -761,4 +782,36 @@ func (s *Server) setArchived(ctx context.Context, refs []string, archived bool) 
 		}
 	}
 	return map[string]any{"archived": archived, "sessions": refsOf(ss)}, nil
+}
+
+func (s *Server) startSession(ctx context.Context, cwd, project, prompt, mode string) (any, error) {
+	cwd = strings.TrimSpace(cwd)
+	if !filepath.IsAbs(cwd) {
+		return nil, fmt.Errorf("cwd must be an absolute path, got %q", cwd)
+	}
+	if strings.HasPrefix(strings.TrimSpace(prompt), "-") {
+		return nil, fmt.Errorf("prompt must not start with '-'")
+	}
+	// The same switch that keeps the TUI from spawning claude.
+	cfg, err := settings.Load(ctx, s.st)
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.AttachEnabled {
+		return nil, fmt.Errorf("starting sessions is OFF in ccdash (settings: Attach)")
+	}
+	project = strings.TrimSpace(project)
+	key, err := s.st.StartSession(ctx, store.StartRequest{Cwd: filepath.Clean(cwd), Prompt: prompt, Project: project, PermissionMode: mode})
+	if err != nil {
+		return nil, fmt.Errorf("start session (is the ccdash collector running?): %w", err)
+	}
+	out := map[string]any{
+		"started": key,
+		"cwd":     filepath.Clean(cwd),
+		"note":    "the session appears in ccdash once claude starts (a few seconds); open it there to drive it",
+	}
+	if project != "" {
+		out["project"] = project
+	}
+	return out, nil
 }
