@@ -132,6 +132,15 @@ function autoFocus(el) {
   if (el && matchMedia("(hover: hover) and (pointer: fine)").matches) el.focus();
 }
 
+// Drafts: what was typed into a session's composer but not sent, kept per
+// device + session (localStorage, so it also survives a reload) until it
+// is sent. Switching sessions mid-sentence no longer loses it.
+const draftKey = (id, ref) => `ccdash.draft.${id}.${ref}`;
+function loadDraft(id, ref) { try { return localStorage.getItem(draftKey(id, ref)) || ""; } catch { return ""; } }
+function saveDraft(id, ref, text) {
+  try { text ? localStorage.setItem(draftKey(id, ref), text) : localStorage.removeItem(draftKey(id, ref)); } catch {}
+}
+
 function dialog(build) {
   const dlg = $("#dlg"), body = $("#dlg-body");
   body.replaceChildren();
@@ -2414,6 +2423,18 @@ async function chatPage(id, { sid, key }) {
 
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
   input.addEventListener("input", autosize);
+  // The draft follows the session: a fresh spawn's PTY key until the
+  // session ID is known (keepDraft moves it over then).
+  let draftRef = sid || ptyKey;
+  const keepDraft = () => {
+    const ref = sid || ptyKey;
+    if (ref !== draftRef) { saveDraft(id, draftRef, ""); draftRef = ref; }
+    saveDraft(id, draftRef, input.value);
+  };
+  input.value = loadDraft(id, draftRef);
+  if (input.value) requestAnimationFrame(autosize);
+  input.addEventListener("input", keepDraft);
+  cleanup.push(keepDraft); // also catches text set by the quick buttons / slash picker
   input.addEventListener("keydown", (e) => {
     const mobile = matchMedia("(pointer: coarse)").matches;
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !mobile) {
@@ -2549,6 +2570,7 @@ async function chatPage(id, { sid, key }) {
       attachments = [];
       renderThumbs();
       input.value = "";
+      keepDraft(); // sent: drop the draft
       autosize();
       render(true);
       setTimeout(poll, 600);

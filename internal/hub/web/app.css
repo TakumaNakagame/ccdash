@@ -500,3 +500,12 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 
 /* swipe back (touch, single column): the page follows the finger */
 #view.swiping { box-shadow: -8px 0 24px rgba(0, 0, 0, .35); background: var(--bg); position: relative; z-index: 1; }
+
+/* Touch screens: a long press on the list / chrome selects words and pops
+   the system's text tools (and Google's tap-to-search). Keep that to the
+   conversation itself. */
+@media (pointer: coarse) {
+  #top, .tabs, .tab, .item, .bucket, .btn, .chip, .card, .sel-bar, .usage-card, .term-bar, .quick-bar, .tile-head {
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  }
+}
