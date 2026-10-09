@@ -40,7 +40,7 @@ const instructions = `ccdash watches the Claude Code sessions of one machine (it
 Use the read tools to see the operator's projects, which sessions are running, which
 need the operator (approvals, questions), and what a session has been doing recently.
 Sessions are referred to as "#N" (their short number) or by session id.
-The organizing tools (set_project, rename_project, order_projects, set_project_color, set_title, set_archived)
+The organizing tools (set_project, rename_project, order_projects, set_project_color, set_title, set_later, set_archived)
 change what the operator sees in ccdash; projects are just names, created on first use.
 start_session opens a new claude session in a directory (optionally in a project, with a
 first prompt); the operator sees and drives it in ccdash.`
@@ -233,6 +233,15 @@ var writeTools = []map[string]any{
 		"annotations": writeHint,
 	},
 	{
+		"name":        "set_later",
+		"description": "Mark sessions \"watch later\" (gathered at the top of the list until cleared) or clear the mark.",
+		"inputSchema": required(map[string]any{
+			"sessions": sessionList,
+			"later":    map[string]any{"type": "boolean"},
+		}, "sessions", "later"),
+		"annotations": writeHint,
+	},
+	{
 		"name":        "set_archived",
 		"description": "Archive sessions (hide them from the working list) or bring them back.",
 		"inputSchema": required(map[string]any{
@@ -302,6 +311,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		Title           *string  `json:"title"`
 		Projects        []string `json:"projects"`
 		Archived        *bool    `json:"archived"`
+		Later           *bool    `json:"later"`
 		Cwd             string   `json:"cwd"`
 		Prompt          string   `json:"prompt"`
 		PermissionMode  string   `json:"permission_mode"`
@@ -341,6 +351,19 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 			return "", fmt.Errorf("title is required")
 		}
 		v, err = s.setTitle(ctx, args.Session, *args.Title)
+	case "set_later":
+		if args.Later == nil {
+			return "", fmt.Errorf("later is required")
+		}
+		var ss []model.Session
+		if ss, err = s.resolveAll(ctx, args.Sessions); err == nil {
+			for _, x := range ss {
+				if err = s.st.SetLater(ctx, x.SessionID, *args.Later); err != nil {
+					break
+				}
+			}
+			v = map[string]any{"watch_later": *args.Later, "sessions": refsOf(ss)}
+		}
 	case "set_archived":
 		if args.Archived == nil {
 			return "", fmt.Errorf("archived is required")
@@ -380,6 +403,8 @@ type sessionRow struct {
 	LastSeen  string `json:"last_seen"`
 	Ago       string `json:"last_seen_ago"`
 	Pinned    bool   `json:"pinned,omitempty"`
+	New       bool   `json:"new_since_seen,omitempty"` // progress since the operator last looked
+	Later     bool   `json:"watch_later,omitempty"`
 	Archived  bool   `json:"archived,omitempty"`
 	SessionID string `json:"session_id"`
 }
@@ -388,7 +413,7 @@ func (s *Server) row(x model.Session) sessionRow {
 	r := sessionRow{
 		Ref: x.Ref(), Title: x.DisplayTitle(), Project: x.Project, Group: groupOf(x),
 		Status: string(x.Status), Attention: x.Attention, Reason: x.AttentionReason, Pending: x.PendingCount,
-		Cwd: x.Cwd, Branch: x.Branch, Pinned: x.Favorite, Archived: x.Archived, SessionID: x.SessionID,
+		Cwd: x.Cwd, Branch: x.Branch, Pinned: x.Favorite, New: x.Unseen, Later: x.Later, Archived: x.Archived, SessionID: x.SessionID,
 	}
 	if x.Account != "default" {
 		r.Account = x.Account

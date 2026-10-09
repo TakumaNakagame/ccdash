@@ -194,3 +194,54 @@ func TestPinOrder(t *testing.T) {
 		t.Fatalf("unpinned: %+v", b)
 	}
 }
+
+// TestUnseen: activity after the last look marks a session NEW; MarkSeen
+// clears it; discovery re-reporting old activity doesn't bring it back.
+func TestUnseen(t *testing.T) {
+	ctx := context.Background()
+	d := openTest(t)
+	past := time.Now().Add(-time.Hour)
+	if err := d.UpsertSession(ctx, &model.Session{SessionID: "a", Cwd: "/x", Status: model.StatusIdle, LastActivity: past}); err != nil {
+		t.Fatal(err)
+	}
+	if a, _, _ := d.GetSession(ctx, "a"); a.Unseen {
+		t.Fatal("a fresh row with old activity is NEW")
+	}
+	later := time.Now().Add(time.Minute)
+	if err := d.UpsertSession(ctx, &model.Session{SessionID: "a", Cwd: "/x", Status: model.StatusActive, LastActivity: later}); err != nil {
+		t.Fatal(err)
+	}
+	if a, _, _ := d.GetSession(ctx, "a"); !a.Unseen {
+		t.Fatal("activity after the last look is not NEW")
+	}
+	if err := d.MarkSeen(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if a, _, _ := d.GetSession(ctx, "a"); a.Unseen {
+		t.Fatal("still NEW after MarkSeen")
+	}
+	if err := d.UpsertDiscoveredSession(ctx, &model.Session{SessionID: "a", Cwd: "/x", Status: model.StatusIdle, LastActivity: past}); err != nil {
+		t.Fatal(err)
+	}
+	if a, _, _ := d.GetSession(ctx, "a"); a.Unseen {
+		t.Fatal("older activity made it NEW again")
+	}
+}
+
+func TestLater(t *testing.T) {
+	ctx := context.Background()
+	d := openTest(t)
+	if err := d.UpsertSession(ctx, &model.Session{SessionID: "a", Cwd: "/x", Status: model.StatusIdle}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetLater(ctx, "a", true); err != nil {
+		t.Fatal(err)
+	}
+	if a, _, _ := d.GetSession(ctx, "a"); !a.Later || a.LaterAt.IsZero() {
+		t.Fatalf("later: %+v", a)
+	}
+	_ = d.SetLater(ctx, "a", false)
+	if a, _, _ := d.GetSession(ctx, "a"); a.Later {
+		t.Fatal("still later")
+	}
+}

@@ -58,6 +58,15 @@ type Session struct {
 	Attention       string    `json:"attention,omitempty"`
 	AttentionReason string    `json:"attention_reason,omitempty"`
 	AttentionAt     time.Time `json:"attention_at,omitzero"`
+	// LastActivity is when the session last did anything (newest
+	// transcript entry, or a hook); SeenAt when the operator last looked
+	// (MarkSeen). Unseen = progress since then: the NEW mark.
+	LastActivity time.Time `json:"last_activity,omitzero"`
+	SeenAt       time.Time `json:"seen_at,omitzero"`
+	Unseen       bool      `json:"unseen,omitempty"`
+	// Later marks "watch later" (LaterAt = when, most recent first).
+	Later   bool      `json:"later,omitempty"`
+	LaterAt time.Time `json:"later_at,omitzero"`
 }
 
 // Project is an operator-named set of sessions (projects table).

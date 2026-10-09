@@ -121,6 +121,7 @@ ccdash --version               # report the current version
 | `T` | edit the user-named group for this session |
 | `t` | rename the session (operator override of auto / generated title) |
 | `f` | pin / unpin (pins stay on top — inside a project, on top of its block — latest pin first; activity never moves them) |
+| `L` | watch later on / off: marked sessions gather in their own block at the very top until cleared |
 | `c` / `C` | next color / re-roll for the session's bar (shared with the portal). Running sessions get a stored color that stands apart from the other running ones; `C` re-rolls by the same rule |
 | `ctrl+r` | restart the session's ccdash-hosted claude (kill + `claude --resume`), after `y` |
 | `!` | show only sessions that need you (`?`: approval, question, menu on screen) or finished a turn you haven't looked at (`✓`) |

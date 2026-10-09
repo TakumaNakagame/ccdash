@@ -145,6 +145,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/approvals", wrap(s.handleAPIApprovals))
 	s.mux.HandleFunc("POST /api/sessions/{id}/archive", wrap(s.handleAPIArchive))
 	s.mux.HandleFunc("POST /api/sessions/{id}/favorite", wrap(s.handleAPIFavorite))
+	s.mux.HandleFunc("POST /api/sessions/{id}/later", wrap(s.handleAPILater))
 	s.mux.HandleFunc("POST /api/sessions/{id}/color", wrap(s.handleAPIColor))
 	s.mux.HandleFunc("POST /api/sessions/{id}/title", wrap(s.handleAPITitle))
 	s.mux.HandleFunc("POST /api/sessions/{id}/group", wrap(s.handleAPIGroup))
@@ -398,9 +399,10 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 				Title:          d.Title,
 				TranscriptPath: d.TranscriptPath,
 				// The list shows when the operator last prompted.
-				LastSeen: d.LastPrompt,
-				Status:   classifyStatus(d.LastModified, now, ""),
-				Account:  acc.Name,
+				LastSeen:     d.LastPrompt,
+				LastActivity: d.LastModified,
+				Status:       classifyStatus(d.LastModified, now, ""),
+				Account:      acc.Name,
 			}
 			if entry, ok := procs[d.SessionID]; ok {
 				sess.ProcPID = entry.PID
@@ -573,6 +575,8 @@ func (s *Server) ensureSessionAt(r *http.Request, p *hookPayload, status model.S
 		TranscriptPath: p.TranscriptPath,
 		Model:          p.Model,
 		Status:         status,
+		// Any hook means the session is doing something right now.
+		LastActivity: time.Now(),
 	}
 
 	if sess.Repo == "" && sess.Branch == "" && sess.Commit == "" && sess.Cwd != "" {
@@ -1030,6 +1034,21 @@ func (s *Server) handleAPIColor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.db.SetColor(r.Context(), r.PathValue("id"), strings.ToLower(body.Color)); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+func (s *Server) handleAPILater(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Later bool `json:"later"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetLater(r.Context(), r.PathValue("id"), body.Later); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

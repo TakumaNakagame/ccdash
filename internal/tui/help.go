@@ -55,6 +55,7 @@ var helpSections = []helpSection{
 		{"T", "assign a tab group"},
 		{"R", "toggle auto repo tabs"},
 		{"f", "pin / unpin (pins stay on top, latest pin first)"},
+		{"L", "watch later on / off (own block at the top)"},
 		{"c / C", "next color / random color"},
 		{"x", "archive / unarchive"},
 		{"ctrl+x", "archive the whole tab"},

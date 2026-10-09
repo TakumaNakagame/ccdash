@@ -51,6 +51,10 @@ func (l *Local) SetColor(ctx context.Context, sessionID, color string) error {
 	return l.db.SetColor(ctx, sessionID, color)
 }
 
+func (l *Local) SetLater(ctx context.Context, sessionID string, v bool) error {
+	return l.db.SetLater(ctx, sessionID, v)
+}
+
 func (l *Local) SetFavorite(ctx context.Context, sessionID string, v bool) error {
 	return l.db.SetFavorite(ctx, sessionID, v)
 }

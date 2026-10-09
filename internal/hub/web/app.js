@@ -536,6 +536,13 @@ function pinOrder(a, b) {
   const t = (v) => (v ? new Date(v).getTime() : 0);
   return t(b.pinned_at) - t(a.pinned_at);
 }
+// laterFirst mirrors the TUI: "watch later" sessions in their own block at
+// the very top, the most recently marked first.
+function laterFirst(rows) {
+  const t = (v) => (v ? new Date(v).getTime() : 0);
+  const later = rows.filter((s) => s.later).sort((a, b) => t(b.later_at) - t(a.later_at));
+  return later.length ? [...later, ...rows.filter((s) => !s.later)] : rows;
+}
 function projectsFirst(rows) {
   const t = (v) => (v ? new Date(v).getTime() : 0);
   if (!rows.some((s) => s.project)) return rows;
@@ -593,7 +600,8 @@ async function projectPicker(id, { current = "", count = 1 } = {}, pick) {
 function projectHeader(name, color, members, onNew, onMove) {
   const running = members.filter((s) => s.status === "active" || s.status === "idle").length;
   const needs = members.filter((s) => s.attention === "needs_you").length;
-  const meta = [`${members.length} セッション`, running ? `${running} 稼働中` : null, needs ? `${needs} 要対応` : null].filter(Boolean).join(" · ");
+  const fresh = members.filter((s) => s.unseen).length;
+  const meta = [`${members.length} セッション`, running ? `${running} 稼働中` : null, needs ? `${needs} 要対応` : null, fresh ? `${fresh} NEW` : null].filter(Boolean).join(" · ");
   return h("div", { class: "bucket project", style: `--proj:${color};--ink:${inkOn(color)}` },
     h("span", { class: "proj-label" }, "PROJECT"), h("b", {}, name), h("span", { class: "proj-meta" }, meta),
     onMove ? h("button", { type: "button", class: "proj-new", title: "プロジェクトを上へ", onclick: (e) => { e.stopPropagation(); onMove(-1); } }, "▲") : null,
@@ -764,6 +772,7 @@ async function devicePage(id, opts = {}) {
         (sid) => dev(id).post(`/api/sessions/${encodeURIComponent(sid)}/archive`, { archived: !showArchived })) },
         showArchived ? "アーカイブ解除" : "アーカイブ"),
       h("button", { class: "btn small", title: "複数のセッションを一つのプロジェクトにまとめる", onclick: setProject }, "▤ プロジェクト"),
+      h("button", { class: "btn small", onclick: () => bulk("あとで見る", (sid) => dev(id).post(`/api/sessions/${encodeURIComponent(sid)}/later`, { later: true })) }, "⏰ あとで見る"),
       h("button", { class: "btn small", title: "claude -p でタイトルを生成", onclick: genTitles }, "タイトル生成"),
       h("span", { class: "grow" }),
       h("button", { class: "btn small", onclick: () => { for (const sid of visible) selected.add(sid); paintSel(); render(); } }, "表示中を全選択"),
@@ -811,15 +820,16 @@ async function devicePage(id, opts = {}) {
       .filter((s) => !tab || groupOf(s) === tab)
       .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${groupOf(s)} ${s.project || ""}`.toLowerCase().includes(q))
       .sort((a, b) => (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (new Date(b.last_seen) - new Date(a.last_seen)));
-    const ordered = projectsFirst(rows);
+    const ordered = laterFirst(projectsFirst(rows));
     const out = [];
     let bucket = null;
     visible = ordered.slice(0, limit).map((s) => s.session_id);
     for (const s of ordered.slice(0, limit)) {
-      const b = s.project ? "\0" + s.project : dateBucket(s);
+      const b = s.later ? "\0later" : s.project ? "\0" + s.project : dateBucket(s);
       if (b !== bucket) {
         bucket = b;
-        out.push(s.project
+        out.push(s.later ? h("div", { class: "bucket later" }, "⏰ あとで見る")
+          : s.project
           ? projectHeader(s.project, projectColorOf(s.project, s.project_color), ordered.filter((x) => x.project === s.project),
             // The project's directory: where its most recent session works.
             () => newSession(id, { cwd: s.cwd, project: s.project }),
@@ -888,6 +898,8 @@ async function restartCollector(id, last) {
 
 function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
   const chips = [];
+  if (s.unseen) chips.push(h("span", { class: "chip new", title: "最後に見た後に進捗あり" }, "NEW"));
+  if (s.later) chips.push(h("span", { class: "chip later" }, "あとで"));
   if (live) chips.push(h("span", { class: "chip live" }, "live"));
   if (s.attention === "needs_you") chips.push(h("span", { class: "chip pend", title: s.attention_reason || "" }, "要対応"));
   else if (s.attention === "done") chips.push(h("span", { class: "chip done" }, "未確認"));
@@ -1514,6 +1526,7 @@ function sessionMenu(id, s, groups, refresh) {
       h("div", { class: "row" }, group, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/group", { group: group.value.trim() }, "グループを保存しました"); } }, "保存")),
       h("div", { class: "menu-grid" },
         h("button", { type: "button", class: "btn", onclick: () => { close(); post("/favorite", { favorite: !s.favorite }, s.favorite ? "ピン留めを外しました" : "ピン留めしました"); } }, s.favorite ? "ピン留めを外す" : "📌 ピン留め"),
+        h("button", { type: "button", class: "btn", onclick: () => { close(); post("/later", { later: !s.later }, s.later ? "「あとで見る」から外しました" : "「あとで見る」に入れました"); } }, s.later ? "あとで見るを外す" : "⏰ あとで見る"),
         h("button", { type: "button", class: "btn", onclick: () => { close(); post("/archive", { archived: !s.archived }, s.archived ? "アーカイブを解除しました" : "アーカイブしました"); } }, s.archived ? "アーカイブを解除" : "アーカイブ"),
         h("button", { type: "button", class: "btn", onclick: async () => {
           close();
@@ -2596,10 +2609,12 @@ async function chatPage(id, { sid, key }) {
         (await d.get("/api/sessions?archived=1").catch(() => []))?.find((s) => s.session_id === sid) || session;
     }
     hosted = !!ptyKey && ptys.some((p) => p.key === ptyKey && p.alive);
-    // Open and visible: the operator is looking at it.
-    if (session?.attention === "done" && sid && !document.hidden) {
+    // Open and visible: the operator is looking at it (clears "done" and
+    // the NEW mark; while it works, each poll keeps it seen).
+    if ((session?.attention === "done" || session?.unseen) && sid && !document.hidden) {
       d.post(`/api/sessions/${encodeURIComponent(sid)}/seen`, {}).catch(() => {});
       session.attention = "";
+      session.unseen = false;
     }
 
     const title = session ? (session.num ? `#${session.num} ` : "") + sessionTitle(session) : sid ? sid : "新規セッション";

@@ -135,6 +135,11 @@ func (r *Remote) SetColor(ctx context.Context, sessionID, color string) error {
 		map[string]any{"color": color}, nil)
 }
 
+func (r *Remote) SetLater(ctx context.Context, sessionID string, v bool) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "later"), nil,
+		map[string]any{"later": v}, nil)
+}
+
 func (r *Remote) SetFavorite(ctx context.Context, sessionID string, v bool) error {
 	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "favorite"), nil,
 		map[string]any{"favorite": v}, nil)

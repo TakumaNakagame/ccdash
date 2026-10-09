@@ -131,6 +131,9 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN auto_archived INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE projects ADD COLUMN ord INTEGER`,
 		`ALTER TABLE sessions ADD COLUMN favorite_at INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN last_activity INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN seen_at INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN later_at INTEGER`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -163,6 +166,11 @@ func (d *DB) migrate() error {
 	// relative order by number.
 	if _, err := d.sql.Exec(`UPDATE sessions SET favorite_at = COALESCE(num, 0) WHERE favorite = 1 AND favorite_at IS NULL`); err != nil {
 		return fmt.Errorf("migrate pin order: %w", err)
+	}
+	// Rows from before seen_at count as seen now, so an upgrade doesn't
+	// light up every session as NEW.
+	if _, err := d.sql.Exec(`UPDATE sessions SET seen_at = CAST(strftime('%s','now') AS INTEGER) WHERE seen_at IS NULL`); err != nil {
+		return fmt.Errorf("migrate seen_at: %w", err)
 	}
 	if err := d.backfillNums(); err != nil {
 		return fmt.Errorf("backfill session numbers: %w", err)
@@ -254,9 +262,11 @@ func (d *DB) upsertSession(ctx context.Context, s *model.Session, mode lastSeenM
 		INSERT INTO sessions (session_id, cwd, repo, branch, commit_hash,
 		                     wrapper_pid, proc_pid, pane,
 		                     tmux_pane, tmux_session, transcript_path, model, title,
-		                     first_seen, last_seen, status, account, num)
+		                     first_seen, last_seen, status, account, num,
+		                     last_activity, seen_at)
 		VALUES (?, ?, ?, ?, ?,  ?, ?, ?,  ?, ?, ?, ?, ?,  ?, ?, ?, ?,
-		        (SELECT COALESCE(MAX(num), 0) + 1 FROM sessions))
+		        (SELECT COALESCE(MAX(num), 0) + 1 FROM sessions),
+		        NULLIF(?, 0), ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			cwd = COALESCE(NULLIF(excluded.cwd,''), sessions.cwd),
 			repo = COALESCE(NULLIF(excluded.repo,''), sessions.repo),
@@ -273,6 +283,7 @@ func (d *DB) upsertSession(ctx context.Context, s *model.Session, mode lastSeenM
 			last_seen = CASE ? WHEN 1 THEN excluded.last_seen WHEN 2 THEN sessions.last_seen ELSE MAX(excluded.last_seen, sessions.last_seen) END,
 			status = excluded.status,
 			account = COALESCE(NULLIF(excluded.account,''), sessions.account),
+			last_activity = MAX(COALESCE(excluded.last_activity,0), COALESCE(sessions.last_activity,0)),
 			archived = CASE WHEN COALESCE(sessions.auto_archived,0) = 1
 			                 AND (excluded.status IN ('active','idle') OR excluded.last_seen > sessions.last_seen)
 			                THEN 0 ELSE sessions.archived END,
@@ -284,6 +295,7 @@ func (d *DB) upsertSession(ctx context.Context, s *model.Session, mode lastSeenM
 		s.WrapperPID, s.ProcPID, s.Pane,
 		s.TmuxPane, s.TmuxSession, s.TranscriptPath, s.Model, s.Title,
 		s.FirstSeen.Unix(), s.LastSeen.Unix(), string(s.Status), s.Account,
+		unixOrZero(s.LastActivity), now.Unix(),
 		int(mode),
 	)
 	return err
@@ -411,7 +423,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.account,''),
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
-		       COALESCE(s.color,'')
+		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0)
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE COALESCE(s.archived,0) = ?
 		ORDER BY COALESCE(s.favorite,0) DESC,
@@ -425,7 +437,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 	var out []model.Session
 	for rows.Next() {
 		var s model.Session
-		var first, last, genAt, attAt, pinAt int64
+		var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt int64
 		var status string
 		var arch, fav int
 		if err := rows.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -437,10 +449,14 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.Project, &s.ProjectColor, &s.ProjectOrder,
 			&first, &last, &status, &s.PendingCount, &s.Account,
 			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
-			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride); err != nil {
+			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt); err != nil {
 			return nil, err
 		}
 		finishAttention(&s, attAt)
+		finishSeen(&s, actAt, seenAt)
+		if laterAt > 0 {
+			s.Later, s.LaterAt = true, time.UnixMilli(laterAt).UTC()
+		}
 		if genAt > 0 {
 			s.GenTitleAt = time.Unix(genAt, 0).UTC()
 		}
@@ -478,12 +494,12 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       COALESCE(s.account,''),
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
-		       COALESCE(s.color,'')
+		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0)
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE s.session_id = ?
 	`, sessionID)
 	var s model.Session
-	var first, last, genAt, attAt, pinAt int64
+	var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt int64
 	var status string
 	var arch, fav int
 	err := row.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -495,7 +511,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&s.Project, &s.ProjectColor, &s.ProjectOrder,
 		&first, &last, &status, &s.PendingCount, &s.Account,
 		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
-		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride)
+		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Session{}, false, nil
 	}
@@ -511,7 +527,30 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		s.GenTitleAt = time.Unix(genAt, 0).UTC()
 	}
 	finishAttention(&s, attAt)
+	finishSeen(&s, actAt, seenAt)
+	if laterAt > 0 {
+		s.Later, s.LaterAt = true, time.UnixMilli(laterAt).UTC()
+	}
 	return s, true, nil
+}
+
+// finishSeen fills LastActivity / SeenAt and Unseen: something happened in
+// the session after the operator last looked at it.
+func finishSeen(s *model.Session, actAt, seenAt int64) {
+	if actAt > 0 {
+		s.LastActivity = time.Unix(actAt, 0).UTC()
+	}
+	if seenAt > 0 {
+		s.SeenAt = time.Unix(seenAt, 0).UTC()
+	}
+	s.Unseen = actAt > seenAt
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 // finishAttention completes the attention fields of a scanned row. A
@@ -551,6 +590,10 @@ func (d *DB) ClearAttention(ctx context.Context, sessionID, only string) error {
 // MarkSeen records that the operator looked at a session: an unread
 // "done" becomes read.
 func (d *DB) MarkSeen(ctx context.Context, sessionID string) error {
+	if _, err := d.sql.ExecContext(ctx, `UPDATE sessions SET seen_at = MAX(?, COALESCE(last_activity,0)) WHERE session_id = ?`,
+		time.Now().Unix(), sessionID); err != nil {
+		return err
+	}
 	return d.ClearAttention(ctx, sessionID, model.AttentionDone)
 }
 
@@ -667,6 +710,14 @@ func (d *DB) SetFavorite(ctx context.Context, sessionID string, favorite bool) e
 	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET favorite = ?,
 		favorite_at = CASE WHEN ? = 1 THEN ? ELSE NULL END WHERE session_id = ?`,
 		v, v, time.Now().UnixMilli(), sessionID) // ms: two quick pins still order
+	return err
+}
+
+// SetLater marks a session "watch later" (or clears it). The UIs gather
+// marked sessions in their own section, the most recently marked first.
+func (d *DB) SetLater(ctx context.Context, sessionID string, later bool) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET later_at = CASE WHEN ? THEN ? ELSE NULL END WHERE session_id = ?`,
+		later, time.Now().UnixMilli(), sessionID)
 	return err
 }
 

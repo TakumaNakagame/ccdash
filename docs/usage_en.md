@@ -122,6 +122,8 @@ Sessions are bucketed by `last_seen`:
 
 `f` pins / unpins a session. Pins stay at the top of the list (inside a project, at the top of its block), the most recently pinned first, and activity never moves them.
 
+`L` marks a session **watch later**: marked sessions gather in a ⏰ block at the very top (most recently marked first) until you press `L` again. Rows show **NEW** when the session made progress after you last looked at it (selected it in the TUI, or had its chat open in the portal).
+
 Sessions in a **project** (`p`, see §7) are pulled out of these date
 buckets and shown as project blocks at the newest end of the list.
 

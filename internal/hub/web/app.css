@@ -135,6 +135,9 @@ input[type=text], input:not([type]) {
 
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
 .dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+.chip.later { background: #fb923c; color: #111; font-weight: 700; }
+.bucket.later { background: #fb923c; color: #111; font-weight: 700; }
+.chip.new { background: #facc15; color: #111; font-weight: 700; letter-spacing: .04em; }
 .chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--chip); color: var(--muted); white-space: nowrap; }
 .chip.active { color: var(--accent); }
 .chip.idle { color: var(--ok); }

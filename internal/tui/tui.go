@@ -1312,6 +1312,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.startProjectEdit()
 	case "P":
 		return m, m.rerollProjectColor()
+	case "L":
+		return m, m.toggleLaterCurrent()
 	case "[":
 		return m, m.moveProjectCurrent(-1)
 	case "]":
@@ -1434,7 +1436,7 @@ func (m *model) applyGroupFilter() {
 		}
 		src = out
 	}
-	src = projectsFirst(src)
+	src = laterFirst(projectsFirst(src))
 	if m.settings.NewestAtBottom {
 		// Reverse a copy: with no filter active src still aliases
 		// m.allSessions, and reversing that in place would flip the
@@ -1445,6 +1447,25 @@ func (m *model) applyGroupFilter() {
 		}
 	}
 	m.sessions = src
+}
+
+// laterFirst puts "watch later" sessions (L) at the very newest end, in
+// their own block, the most recently marked first — ahead of projects,
+// whose members they temporarily leave. Returns src when none is marked.
+func laterFirst(src []mdl.Session) []mdl.Session {
+	var later, rest []mdl.Session
+	for _, s := range src {
+		if s.Later {
+			later = append(later, s)
+		} else {
+			rest = append(rest, s)
+		}
+	}
+	if len(later) == 0 {
+		return src
+	}
+	sort.SliceStable(later, func(i, j int) bool { return later[i].LaterAt.After(later[j].LaterAt) })
+	return append(later, rest...)
 }
 
 // projectsFirst moves the sessions that belong to a project to the newest
@@ -2003,13 +2024,14 @@ func (m *model) markSelectedSeen() tea.Cmd {
 		return nil
 	}
 	s := m.sessions[m.selSess]
-	if s.Attention != mdl.AttentionDone {
+	if s.Attention != mdl.AttentionDone && !s.Unseen {
 		return nil
 	}
 	if m.seenSent == nil {
 		m.seenSent = map[string]time.Time{}
 	}
-	if t, ok := m.seenSent[s.SessionID]; ok && !s.AttentionAt.After(t) {
+	// Looking at a busy session keeps it seen: resend at most every 2 s.
+	if t, ok := m.seenSent[s.SessionID]; ok && time.Since(t) < 2*time.Second {
 		return nil
 	}
 	m.seenSent[s.SessionID] = time.Now()
@@ -2017,6 +2039,25 @@ func (m *model) markSelectedSeen() tea.Cmd {
 	return func() tea.Msg {
 		_ = m.store.MarkSeen(m.ctx, sid)
 		return nil
+	}
+}
+
+// toggleLaterCurrent (L) marks / clears "watch later" on the selection.
+func (m *model) toggleLaterCurrent() tea.Cmd {
+	if len(m.sessions) == 0 || m.sessions[m.selSess].Num <= 0 {
+		return nil
+	}
+	s := m.sessions[m.selSess]
+	want, sid := !s.Later, s.SessionID
+	msg := "added to watch later"
+	if !want {
+		msg = "removed from watch later"
+	}
+	return func() tea.Msg {
+		if err := m.store.SetLater(m.ctx, sid, want); err != nil {
+			return attachDoneMsg{err: err}
+		}
+		return attachDoneMsg{msg: msg + " (" + shortID(sid) + ")"}
 	}
 }
 
@@ -2888,6 +2929,8 @@ var (
 	statusRecent       = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))  // yellow: dead but <6h
 	statusStop         = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // dim gray: long-dead
 	footerStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	laterHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("214"))
+	newStyle           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11"))
 	paneTitle          = lipgloss.NewStyle().Bold(true).Padding(0, 1).Background(lipgloss.Color("237")).Foreground(lipgloss.Color("15"))
 	paneTitleDim       = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("8"))
 	errStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
@@ -3731,6 +3774,8 @@ func (m *model) renderSessionsList(width, height int) string {
 			}
 			var header string
 			switch {
+			case bucket == bucketLater:
+				header = laterHeaderStyle.Render(padRight("⏰ "+bucket+"  (L to clear)", width))
 			case s.Project != "":
 				header = renderProjectHeader(s, stats[s.Project], width)
 			case bucket == bucketFavorites:
@@ -3817,6 +3862,9 @@ func (m *model) renderSessionsList(width, height int) string {
 
 const bucketFavorites = "Pinned"
 
+// bucketLater heads the "watch later" block (L).
+const bucketLater = "Watch later"
+
 // projectBucketPrefix marks bucketFor labels that are projects (a NUL can't
 // collide with a date label).
 const projectBucketPrefix = "\x00project:"
@@ -3878,6 +3926,9 @@ func renderProjectHeader(s mdl.Session, st projectStat, width int) string {
 // end); pinned sessions go to the top regardless of date; everything else is
 // bucketed by last_seen.
 func bucketFor(s mdl.Session, now time.Time) string {
+	if s.Later {
+		return bucketLater
+	}
 	if s.Project != "" {
 		return projectBucketPrefix + s.Project
 	}
@@ -3960,6 +4011,9 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if ref != "" {
 		titleBudget -= runewidth.StringWidth(ref) + 1
 	}
+	if s.Unseen && !selected {
+		titleBudget -= 4 // "NEW "
+	}
 	// Title generation in flight: a spinner in front of the title, so it
 	// shows even when line 2 is cut short.
 	titling := ""
@@ -3985,6 +4039,10 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	}
 	if ref != "" {
 		titleStyled = refStyle.Render(ref) + " " + titleStyled
+	}
+	if s.Unseen && !selected {
+		// Progress since the operator last looked (Session.Unseen).
+		titleStyled = newStyle.Render("NEW") + " " + titleStyled
 	}
 	line1 := fmt.Sprintf("%s %s %s %s", marker, statusDot, subtitleStyle.Render(age), titleStyled)
 
