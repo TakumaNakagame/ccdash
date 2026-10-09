@@ -89,12 +89,16 @@ ccdash                                              sessions: 4   ⚠ pending: 1
          home-lab:main · 66eec245 · pid:179833         はい、内容を確認します
                                                        ...
 ─────────────────────────────────────────────────────
-↑/↓ sel  h/l tabs  /search  enter attach  ...         ← key hint footer
+↑/↓ sel  h/l tabs  / search  enter open  ...  ? help  q quit  ← key hint footer
 ```
 
 Left pane is the session list. Right pane is the live transcript tail
 of the selected session. Tabs filter the list by repo or operator-named
 tab; `All` shows every session.
+
+The footer only shows the common keys and always ends with `? help  q quit`
+(on a narrow terminal the middle is trimmed). `?` opens a help window that
+lists every key; scroll it with `j` / `k`.
 
 ### Status dot legend
 
@@ -117,6 +121,9 @@ Sessions are bucketed by `last_seen`:
 - `Month YYYY` (older)
 
 `f` toggles favorite. Favorites pin to the top of the list.
+
+Sessions in a **project** (`p`, see §7) are pulled out of these date
+buckets and shown as project blocks at the newest end of the list.
 
 ## 4. Group navigation
 
@@ -221,27 +228,41 @@ Required confirmations:
 In archive view (`X` toggles), `Ctrl+X` becomes a bulk-unarchive of
 the same tab.
 
-## 7. Summarize (`s`)
+### Auto-archive
 
-Press `s` on a session to ask Claude to summarize its conversation.
-ccdash builds a compact digest (USER prompts + CLAUDE replies + TOOL
-calls, dropping noisy tool_results and thinking blocks). It then masks
-common secret patterns through `internal/redact` and pipes the digest
-to `claude -p` in an isolated subprocess.
+Once per local day — on the collector's first discovery tick of the day,
+or the first tick after midnight for a collector left running — sessions
+whose `last_seen` is older than **Auto-archive after (days)** (settings
+page, default 7, `0` = off) are archived. Favorites, project members and
+running (active / idle) sessions are never auto-archived. Resuming an
+auto-archived session (it becomes active / idle again, or shows newer
+activity) brings it back automatically. Sessions you archived yourself
+with `x` stay archived.
 
-The first press shows a `y/n` confirmation banner. After confirming:
+## 7. Projects (`p`) and generated titles
 
-- The list row gains a `⏳ summarizing` indicator
-- Up to 180 seconds (configurable) of background work
-- On success: the summary is inserted into the transcript stream at
-  the time of generation, with a `summary <age> ago` label. As new
-  activity comes in, the summary scrolls up like any other old
-  message.
-- On failure: a `✗ summary error` indicator and the error text inline
+### Projects
 
-The `claude -p` spawn is isolated with `--setting-sources project` and
-cwd `/tmp` so it doesn't inherit ccdash's hooks (otherwise the spawn
-would create another session in the dashboard).
+A project is an operator-named set of sessions — e.g. the three sessions
+working on one feature across repos. Press `p` on a session to put it in
+one: the prompt lists the existing project names (`↑` `↓` to pick one, or
+type a new name); submitting an empty name removes the session from its
+project. `P` re-rolls the project's color; new projects get a color kept
+apart from the other projects' colors.
+
+Project members are moved to the newest end of the list (the top, or the
+bottom with **Newest at bottom**), separate from the date buckets. Each
+project is one block, ordered by its most recent activity, headed by a
+full-width band in the project's color:
+
+```
+ PROJECT feature-x  3 sessions · 1 running · 1 needs you
+▌● 1m   #4839 API の型を直す
+▌○ 2h   #4840 フロントの表示を合わせる
+```
+
+and every member row carries a one-cell gutter in that color. Search
+(`/`) matches project names too.
 
 ### Session numbers and generated titles (`ctrl+t`)
 
@@ -259,8 +280,14 @@ offers two targets:
   newest first, at most 10. They all go to Claude in **one** call.
 
 The list row shows `⏳ titling` while it runs. Title precedence is: your
-`t` rename > generated title > first prompt. Generation shares the
-summary's gate (`summary_enabled`) and timeout.
+`t` rename > generated title > first prompt. Generation is gated by
+**Title generation via claude -p** (`summary_enabled`) and bounded by
+**Title generation timeout (s)**. The digest sent to Claude is masked
+through `internal/redact` first.
+
+The `claude -p` spawn is isolated with `--setting-sources project` and
+cwd `/tmp` so it doesn't inherit ccdash's hooks (otherwise the spawn
+would create another session in the dashboard).
 
 ## 8. Attach (`enter`) and the live right pane
 
@@ -287,6 +314,10 @@ screen, and the pane header reads `⬡ live`.
 | double-click a session | Same as `enter` |
 
 Opening (`enter` / double-click) a session whose claude is still running in another terminal asks first: a red **already running** window warns that resuming it here starts a second claude on the same conversation. Only `y` (or clicking **Yes**) opens it anyway; `n`, `esc`, `enter` or clicking **No** cancel. The restart confirmation has clickable **Restart** / **Cancel** buttons too. In both windows the arrow keys / `h` `j` `k` `l` / `tab` move between the buttons and `enter` presses the focused one (focus starts on **No** / **Restart**); other keys are ignored. Sessions in a tmux pane just switch to it.
+
+While a live session is selected but the pane is not focused, the
+dashboard keys still work — the footer lists `p` / `t` / `ctrl+t` / `x`
+alongside `enter` / `F`.
 
 While the pane has focus every other key goes to claude, including `q`.
 The emulator lives in the server, so the screen survives TUI restarts
@@ -321,7 +352,7 @@ the list by case-insensitive substring against:
 - `s.Repo`
 - `s.Cwd`
 - `s.Branch`
-- `s.Summary`
+- `s.Project`
 - `s.SessionID`
 
 Search composes with the project filter and archive view by
@@ -347,8 +378,8 @@ These let you scale ccdash's reach down to "observation only":
 - **Approval blocking** — when off, ccdash never holds PermissionRequest
   hooks. Claude prompts in its own terminal as before; `a`/`A`/`d` are
   disabled.
-- **Summarize via claude -p** — when off, `s` is disabled and no digest
-  leaves the host.
+- **Title generation via claude -p** — when off, `ctrl+t` is disabled
+  and no digest leaves the host.
 - **Attach (enter)** — when off, `enter` only shows session info, never
   spawns subprocesses, and the live right pane stays disconnected.
 - **Auto-rewrite settings.json** — when off, server start does not
@@ -397,7 +428,9 @@ affected. In remote mode it only relaunches the local dashboard.
 
 - **Right-pane tail budget (KB)**: how much transcript is loaded for
   the live tail. Default 256 KB.
-- **Summary timeout (s)**: ceiling for `claude -p`. Default 180.
+- **Title generation timeout (s)**: ceiling for `claude -p`. Default 180.
+- **Auto-archive after (days)**: archive sessions idle longer than this,
+  once a day (see "Auto-archive" in §6). Default 7, `0` = off.
 - **Refresh interval (ms)**: how often the TUI re-queries the DB.
   Default 1000.
 
@@ -452,7 +485,7 @@ rm $(which ccdash)           # remove the binary itself
 | --- | --- |
 | TUI is empty, no sessions | Hooks not installed or stale token. Re-run `ccdash install-hooks`. |
 | All hook events return 401 in the log | Token mismatch; `ccdash install-hooks` rewrites the headers, or the server's auto-sync (default on) does it on next boot. |
-| `claude -p failed: signal: killed` (summary) | Summary hit the timeout. Bump `summary_timeout_sec` in the settings page. |
+| `claude -p failed: signal: killed` (titles) | Title generation hit the timeout. Bump **Title generation timeout (s)** (`summary_timeout_sec`) in the settings page. |
 | `vertical_auto_cols` flipped layout at the wrong width | Adjust the threshold in the settings page (the row shows your current width). |
 | `failed to resolve latest release tag` (install/update) | Anonymous GitHub API rate limit. Use `CCDASH_VERSION=v0.1.x` to skip the API. |
 | Pending count keeps growing | Approval auto-resolution failed (the discovery loop sweeps stale pendings to `timeout` after 45 s; restart the server if it's stuck). |
@@ -511,9 +544,12 @@ machine never accepts inbound connections — its collector dials out.
   multi-question sets.
 - An open portal tab reloads itself when the hub is upgraded.
 - **⋯** in a chat does what the TUI's per-session keys do: rename (`t`),
-  set the group (`T`), favorite (`f`), archive (`x`), summarize (`s`) and
-  generate a title (`ctrl+t`). **Archive** on the session list shows the
-  archived ones. The summary appears at the top of the chat.
+  set the group (`T`), set the project (`p`, a name field with the
+  existing names offered) and its color (swatches / 🎲, like `P`),
+  favorite (`f`), archive (`x`) and generate a title (`ctrl+t`).
+  **Archive** on the session list shows the archived ones.
+- In the session list, project members are grouped under a band in the
+  project's color, their rows tinted with a project stripe.
 - **New session** takes an optional first message; typing `/` lists the
   device's skills and slash commands (project ones move the directory to
   their project), like the TUI's `S`.
@@ -541,8 +577,8 @@ machine never accepts inbound connections — its collector dials out.
   bottom-right corner to resize; positions are remembered per browser.
   **並べ直す** tiles them again, **整列** returns to the automatic grid.
 - **List checkboxes**: tick sessions to put them on / take them off the
-  grid, archive (or unarchive) them, or generate titles (claude -p, ten per
-  call) in one go.
+  grid, archive (or unarchive) them, put them in a project (**▤
+  プロジェクト**), or generate titles (claude -p, ten per call) in one go.
 - Auto-refresh holds while you have text selected inside the chat, list or a
   tile, so drag-to-copy works.
 - **Front page board**: 要対応 (needs you — approval, question, menu on

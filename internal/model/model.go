@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -38,10 +39,9 @@ type Session struct {
 	Account        string        `json:"account,omitempty"`      // account name from accounts.json (e.g. "personal", "enterprise")
 	Archived       bool          `json:"archived,omitempty"`
 	Favorite       bool          `json:"favorite,omitempty"`
-	ColorOverride  string        `json:"color,omitempty"` // operator-picked "#rrggbb"; see Color
-	Summary        string        `json:"summary,omitempty"`
-	SummaryStatus  string        `json:"summary_status,omitempty"` // "", "running", "done", "error"
-	SummaryAt      time.Time     `json:"summary_at,omitempty"`
+	ColorOverride  string        `json:"color,omitempty"`         // operator-picked "#rrggbb"; see Color
+	Project        string        `json:"project,omitempty"`       // operator-named project; groups sessions at the top of the list
+	ProjectColor   string        `json:"project_color,omitempty"` // the project's "#rrggbb" (projects table)
 	FirstSeen      time.Time     `json:"first_seen"`
 	LastSeen       time.Time     `json:"last_seen"`
 	Status         SessionStatus `json:"status"`
@@ -186,4 +186,36 @@ type Approval struct {
 	Status    ApprovalStatus  `json:"status"`
 	Reason    string          `json:"reason,omitempty"`
 	DecidedAt *time.Time      `json:"decided_at,omitempty"`
+}
+
+// ProjectColorOf is a project's color: the stored one (projects table) when
+// set, else a palette pick by an FNV-1a hash of the name. The portal
+// mirrors it (projectColorOf in internal/hub/web/app.js).
+func ProjectColorOf(name, stored string) string {
+	if stored != "" {
+		return stored
+	}
+	if name == "" {
+		return ""
+	}
+	h := uint32(2166136261)
+	for i := 0; i < len(name); i++ {
+		h ^= uint32(name[i])
+		h *= 16777619
+	}
+	return SessionPalette[h%uint32(len(SessionPalette))]
+}
+
+// InkOn picks black or white text for a "#rrggbb" background by its
+// relative luminance.
+func InkOn(bg string) string {
+	if !ValidColor(bg) {
+		return "#ffffff"
+	}
+	v, _ := strconv.ParseUint(bg[1:], 16, 32)
+	r, g, b := float64(v>>16&0xff), float64(v>>8&0xff), float64(v&0xff)
+	if 0.299*r+0.587*g+0.114*b > 150 {
+		return "#111111"
+	}
+	return "#ffffff"
 }

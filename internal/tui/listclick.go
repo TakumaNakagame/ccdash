@@ -18,8 +18,8 @@ const doubleClickWindow = 400 * time.Millisecond
 func (m *model) modalOpen() bool {
 	return m.pane != paneSessions ||
 		m.editingTitle || m.editingGroup || m.editingSearch ||
-		m.editingNewSession || m.editingSkill || m.restartConfirm || m.dupConfirm ||
-		m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm || m.awaitRestartSessionConfirm
+		m.editingNewSession || m.editingSkill || m.restartConfirm || m.dupConfirm || m.helpOpen ||
+		m.awaitGroupArchiveConfirm || m.awaitMkdirConfirm || m.awaitRestartSessionConfirm
 }
 
 // listSessionAt maps a terminal position to the session row under it, or

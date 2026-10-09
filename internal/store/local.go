@@ -83,6 +83,14 @@ func (l *Local) SetUserGroup(ctx context.Context, sessionID, group string) error
 	return l.db.SetUserGroup(ctx, sessionID, group)
 }
 
+func (l *Local) SetProject(ctx context.Context, sessionID, project string) error {
+	return l.db.SetProject(ctx, sessionID, project)
+}
+
+func (l *Local) SetProjectColor(ctx context.Context, project, color string) error {
+	return l.db.SetProjectColor(ctx, project, color)
+}
+
 func (l *Local) GetSetting(ctx context.Context, key string) (string, error) {
 	return l.db.GetSetting(ctx, key)
 }
@@ -126,16 +134,6 @@ func (l *Local) DecideApproval(ctx context.Context, id int64, behavior, reason s
 		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
 	}
 	return nil
-}
-
-// Summarize delegates to summarize.Kickoff — the single shared kickoff
-// implementation with the server's POST /api/sessions/{id}/summarize
-// handler. It enforces the summary_enabled gate, flips summary_status to
-// "running" synchronously (so the very next ListSessions poll shows
-// progress), no-ops when a summary is already running, and runs `claude -p`
-// in a background goroutine whose result lands via SetSummary.
-func (l *Local) Summarize(ctx context.Context, sessionID string) error {
-	return summarize.Kickoff(ctx, l.db, sessionID)
 }
 
 // GenerateTitles delegates to summarize.KickoffTitles, shared with the

@@ -46,7 +46,7 @@ type Settings struct {
 	// behavior; the operator can flip them off individually or via the
 	// "Apply secure preset" action on the settings page.
 	ApproveEnabled  bool // PermissionRequest blocking + a/A/d shortcuts
-	SummaryEnabled  bool // s key + claude -p spawn
+	SummaryEnabled  bool // ctrl+t title generation (claude -p spawn); key name predates the summary removal
 	AttachEnabled   bool // Enter spawns claude --resume / tmux switch
 	AutoInstallSync bool // server boot rewrites settings.json on token mismatch
 	HubEnabled      bool // collector dials the hub joined via `ccdash hub join`
@@ -71,6 +71,10 @@ type Settings struct {
 	// TimeFormat renders session times as "relative" (4m, 2h, 3d) or
 	// "absolute" (09/30 18:45).
 	TimeFormat string
+	// AutoArchiveDays archives sessions idle longer than this many days
+	// once a day (the collector's first start of the day, or its first
+	// discovery tick after midnight). 0 = off.
+	AutoArchiveDays int
 }
 
 const (
@@ -109,6 +113,10 @@ const (
 	legacyKeyPaneSplit  = "pane_split"
 	keyTimeFormat       = "time_format"
 	keyInvertListScroll = "invert_list_scroll"
+	keyAutoArchiveDays  = "auto_archive_days"
+	// KeyAutoArchiveLast is bookkeeping, not a preference: the local date
+	// (YYYY-MM-DD) the daily auto-archive last ran. Not in AllSpecs.
+	KeyAutoArchiveLast = "auto_archive_last"
 )
 
 // Defaults returns the baseline values used whenever a key is missing.
@@ -131,6 +139,8 @@ func Defaults() Settings {
 
 		PaneListPct: 50,
 		TimeFormat:  "relative",
+
+		AutoArchiveDays: 7,
 	}
 }
 
@@ -168,6 +178,7 @@ func loadPairs(out *Settings) []loadPair {
 		{keyNewSessionDir, func(v string) { out.NewSessionDir = v }},
 		{keyPaneListPct, func(v string) { out.PaneListPct = ClampPaneListPct(parseInt(v, out.PaneListPct)) }},
 		{keyInvertListScroll, func(v string) { out.InvertListScroll = parseBool(v, out.InvertListScroll) }},
+		{keyAutoArchiveDays, func(v string) { out.AutoArchiveDays = parseInt(v, out.AutoArchiveDays) }},
 		{keyTimeFormat, func(v string) {
 			if v == "relative" || v == "absolute" {
 				out.TimeFormat = v
@@ -323,14 +334,15 @@ func AllSpecs() []Spec {
 		{Key: keyVerticalAutoCols, Label: "Vertical auto threshold (cols)", Help: "Width in columns below which auto-layout flips to vertical. Lower = stay horizontal longer; higher = go vertical sooner.", Kind: KindInt, Min: 40, Max: 240},
 		// Risk-bearing toggles
 		{Key: keyApproveEnabled, Label: "Approval blocking", Help: "When OFF, ccdash never holds PermissionRequest hooks — Claude prompts you in the terminal as it would without ccdash, and the a/A/d shortcuts are disabled", Kind: KindBool},
-		{Key: keySummaryEnabled, Label: "Summarize via claude -p", Help: "When OFF, the 's' key is disabled and ccdash never spawns claude -p (no transcript digests sent over the network)", Kind: KindBool},
+		{Key: keySummaryEnabled, Label: "Title generation via claude -p", Help: "When OFF, ctrl+t (generate titles) is disabled and ccdash never spawns claude -p (no transcript digests sent over the network)", Kind: KindBool},
 		{Key: keyAttachEnabled, Label: "Attach (enter)", Help: "When OFF, Enter only shows session info — ccdash never spawns claude --resume or runs tmux switch-client", Kind: KindBool},
 		{Key: keyAutoInstallSync, Label: "Auto-rewrite settings.json", Help: "When OFF, server start does NOT silently rewrite ~/.claude/settings.json when the token rotates; you'll need to run install-hooks manually", Kind: KindBool},
 		{Key: keyHubEnabled, Label: "Hub connection", Help: "When OFF, the collector does not connect to the hub joined via `ccdash hub join`, so this machine is unreachable from the web portal", Kind: KindBool},
-		{Key: keyPresetSecure, Label: "Apply secure preset", Help: "Observation-only mode: turns off approval blocking, summarize, attach, auto-install sync, and the hub connection in one go", Kind: KindAction, Apply: applySecurePreset},
+		{Key: keyPresetSecure, Label: "Apply secure preset", Help: "Observation-only mode: turns off approval blocking, title generation, attach, auto-install sync, and the hub connection in one go", Kind: KindAction, Apply: applySecurePreset},
 		// Numeric tunables
 		{Key: keyTailBudgetKB, Label: "Right-pane tail budget (KB)", Help: "Bytes of transcript loaded for the inline live tail; bigger == more context, slower", Kind: KindInt, Min: 32, Max: 8192},
-		{Key: keySummaryTimeoutSec, Label: "Summary timeout (s)", Help: "How long to wait for `claude -p` to produce a summary before giving up", Kind: KindInt, Min: 30, Max: 600},
+		{Key: keySummaryTimeoutSec, Label: "Title generation timeout (s)", Help: "How long to wait for `claude -p` to produce titles before giving up", Kind: KindInt, Min: 30, Max: 600},
+		{Key: keyAutoArchiveDays, Label: "Auto-archive after (days)", Help: "Once a day (first collector start of the day), archive sessions idle longer than this. Favorites, project members and running sessions are kept; resuming an auto-archived session brings it back. 0 = off.", Kind: KindInt, Min: 0, Max: 365},
 		{Key: keyRefreshIntervalMs, Label: "Refresh interval (ms)", Help: "How often the TUI re-queries the DB for new state", Kind: KindInt, Min: 250, Max: 10000},
 		{Key: keyNewSessionDir, Label: "New session directory", Help: "Where the 'n' directory picker starts (~/ allowed). Empty = home directory.", Kind: KindString, Path: true},
 		// System section (rendered under its own heading with the version;
@@ -403,6 +415,8 @@ func Get(s Settings, key string) any {
 		return s.TimeFormat
 	case keyInvertListScroll:
 		return s.InvertListScroll
+	case keyAutoArchiveDays:
+		return s.AutoArchiveDays
 	}
 	return nil
 }
@@ -456,6 +470,8 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.TimeFormat = value.(string)
 	case keyInvertListScroll:
 		s.InvertListScroll = value.(bool)
+	case keyAutoArchiveDays:
+		s.AutoArchiveDays = value.(int)
 	}
 	return s, persist(ctx, st, key, value)
 }

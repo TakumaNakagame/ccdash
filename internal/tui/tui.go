@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +31,6 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/settings"
 	"github.com/takumanakagame/ccmanage/internal/skills"
 	"github.com/takumanakagame/ccmanage/internal/store"
-	"github.com/takumanakagame/ccmanage/internal/summarize"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
@@ -125,6 +125,9 @@ type model struct {
 	titleBuffer   string
 	groupCandIdx  int    // index into filteredGroupCandidates(); -1 == "no pick yet"
 	groupFilter   string // "" = All; otherwise repo / cwd basename
+	// groupEditProject switches the editingGroup prompt (input + picker
+	// of existing names) from the tab group (T) to the project (p).
+	groupEditProject bool
 	// groupSel remembers the selected session ID per group so switching
 	// tabs returns the cursor to where the operator left it.
 	groupSel map[string]string
@@ -167,10 +170,6 @@ type model struct {
 	// to bulk-archive the current tab; the next keystroke is treated as
 	// the y/n confirmation rather than a normal shortcut.
 	awaitGroupArchiveConfirm bool
-	// awaitSummaryConfirm is the same gate for the 's' summarize
-	// shortcut; spawning claude -p costs an API round trip so we don't
-	// want it to fire on a typo.
-	awaitSummaryConfirm bool
 	// awaitRestartSessionConfirm gates ctrl+r (restart the hosted claude).
 	awaitRestartSessionConfirm bool
 	// awaitTitleGenConfirm is the ctrl+t banner: y titles titleGenSel,
@@ -178,7 +177,7 @@ type model struct {
 	awaitTitleGenConfirm bool
 	titleGenSel          string
 	titleGenRecent       []string
-	// titleWatch is summaryWatch for ctrl+t batches (watchTitles).
+	// titleWatch holds the sessions of ctrl+t batches this TUI started (watchTitles).
 	titleWatch map[string]struct{}
 
 	// awaitMkdirConfirm guards the mkdir step when the operator hits
@@ -219,14 +218,6 @@ type model struct {
 	// serverMode indicates whether the ccdash daemon was already running
 	// (ServerModeExisting) or was spawned by this TUI launch (ServerModeSpawned).
 	serverMode ServerMode
-
-	// summaryWatch holds session ids whose summarize THIS TUI kicked off
-	// and whose completion hasn't been flashed yet. The sessionsMsg
-	// handler (watchSummaries) flashes the footer on the running→done /
-	// running→error transition even when the row isn't selected —
-	// restoring the completion feedback the pre-Store summaryDoneMsg flow
-	// used to give.
-	summaryWatch map[string]struct{}
 
 	// animTick advances on every animTickMsg (~150 ms). Drives the spinner
 	// frame for active rows so the operator can tell at a glance which
@@ -294,6 +285,9 @@ type model struct {
 
 	restartConfirm   bool
 	restartRequested bool
+	// helpOpen shows the `?` key list (help.go).
+	helpOpen   bool
+	helpScroll int
 	// Skill picker state (see skillpicker.go).
 	editingSkill bool
 	skillBuffer  string
@@ -325,7 +319,6 @@ func newModel(ctx context.Context, st store.Store, remote RemoteInfo) *model {
 		remote:         remote,
 		settings:       settings.Defaults(),
 		pendingPTYKeys: map[int]string{},
-		summaryWatch:   map[string]struct{}{},
 		titleWatch:     map[string]struct{}{},
 		ptyAlive:       map[string]bool{},
 		liveCache:      map[string]*liveScreen{},
@@ -753,8 +746,6 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// freshly-spawned PTY so the server can alias the ptyKey to the
 		// real sessionID, enabling reattach by sessionID on next Enter.
 		m.promotePTYKeys()
-		// Flash the footer when a summarize this TUI kicked off completes.
-		m.watchSummaries()
 		m.watchTitles()
 		// If the tab the operator was looking at vanished (its last
 		// session got archived, removed, or moved to a different tab),
@@ -984,13 +975,6 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.flash = fmt.Sprintf("generating %d title(s)…", len(msg.sessionIDs))
 		return m, m.refresh()
-	case summaryKickedMsg:
-		// The store flipped summary_status to "running" before this fired,
-		// so registering the watch now can't mistake a stale done/error for
-		// the new result.
-		m.summaryWatch[msg.sessionID] = struct{}{}
-		m.flash = "summarizing…"
-		return m, m.refresh()
 	case transcriptLoadedMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -1086,6 +1070,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.restartConfirm {
 		return m.handleKeyRestartConfirm(msg)
 	}
+	if m.helpOpen {
+		return m.handleKeyHelp(msg)
+	}
 	if m.dupConfirm {
 		return m.handleKeyDupConfirm(msg)
 	}
@@ -1136,16 +1123,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.restartSessionCurrent()
 		default:
 			m.flash = "restart cancelled"
-			return m, nil
-		}
-	}
-	if m.awaitSummaryConfirm {
-		m.awaitSummaryConfirm = false
-		switch msg.String() {
-		case "y", "Y":
-			return m, m.summarizeCurrent()
-		default:
-			m.flash = "summary cancelled"
 			return m, nil
 		}
 	}
@@ -1319,24 +1296,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.startTitleEdit()
 	case "T":
 		return m, m.startGroupEdit()
+	case "p":
+		return m, m.startProjectEdit()
+	case "P":
+		return m, m.rerollProjectColor()
 	case "ctrl+t":
 		m.startTitleGen()
 		return m, nil
-	case "s":
-		if !m.settings.SummaryEnabled {
-			m.flash = "summarize is OFF (settings ',')"
-			return m, nil
-		}
-		if len(m.sessions) == 0 {
-			return m, nil
-		}
-		s := m.sessions[m.selSess]
-		title := s.DisplayTitle()
-		if title == "" {
-			title = shortID(s.SessionID)
-		}
-		m.awaitSummaryConfirm = true
-		m.flash = fmt.Sprintf("run claude -p summary on '%s'? press 'y' to confirm", shorten(title, 60))
+	case "?":
+		m.helpOpen = true
+		m.helpScroll = 0
 		return m, nil
 	case ",":
 		m.pane = paneSettings
@@ -1445,6 +1414,7 @@ func (m *model) applyGroupFilter() {
 		}
 		src = out
 	}
+	src = projectsFirst(src)
 	if m.settings.NewestAtBottom {
 		// Reverse a copy: with no filter active src still aliases
 		// m.allSessions, and reversing that in place would flip the
@@ -1457,6 +1427,47 @@ func (m *model) applyGroupFilter() {
 	m.sessions = src
 }
 
+// projectsFirst moves the sessions that belong to a project to the newest
+// end of the list (the top; the bottom with newest_at_bottom, since the
+// caller reverses afterwards), one block per project: the project with the
+// most recent activity first, its sessions newest first. Everything else
+// keeps its order (favorites, then by date). Returns a new slice when it
+// reorders anything.
+func projectsFirst(src []mdl.Session) []mdl.Session {
+	latest := map[string]time.Time{}
+	for _, s := range src {
+		if s.Project == "" {
+			continue
+		}
+		if t, ok := latest[s.Project]; !ok || s.LastSeen.After(t) {
+			latest[s.Project] = s.LastSeen
+		}
+	}
+	if len(latest) == 0 {
+		return src
+	}
+	var in, rest []mdl.Session
+	for _, s := range src {
+		if s.Project != "" {
+			in = append(in, s)
+		} else {
+			rest = append(rest, s)
+		}
+	}
+	sort.SliceStable(in, func(i, j int) bool {
+		a, b := in[i], in[j]
+		if a.Project != b.Project {
+			la, lb := latest[a.Project], latest[b.Project]
+			if !la.Equal(lb) {
+				return la.After(lb)
+			}
+			return a.Project < b.Project
+		}
+		return a.LastSeen.After(b.LastSeen)
+	})
+	return append(in, rest...)
+}
+
 // sessionMatchesQuery returns true when q (lower-cased) appears in any of
 // the human-readable fields of s. We don't search payloads or transcripts
 // to keep the per-keystroke cost predictable.
@@ -1466,7 +1477,7 @@ func sessionMatchesQuery(s mdl.Session, q string) bool {
 	}
 	for _, f := range []string{
 		s.DisplayTitle(), s.UserGroup, s.Repo, s.Cwd, s.Branch,
-		s.Summary, s.SessionID,
+		s.Project, s.SessionID,
 	} {
 		if strings.Contains(strings.ToLower(f), q) {
 			return true
@@ -1793,8 +1804,8 @@ func (m *model) mouseInRightPane(mm tea.Mouse) bool {
 }
 
 // tailHalfPage approximates half the right pane's visible height. We don't
-// know the exact pane size at key-handler time (it depends on the summary
-// section, approval section, and header), so we use half the terminal
+// know the exact pane size at key-handler time (it depends on the approval
+// section and header), so we use half the terminal
 // height as a reasonable upper bound. The scroll is clamped at render
 // time so over-shooting is harmless.
 func (m *model) tailHalfPage() int {
@@ -1805,69 +1816,6 @@ func (m *model) tailHalfPage() int {
 	return step
 }
 
-// summaryKickedMsg fires when the store acknowledged a summarize kickoff.
-// The Update handler flashes the footer and registers the session in
-// summaryWatch so the regular sessions poll can flash again on the
-// running→done/error transition (see the sessionsMsg handler).
-type summaryKickedMsg struct{ sessionID string }
-
-// summarizeCurrent kicks off the store's `claude -p` summary flow for the
-// selected session and returns as soon as that kick is acknowledged — the
-// store (Local or Remote) flips summary_status to "running" synchronously
-// on its end, so the next refresh() tick already shows the in-progress
-// indicator without the TUI writing anything itself.
-func (m *model) summarizeCurrent() tea.Cmd {
-	if len(m.sessions) == 0 {
-		return nil
-	}
-	s := m.sessions[m.selSess]
-	if s.TranscriptPath == "" {
-		m.flash = "no transcript path recorded for this session"
-		return nil
-	}
-	sid := s.SessionID
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
-		defer cancel()
-		if err := m.store.Summarize(ctx, sid); err != nil {
-			return attachDoneMsg{err: fmt.Errorf("summarize: %w", err)}
-		}
-		return summaryKickedMsg{sessionID: sid}
-	}
-}
-
-// watchSummaries scans freshly-polled session rows for the completion of
-// any summarize this TUI kicked off (summaryWatch) and surfaces the result
-// in the footer flash — even when the session isn't the selected row. The
-// kickoff set summary_status to "running" before summaryKickedMsg was
-// emitted, so any done/error we observe afterwards is the new result, not
-// a stale one from a previous run.
-func (m *model) watchSummaries() {
-	if len(m.summaryWatch) == 0 {
-		return
-	}
-	for sid := range m.summaryWatch {
-		for _, s := range m.allSessions {
-			if s.SessionID != sid {
-				continue
-			}
-			switch s.SummaryStatus {
-			case "done":
-				m.flash = "summary updated (" + shortID(sid) + ")"
-				delete(m.summaryWatch, sid)
-			case "error":
-				detail := strings.TrimSpace(s.Summary)
-				if detail == "" {
-					detail = "(no detail)"
-				}
-				m.flash = "summary failed: " + shorten(detail, 80)
-				delete(m.summaryWatch, sid)
-			}
-			break
-		}
-	}
-}
-
 // handleKeyTitleEdit consumes keystrokes while the rename input is active.
 // We avoid the larger key map here so typed letters land in the buffer
 // rather than triggering global shortcuts.
@@ -1875,7 +1823,10 @@ func (m *model) handleKeyTitleEdit(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Code == tea.KeyEnter:
 		var cmd tea.Cmd
-		if m.editingGroup {
+		if m.editingGroup && m.groupEditProject {
+			cmd = m.commitProjectEdit()
+			m.editingGroup = false
+		} else if m.editingGroup {
 			cmd = m.commitGroupEdit()
 			m.editingGroup = false
 		} else {
@@ -2078,26 +2029,81 @@ func (m *model) startGroupEdit() tea.Cmd {
 		return nil
 	}
 	m.editingGroup = true
+	m.groupEditProject = false
 	m.titleBuffer = m.sessions[m.selSess].UserGroup
 	m.groupCandIdx = -1
 	return nil
 }
 
-// filteredGroupCandidates returns the unique user_group values currently
+// startProjectEdit opens the project prompt (p) for the selected session:
+// type a new name or pick an existing project; empty takes it out.
+func (m *model) startProjectEdit() tea.Cmd {
+	if len(m.sessions) == 0 || m.sessions[m.selSess].Num <= 0 {
+		return nil
+	}
+	m.editingGroup = true
+	m.groupEditProject = true
+	m.titleBuffer = m.sessions[m.selSess].Project
+	m.groupCandIdx = -1
+	return nil
+}
+
+func (m *model) commitProjectEdit() tea.Cmd {
+	if len(m.sessions) == 0 {
+		return nil
+	}
+	sid := m.sessions[m.selSess].SessionID
+	project := strings.TrimSpace(m.titleBuffer)
+	return func() tea.Msg {
+		if err := m.store.SetProject(m.ctx, sid, project); err != nil {
+			return attachDoneMsg{err: err}
+		}
+		if project == "" {
+			return attachDoneMsg{msg: "removed " + shortID(sid) + " from its project"}
+		}
+		return attachDoneMsg{msg: "project: " + project}
+	}
+}
+
+// rerollProjectColor (P) gives the selected session's project a new color
+// that keeps apart from the other projects'.
+func (m *model) rerollProjectColor() tea.Cmd {
+	if len(m.sessions) == 0 {
+		return nil
+	}
+	project := m.sessions[m.selSess].Project
+	if project == "" {
+		m.flash = "not in a project — p puts it in one"
+		return nil
+	}
+	return func() tea.Msg {
+		if err := m.store.SetProjectColor(m.ctx, project, "random"); err != nil {
+			return attachDoneMsg{err: err}
+		}
+		return attachDoneMsg{msg: "new color for project " + project}
+	}
+}
+
+// filteredGroupCandidates returns the unique user_group (or, for the
+// project prompt, project) values currently
 // in use across the unfiltered session set, narrowed by case-insensitive
 // prefix match against the input buffer.
 func (m *model) filteredGroupCandidates() []string {
 	seen := map[string]struct{}{}
 	var all []string
 	for _, s := range m.allSessions {
-		if s.UserGroup == "" {
+		v := s.UserGroup
+		if m.groupEditProject {
+			v = s.Project
+		}
+		if v == "" {
 			continue
 		}
-		if _, ok := seen[s.UserGroup]; ok {
+		if _, ok := seen[v]; ok {
 			continue
 		}
-		seen[s.UserGroup] = struct{}{}
-		all = append(all, s.UserGroup)
+		seen[v] = struct{}{}
+		all = append(all, v)
 	}
 	// Stable sort so the picker doesn't jiggle between renders.
 	for i := 0; i < len(all); i++ {
@@ -2682,6 +2688,12 @@ func (m *model) View() tea.View {
 	if m.restartConfirm {
 		confirmBox(m.restartBox())
 	}
+	if m.helpOpen {
+		box := m.helpBox()
+		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
+		out = overlay(out, box, max(0, (m.width-bw)/2), max(1, (m.height-bh)/2))
+		v.Cursor = nil
+	}
 	if m.editingSkill {
 		box, cx, cy := m.skillPickerBox()
 		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
@@ -2860,7 +2872,7 @@ func (m *model) renderHeader() string {
 }
 
 func (m *model) renderFooter() string {
-	if m.awaitGroupArchiveConfirm || m.awaitSummaryConfirm || m.awaitMkdirConfirm || m.awaitTitleGenConfirm || m.awaitRestartSessionConfirm {
+	if m.awaitGroupArchiveConfirm || m.awaitMkdirConfirm || m.awaitTitleGenConfirm || m.awaitRestartSessionConfirm {
 		// y/n confirmation lands in a full-width yellow banner instead
 		// of the dim flash so operators don't miss the cue.
 		banner := confirmBannerStyle.Width(m.width).Render(m.flash)
@@ -2883,6 +2895,9 @@ func (m *model) renderFooter() string {
 	}
 	if m.editingGroup {
 		prompt := "tab: " + m.titleBuffer + "▏"
+		if m.groupEditProject {
+			prompt = "project: " + m.titleBuffer + "▏"
+		}
 		hint := subtitleStyle.Render("↑↓ pick · enter assign · esc cancel · empty=clear")
 		cands := m.filteredGroupCandidates()
 		if len(cands) == 0 {
@@ -2899,13 +2914,13 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  g/G top/end  h/l tabs  / search  n new  S skill  </> resize  enter attach  a/A/d allow/keep/deny  s sum  f fav  c/C color/random  ctrl+r restart  ! needs-you  t/T rename/group  ctrl+t auto-title  x/X arch  ctrl+x arch-group  o trans  , settings  q quit"
+	keys := "↑/↓ sel  h/l tabs  / search  enter open  n new  a/A/d allow/keep/deny  p project  t rename  ctrl+t titles  f fav  x/X arch  ! needs-you  , settings  ? help  q quit"
 	if m.pane == paneSessions {
 		if live := m.liveForCurrent(); live != nil && !live.exited {
 			if m.liveFocus {
 				keys = "keys → claude  ctrl+] / ctrl+d back to dashboard  (mouse wheel scrolls claude)"
 			} else {
-				keys = "↑/↓ sel  enter / ctrl+] type into claude  F fullscreen  a/A/d allow/keep/deny  o trans  , settings  q quit"
+				keys = "↑/↓ sel  enter/ctrl+] type into claude  F fullscreen  a/A/d allow/keep/deny  p project  t rename  ctrl+t titles  x arch  , settings  ? help  q quit"
 			}
 		}
 	}
@@ -2919,7 +2934,7 @@ func (m *model) renderFooter() string {
 		}
 	}
 	if m.showArchived {
-		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  q quit"
+		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  ? help  q quit"
 	}
 	if m.pane == paneTranscript {
 		keys = "↑/↓ scroll  pgup/pgdn page  g/G top/end  r reload  esc/q back"
@@ -2927,6 +2942,7 @@ func (m *model) renderFooter() string {
 	if m.pane == paneReleaseNotes {
 		keys = "↑/↓ scroll  pgup/pgdn page  g/G top/end  y install  esc/q back"
 	}
+	keys = fitKeys(keys, m.width)
 	if m.err != nil {
 		return errStyle.Render("error: "+m.err.Error()) + "\n" + footerStyle.Render(keys)
 	}
@@ -3511,23 +3527,42 @@ func (m *model) renderSessionsList(width, height int) string {
 
 	now := time.Now()
 	var rows []rowEntry
+	// Project members carry a one-cell gutter in the project's color; the
+	// column is reserved on every row while any project is in view so the
+	// rows stay aligned.
+	stats := projectStats(m.sessions)
+	rowW := width
+	if len(stats) > 0 {
+		rowW--
+	}
 	prevBucket := ""
 	for i, s := range m.sessions {
 		bucket := bucketFor(s, now)
 		if bucket != prevBucket {
-			label := bucket
-			if bucket == bucketFavorites {
-				label = "★ " + bucket
+			var header string
+			switch {
+			case s.Project != "":
+				header = renderProjectHeader(s, stats[s.Project], width)
+			case bucket == bucketFavorites:
+				header = groupHeaderStyle.Render(padRight("★ "+bucket, width))
+			default:
+				header = groupHeaderStyle.Render(padRight(bucket, width))
 			}
-			rows = append(rows, rowEntry{
-				lines:      []string{groupHeaderStyle.Render(padRight(label, width))},
-				sessionIdx: -1,
-			})
+			rows = append(rows, rowEntry{lines: []string{header}, sessionIdx: -1})
 			prevBucket = bucket
 		}
-		row := m.renderSessionRow(s, i == m.selSess, width)
+		row := m.renderSessionRow(s, i == m.selSess, rowW)
 		// renderSessionRow returns a 2-line block ending with "\n"; split.
 		lines := strings.Split(strings.TrimRight(row, "\n"), "\n")
+		if len(stats) > 0 {
+			gutter := " "
+			if s.Project != "" {
+				gutter = lipgloss.NewStyle().Background(lipgloss.Color(mdl.ProjectColorOf(s.Project, s.ProjectColor))).Render(" ")
+			}
+			for k := range lines {
+				lines[k] = gutter + lines[k]
+			}
+		}
 		rows = append(rows, rowEntry{lines: lines, sessionIdx: i})
 	}
 
@@ -3592,10 +3627,66 @@ func (m *model) renderSessionsList(width, height int) string {
 
 const bucketFavorites = "Favorites"
 
-// bucketFor returns the group label that a session belongs to. Favorites
-// always go to the top regardless of date; everything else is bucketed by
-// last_seen.
+// projectStat is what a project header shows about its sessions in view.
+type projectStat struct {
+	total, running, needsYou int
+	latest                   time.Time
+}
+
+// projectStats tallies the sessions of each project in ss.
+func projectStats(ss []mdl.Session) map[string]projectStat {
+	out := map[string]projectStat{}
+	for _, s := range ss {
+		if s.Project == "" {
+			continue
+		}
+		st := out[s.Project]
+		st.total++
+		if s.Status == mdl.StatusActive || s.Status == mdl.StatusIdle {
+			st.running++
+		}
+		if s.Attention == mdl.AttentionNeedsYou {
+			st.needsYou++
+		}
+		if s.LastSeen.After(st.latest) {
+			st.latest = s.LastSeen
+		}
+		out[s.Project] = st
+	}
+	return out
+}
+
+// renderProjectHeader draws a project's heading as a full-width band in the
+// project's color — louder than the gray date headings and the sessions'
+// one-cell bars, so the project blocks read as one unit.
+func renderProjectHeader(s mdl.Session, st projectStat, width int) string {
+	bg := mdl.ProjectColorOf(s.Project, s.ProjectColor)
+	ink := mdl.InkOn(bg)
+	band := lipgloss.NewStyle().Background(lipgloss.Color(bg)).Foreground(lipgloss.Color(ink))
+	meta := fmt.Sprintf("%d sessions", st.total)
+	if st.running > 0 {
+		meta += fmt.Sprintf(" · %d running", st.running)
+	}
+	if st.needsYou > 0 {
+		meta += fmt.Sprintf(" · %d needs you", st.needsYou)
+	}
+	name := " PROJECT  " + s.Project + "  "
+	room := width - runewidth.StringWidth(name)
+	if room < 0 {
+		return band.Bold(true).Render(runewidth.Truncate(name, width, "…"))
+	}
+	meta = runewidth.Truncate(meta, room, "…")
+	return band.Bold(true).Render(name) + band.Render(padRight(meta, room))
+}
+
+// bucketFor returns the group label that a session belongs to. Project
+// members are grouped by project (projectsFirst puts them at the newest
+// end); favorites go to the top regardless of date; everything else is
+// bucketed by last_seen.
 func bucketFor(s mdl.Session, now time.Time) string {
+	if s.Project != "" {
+		return "\x00project:" + s.Project
+	}
 	if s.Favorite {
 		return bucketFavorites
 	}
@@ -3713,12 +3804,6 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		}
 		parts = append(parts, pendingStyle.Render("? "+shorten(reason, 60)))
 	}
-	switch s.SummaryStatus {
-	case "running":
-		parts = append(parts, pendingStyle.Render("⏳ summarizing"))
-	case "error":
-		parts = append(parts, statusStop.Render("✗ summary error"))
-	}
 	switch s.TitleStatus {
 	case "running":
 		parts = append(parts, pendingStyle.Render("⏳ titling"))
@@ -3747,8 +3832,7 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-visible)
 }
 
-// renderEventsList renders the right pane: a live transcript tail (with
-// the cached summary inserted inline at its generation time) and a
+// renderEventsList renders the right pane: a live transcript tail and a
 // pending-approval section pinned to the bottom whenever the selected
 // session has any approvals waiting.
 func (m *model) renderEventsList(width, height int) string {
@@ -3809,71 +3893,16 @@ func (m *model) approvalBlock(width, height int) (section string, lines int) {
 	return section, lines
 }
 
-// renderSummaryBlock renders the summary as a transcript-flavored block:
-// labelled row + body lines indented and styled as a system note. Returns
-// nil when there's nothing to show. Used both for the chronological inline
-// insertion and the running/error placeholders.
-func (m *model) renderSummaryBlock(width int) []string {
-	if len(m.sessions) == 0 {
-		return nil
-	}
-	s := m.sessions[m.selSess]
-	switch s.SummaryStatus {
-	case "running":
-		return []string{pendingStyle.Render("⏳ summary in progress…")}
-	case "error":
-		body := s.Summary
-		if body == "" {
-			body = "(no detail)"
-		}
-		return []string{
-			statusStop.Render("✗ summary error"),
-			subtitleStyle.Render("  " + shorten(body, width-3)),
-		}
-	case "done":
-		// fall through to render
-	default:
-		return nil
-	}
-	if s.Summary == "" {
-		return nil
-	}
-	age := summarize.SummaryAge(s.SummaryAt)
-	header := titleStyle.Render("summary") + "  " + subtitleStyle.Render(age)
-	bodyWidth := width - 2
-	if bodyWidth < 20 {
-		bodyWidth = 20
-	}
-	out := []string{header}
-	for _, raw := range strings.Split(strings.TrimSpace(s.Summary), "\n") {
-		for _, chunk := range wrapToWidth(raw, bodyWidth) {
-			out = append(out, "  "+chunk)
-		}
-	}
-	return out
-}
-
-// renderTranscriptTail builds the transcript line stream (including the
-// inline summary) and returns the visible window for the given height,
-// honoring the operator's tailScroll offset. The summary is inserted
-// chronologically: the first transcript message whose timestamp is after
-// SummaryAt pushes the summary block in just before it. New activity
-// landing later naturally accumulates below the summary, so the summary
-// scrolls up off-screen as the conversation continues — same way an old
-// USER prompt would.
+// renderTranscriptTail builds the transcript line stream and returns the
+// visible window for the given height, honoring the operator's tailScroll
+// offset.
 func (m *model) renderTranscriptTail(width, height int) string {
-	if len(m.tailMessages) == 0 && m.summaryAvailable() == false {
+	if len(m.tailMessages) == 0 {
 		return subtitleStyle.Render("(no messages yet)")
 	}
 	bodyWidth := width - 1
 	if bodyWidth < 20 {
 		bodyWidth = 20
-	}
-
-	summaryBlock := m.renderSummaryBlock(bodyWidth)
-	summaryAt := time.Time{}
-	if len(m.sessions) > 0 {
-		summaryAt = m.sessions[m.selSess].SummaryAt
 	}
 
 	var lines []string
@@ -3887,26 +3916,13 @@ func (m *model) renderTranscriptTail(width, height int) string {
 		lines = append(lines, block...)
 	}
 
-	summaryInserted := summaryBlock == nil
 	for i, msg := range m.tailMessages {
-		// Insert the summary just before the first message that came
-		// after generation. Running/error placeholders land at the
-		// end of the buffer instead — they don't have a useful
-		// SummaryAt yet.
-		if !summaryInserted && !summaryAt.IsZero() && !msg.Timestamp.IsZero() && msg.Timestamp.After(summaryAt) {
-			addBlock(summaryBlock, true)
-			summaryInserted = true
-		}
 		// Tool calls and their results render as one line each; keep a
 		// run of them together as a single block.
 		leadBlank := i > 0 && msg.Kind != transcript.KindToolResult &&
 			!(msg.Kind == transcript.KindToolUse && isToolKind(m.tailMessages[i-1].Kind))
 		addBlock(renderPreviewMessage(msg, bodyWidth), leadBlank)
 	}
-	if !summaryInserted {
-		addBlock(summaryBlock, true)
-	}
-
 	if height < 1 {
 		height = 1
 	}
@@ -3930,17 +3946,6 @@ func (m *model) renderTranscriptTail(width, height int) string {
 		start = 0
 	}
 	return strings.Join(lines[start:end], "\n")
-}
-
-// summaryAvailable reports whether the selected session has anything to
-// surface in the summary slot — used to decide between the "no messages
-// yet" placeholder and rendering an empty list with just a summary.
-func (m *model) summaryAvailable() bool {
-	if len(m.sessions) == 0 {
-		return false
-	}
-	s := m.sessions[m.selSess]
-	return s.SummaryStatus != "" && (s.SummaryStatus != "done" || s.Summary != "")
 }
 
 // approvalsForSelected returns pending approvals for the currently selected

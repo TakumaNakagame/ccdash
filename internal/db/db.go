@@ -86,6 +86,11 @@ func (d *DB) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_approvals_session ON approvals(session_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)`,
+		`CREATE TABLE IF NOT EXISTS projects (
+			name TEXT PRIMARY KEY,
+			color TEXT,
+			created_at INTEGER NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS settings (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL,
@@ -122,6 +127,8 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN attention_reason TEXT`,
 		`ALTER TABLE sessions ADD COLUMN attention_at INTEGER`,
 		`ALTER TABLE sessions ADD COLUMN color TEXT`,
+		`ALTER TABLE sessions ADD COLUMN project TEXT`,
+		`ALTER TABLE sessions ADD COLUMN auto_archived INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -253,7 +260,13 @@ func (d *DB) upsertSession(ctx context.Context, s *model.Session, mode lastSeenM
 			title = COALESCE(NULLIF(excluded.title,''), sessions.title),
 			last_seen = CASE ? WHEN 1 THEN excluded.last_seen WHEN 2 THEN sessions.last_seen ELSE MAX(excluded.last_seen, sessions.last_seen) END,
 			status = excluded.status,
-			account = COALESCE(NULLIF(excluded.account,''), sessions.account)
+			account = COALESCE(NULLIF(excluded.account,''), sessions.account),
+			archived = CASE WHEN COALESCE(sessions.auto_archived,0) = 1
+			                 AND (excluded.status IN ('active','idle') OR excluded.last_seen > sessions.last_seen)
+			                THEN 0 ELSE sessions.archived END,
+			auto_archived = CASE WHEN COALESCE(sessions.auto_archived,0) = 1
+			                 AND (excluded.status IN ('active','idle') OR excluded.last_seen > sessions.last_seen)
+			                THEN 0 ELSE sessions.auto_archived END
 	`,
 		s.SessionID, s.Cwd, s.Repo, s.Branch, s.Commit,
 		s.WrapperPID, s.ProcPID, s.Pane,
@@ -265,7 +278,9 @@ func (d *DB) upsertSession(ctx context.Context, s *model.Session, mode lastSeenM
 }
 
 func (d *DB) TouchSession(ctx context.Context, sessionID string, status model.SessionStatus) error {
-	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET last_seen = ?, status = ? WHERE session_id = ?`,
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET last_seen = ?, status = ?,
+		archived = CASE WHEN COALESCE(auto_archived,0) = 1 THEN 0 ELSE archived END, auto_archived = 0
+		WHERE session_id = ?`,
 		time.Now().UTC().Unix(), string(status), sessionID)
 	return err
 }
@@ -377,14 +392,14 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.transcript_path,''), COALESCE(s.model,''),
 		       COALESCE(s.title,''), COALESCE(s.custom_title,''), COALESCE(s.user_group,''),
 		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
-		       COALESCE(s.summary,''), COALESCE(s.summary_status,''), COALESCE(s.summary_at,0),
+		       COALESCE(s.project,''), COALESCE(p.color,''),
 		       s.first_seen, s.last_seen, s.status,
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
 		       COALESCE(s.account,''),
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
 		       COALESCE(s.color,'')
-		FROM sessions s
+		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE COALESCE(s.archived,0) = ?
 		ORDER BY COALESCE(s.favorite,0) DESC, s.last_seen DESC
 	`, archivedInt)
@@ -395,7 +410,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 	var out []model.Session
 	for rows.Next() {
 		var s model.Session
-		var first, last, sumAt, genAt, attAt int64
+		var first, last, genAt, attAt int64
 		var status string
 		var arch, fav int
 		if err := rows.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -404,7 +419,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.TranscriptPath, &s.Model,
 			&s.Title, &s.CustomTitle, &s.UserGroup,
 			&arch, &fav,
-			&s.Summary, &s.SummaryStatus, &sumAt,
+			&s.Project, &s.ProjectColor,
 			&first, &last, &status, &s.PendingCount, &s.Account,
 			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
 			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride); err != nil {
@@ -419,9 +434,6 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		s.Status = model.SessionStatus(status)
 		s.Archived = arch != 0
 		s.Favorite = fav != 0
-		if sumAt > 0 {
-			s.SummaryAt = time.Unix(sumAt, 0).UTC()
-		}
 		out = append(out, s)
 	}
 	return out, rows.Err()
@@ -439,18 +451,18 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       COALESCE(s.transcript_path,''), COALESCE(s.model,''),
 		       COALESCE(s.title,''), COALESCE(s.custom_title,''), COALESCE(s.user_group,''),
 		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
-		       COALESCE(s.summary,''), COALESCE(s.summary_status,''), COALESCE(s.summary_at,0),
+		       COALESCE(s.project,''), COALESCE(p.color,''),
 		       s.first_seen, s.last_seen, s.status,
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
 		       COALESCE(s.account,''),
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
 		       COALESCE(s.color,'')
-		FROM sessions s
+		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE s.session_id = ?
 	`, sessionID)
 	var s model.Session
-	var first, last, sumAt, genAt, attAt int64
+	var first, last, genAt, attAt int64
 	var status string
 	var arch, fav int
 	err := row.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -459,7 +471,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&s.TranscriptPath, &s.Model,
 		&s.Title, &s.CustomTitle, &s.UserGroup,
 		&arch, &fav,
-		&s.Summary, &s.SummaryStatus, &sumAt,
+		&s.Project, &s.ProjectColor,
 		&first, &last, &status, &s.PendingCount, &s.Account,
 		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
 		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride)
@@ -474,9 +486,6 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 	s.Status = model.SessionStatus(status)
 	s.Archived = arch != 0
 	s.Favorite = fav != 0
-	if sumAt > 0 {
-		s.SummaryAt = time.Unix(sumAt, 0).UTC()
-	}
 	if genAt > 0 {
 		s.GenTitleAt = time.Unix(genAt, 0).UTC()
 	}
@@ -530,7 +539,7 @@ func (d *DB) SetArchived(ctx context.Context, sessionID string, archived bool) e
 	if archived {
 		v = 1
 	}
-	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET archived = ? WHERE session_id = ?`, v, sessionID)
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET archived = ?, auto_archived = 0 WHERE session_id = ?`, v, sessionID)
 	return err
 }
 
@@ -695,35 +704,92 @@ func (d *DB) SetUserGroup(ctx context.Context, sessionID, group string) error {
 	return err
 }
 
-// SetSummaryStatus marks a summary as in-progress / done / error without
-// touching the cached summary text. Used to surface "summarizing..." in
-// the list row while the background goroutine runs.
-func (d *DB) SetSummaryStatus(ctx context.Context, sessionID, status string) error {
-	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET summary_status = ? WHERE session_id = ?`, status, sessionID)
+// SetProject puts a session into an operator-named project ("" takes it
+// out). A project row is created on first use with a color that stands
+// apart from the other projects' (projects are drawn more prominently than
+// sessions, so their colors keep apart among themselves).
+func (d *DB) SetProject(ctx context.Context, sessionID, project string) error {
+	if project != "" {
+		if err := d.ensureProject(ctx, project); err != nil {
+			return err
+		}
+	}
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET project = NULLIF(?, '') WHERE session_id = ?`, project, sessionID)
 	return err
 }
 
-// SetSummary writes the summary text and updates status / timestamp in one
-// shot. Pass status "done" or "error" depending on the outcome.
-func (d *DB) SetSummary(ctx context.Context, sessionID, summary, status string) error {
-	_, err := d.sql.ExecContext(ctx, `
-		UPDATE sessions SET summary = ?, summary_status = ?, summary_at = ?
-		WHERE session_id = ?
-	`, summary, status, time.Now().UTC().Unix(), sessionID)
+func (d *DB) ensureProject(ctx context.Context, name string) error {
+	var n int
+	if err := d.sql.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE name = ?`, name).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	used, err := d.projectColors(ctx, "")
+	if err != nil {
+		return err
+	}
+	_, err = d.sql.ExecContext(ctx, `INSERT OR IGNORE INTO projects (name, color, created_at) VALUES (?, ?, ?)`,
+		name, model.PickColor(used, ""), time.Now().UTC().Unix())
 	return err
 }
 
-// SweepRunningSummaries flips any summary_status='running' row to 'error'.
-// Run on collector startup: the summarize goroutine lives in the collector
-// process, so a 'running' row at boot means a previous run died mid-flight
-// — without the sweep the list row would show a spinner forever.
-func (d *DB) SweepRunningSummaries(ctx context.Context) error {
-	_, err := d.sql.ExecContext(ctx, `
-		UPDATE sessions
-		SET summary = 'summarize interrupted (collector restarted)', summary_status = 'error', summary_at = ?
-		WHERE summary_status = 'running'
-	`, time.Now().UTC().Unix())
+// projectColors lists every project's color except skip's.
+func (d *DB) projectColors(ctx context.Context, skip string) ([]string, error) {
+	rows, err := d.sql.QueryContext(ctx, `SELECT COALESCE(color,'') FROM projects WHERE name <> ?`, skip)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		if c != "" {
+			out = append(out, c)
+		}
+	}
+	return out, rows.Err()
+}
+
+// SetProjectColor stores a project's color ("#rrggbb"), or with
+// ColorRandom re-rolls it against the other projects' colors.
+func (d *DB) SetProjectColor(ctx context.Context, project, color string) error {
+	if err := d.ensureProject(ctx, project); err != nil {
+		return err
+	}
+	if color == ColorRandom {
+		used, err := d.projectColors(ctx, project)
+		if err != nil {
+			return err
+		}
+		var cur string
+		_ = d.sql.QueryRowContext(ctx, `SELECT COALESCE(color,'') FROM projects WHERE name = ?`, project).Scan(&cur)
+		color = model.PickColor(used, cur)
+	}
+	_, err := d.sql.ExecContext(ctx, `UPDATE projects SET color = ? WHERE name = ?`, color, project)
 	return err
+}
+
+// AutoArchive archives sessions whose last activity is older than before:
+// not running, not favorites, not in a project (both are the operator's
+// "keep this" marks). Rows archived here carry auto_archived=1, so the
+// upsert brings them back as soon as the session is resumed. Returns how
+// many rows it archived.
+func (d *DB) AutoArchive(ctx context.Context, before time.Time) (int64, error) {
+	res, err := d.sql.ExecContext(ctx, `
+		UPDATE sessions SET archived = 1, auto_archived = 1
+		WHERE COALESCE(archived,0) = 0 AND COALESCE(favorite,0) = 0
+		  AND COALESCE(project,'') = ''
+		  AND status NOT IN ('active','idle')
+		  AND last_seen < ?`, before.UTC().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // SetTitleStatus marks title generation as running / error for the given
@@ -746,8 +812,8 @@ func (d *DB) SetGenTitle(ctx context.Context, sessionID, title string) error {
 	return err
 }
 
-// SweepRunningTitles is SweepRunningSummaries for title generation: a
-// 'running' row at collector startup belongs to a run that died with the
+// SweepRunningTitles flips title_status 'running' to 'error' at collector
+// startup: a 'running' row at collector startup belongs to a run that died with the
 // previous process.
 func (d *DB) SweepRunningTitles(ctx context.Context) error {
 	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET title_status = 'error' WHERE title_status = 'running'`)

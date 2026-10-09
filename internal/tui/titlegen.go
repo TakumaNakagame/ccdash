@@ -54,7 +54,7 @@ func titleable(s mdl.Session) bool {
 // startTitleGen opens the ctrl+t choice banner: y = selected, a = recent.
 func (m *model) startTitleGen() {
 	if !m.settings.SummaryEnabled {
-		m.flash = "summarize is OFF (settings ',') — title generation uses it too"
+		m.flash = "title generation is OFF (settings ',')"
 		return
 	}
 	var sel *mdl.Session

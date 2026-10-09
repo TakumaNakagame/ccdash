@@ -20,10 +20,12 @@ control over approvals.
 | **Live transcript** | Right pane streams the latest USER / CLAUDE / TOOL / RESULT exchanges with role-coloured blocks. Tail-reads only the last 256 KB so 30 MB transcripts scroll smoothly. |
 | **Per-session controls** | Rename, custom user-named group assignment, archive / unarchive, attach via `tmux switch-pane` or `claude --resume`. |
 | **Approvals** | When enabled, pending permission requests appear in a yellow banner; press `a` / `A` (keep) / `d` to allow / keep-allow-for-session / deny without leaving the dashboard. |
-| **Summarize** | `s` spawns `claude -p` against a redacted digest of the transcript and shows a 3-5 bullet summary inline. |
+| **Projects** | `p` puts sessions in an operator-named project: members move to the newest end of the list, one block per project under a full-width band in the project's color, each row with a color gutter. |
+| **Generated titles** | `ctrl+t` asks `claude -p` for short, ticket-style titles from a redacted digest of the transcript. |
+| **Auto-archive** | Once a day, sessions idle longer than N days (default 7) are archived — favorites, project members and running sessions are kept; resuming one brings it back. |
 | **Tabs** | Browser-style strip across the top filters by repo or operator-named group. Slides on overflow. |
-| **Search** | `/` filters the list by case-insensitive substring across title, tab, repo, summary, session id. |
-| **Settings page** | `,` opens a persisted preferences modal: layout (auto / vertical / horizontal), refresh rate, summary timeout, secure-mode toggles, and an "observation only" preset. |
+| **Search** | `/` filters the list by case-insensitive substring across title, tab, repo, project, session id. |
+| **Settings page** | `,` opens a persisted preferences modal: layout (auto / vertical / horizontal), refresh rate, title-generation timeout, auto-archive days, secure-mode toggles, and an "observation only" preset. |
 | **Self-update** | `ccdash update` pulls the latest GitHub release in place. |
 
 Hands-on walkthroughs:
@@ -121,10 +123,11 @@ ccdash --version               # report the current version
 | `c` / `C` | next color / re-roll for the session's bar (shared with the portal). Running sessions get a stored color that stands apart from the other running ones; `C` re-rolls by the same rule |
 | `ctrl+r` | restart the session's ccdash-hosted claude (kill + `claude --resume`), after `y` |
 | `!` | show only sessions that need you (`?`: approval, question, menu on screen) or finished a turn you haven't looked at (`✓`) |
+| `p` | put the session in a project (picker of existing names, `↑` `↓` to pick, empty = remove) |
+| `P` | re-roll the project's color (kept apart from other projects' colors) |
 | `x` | archive / unarchive |
 | `X` | toggle archive view (operator-archived sessions) |
 | `o` | full-screen transcript viewer |
-| `s` | run `claude -p` and cache a 3–5 bullet summary |
 | `ctrl+t` | generate short titles with `claude -p` — `y` for the selected session, `a` for the recent batch in one call |
 | `n` | start a new claude session (directory picker) |
 | `S` | run a skill / slash command in a new session |
@@ -136,6 +139,7 @@ ccdash --version               # report the current version
 | `/` | search across session metadata |
 | `,` | open the settings page |
 | `r` | force refresh |
+| `?` | help window listing every key (`j` / `k` scroll) |
 | `q` / `ctrl+c` | quit |
 
 #### Transcript modal (`o`)
@@ -179,8 +183,8 @@ can dial back ccdash's reach when they want pure observation:
 - **Approval blocking** — when off, ccdash never holds PermissionRequest
   hooks — Claude shows its own prompt as before, and the `a` / `A` / `d`
   shortcuts are disabled.
-- **Summarize via `claude -p`** — when off, `s` is disabled and no
-  digest leaves the host.
+- **Title generation via `claude -p`** — when off, `ctrl+t` is disabled
+  and no digest leaves the host.
 - **Attach (enter)** — when off, `enter` only shows session info, never
   spawns `claude --resume` or runs `tmux switch-client`.
 - **Auto-rewrite settings.json** — when off, server boot does *not*
@@ -337,8 +341,9 @@ ones from, and answer approvals in.
   pasted into the prompt as attachments. Older history loads on demand. A
   **Terminal** button switches to a full xterm.js view of the same PTY.
 - The session list mirrors the TUI: a newest-first view with date
-  sections, plus one tab per group; rename / group / favorite / archive /
-  summarize / title generation from a session's menu; skills and a first
+  sections, plus one tab per group; rename / group / project / favorite /
+  archive / title generation from a session's menu, with project bands and
+  project-tinted rows; skills and a first
   message for new sessions; the device's settings read-only.
 - **Needs-you board**: the portal's front page lists, across every device,
   sessions that need you (an approval, a question, a menu on screen),
@@ -392,12 +397,12 @@ every attempt, so no restart is needed.
 
 **What the hub may do on a device** is fixed by an allowlist in the
 device's collector (`internal/server/hub.go`): read sessions, approvals and
-transcripts; rename/group/archive sessions; start, type into, resize and
-stop ccdash-hosted PTYs (only while **Attach** is on); decide approvals
-(only while **Approval blocking** is on); list directories for the
-new-session picker (attach on). It can never reach the hook endpoints,
-`/shutdown`, or settings writes — so a compromised hub cannot switch the
-device's own safety toggles back on.
+transcripts; rename/group/archive sessions and set projects / project
+colors; start, type into, resize and stop ccdash-hosted PTYs (only while
+**Attach** is on); decide approvals (only while **Approval blocking** is
+on); list directories for the new-session picker (attach on). It can never
+reach the hook endpoints, `/shutdown`, or settings writes — so a compromised
+hub cannot switch the device's own safety toggles back on.
 
 **Read tokens (machine clients).** A bot or script that can't do a browser
 login can read the hub with `Authorization: Bearer <token>`. Configure the
@@ -488,10 +493,10 @@ mode) managing their own Claude Code sessions.
   server auto-rewrites the hook headers when it rotates.
 - Token-bucket rate limit on every authenticated route (50 QPS / 100
   burst) bounds the impact of runaway loops or scripted floods
-- Pattern-based masking on hook payloads / titles / summaries before
+- Pattern-based masking on hook payloads / titles before
   they reach the DB (Bearer tokens, `KEY=VALUE` env, AWS / GitHub /
   OpenAI / Anthropic key formats, URL credentials, etc.). The masking
-  matters mainly for the summarize feature (which does send a digest
+  matters mainly for title generation (which does send a digest
   over the network); on-disk Claude transcripts are unaffected.
 - The remote-mode transcript API resolves the file path from the
   session's DB row only — never from anything the client sends — so a
@@ -521,7 +526,7 @@ internal/tui/                   Bubble Tea UI
 internal/transcript/            ~/.claude/projects/*.jsonl parser + tail reader
 internal/discovery/             session-list discovery (sessions/<pid>.json + projects)
 internal/procmap/               PID ↔ session_id ↔ tmux pane mapping
-internal/summarize/             claude -p driver for the summary feature
+internal/summarize/             claude -p driver for generated titles (ctrl+t)
 internal/redact/                pattern-based secret masking
 internal/auth/                  loopback shared-token loader
 internal/settings/              persisted preferences (settings table + spec)

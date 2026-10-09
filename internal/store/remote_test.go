@@ -69,12 +69,27 @@ func newTestAPI(t *testing.T) *httptest.Server {
 	mux.HandleFunc("POST /api/sessions/{id}/group", authed(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("{}"))
 	}))
-	mux.HandleFunc("POST /api/sessions/{id}/summarize", authed(func(w http.ResponseWriter, r *http.Request) {
-		if r.PathValue("id") == "disabled" {
-			http.Error(w, "summarize is disabled", http.StatusForbidden)
+	mux.HandleFunc("POST /api/sessions/{id}/project", authed(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Project string `json:"project"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Project != "web" {
+			http.Error(w, "expected project=web", http.StatusBadRequest)
 			return
 		}
-		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	mux.HandleFunc("POST /api/projects/color", authed(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Project, Color string
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Project != "web" || body.Color != "random" {
+			http.Error(w, "bad body", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte("{}"))
 	}))
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", authed(func(w http.ResponseWriter, r *http.Request) {
 		mode := r.URL.Query().Get("mode")
@@ -211,19 +226,20 @@ func TestRemoteSettings(t *testing.T) {
 	}
 }
 
-func TestRemoteSummarize(t *testing.T) {
+func TestRemoteProject(t *testing.T) {
 	srv := newTestAPI(t)
 	defer srv.Close()
 	r := NewRemote(srv.URL, testToken)
 	ctx := context.Background()
 
-	if err := r.Summarize(ctx, "s1"); err != nil {
-		t.Fatalf("Summarize: %v", err)
+	if err := r.SetProject(ctx, "s1", "web"); err != nil {
+		t.Fatalf("SetProject: %v", err)
 	}
-	// Non-2xx path: server 403s a session named "disabled" to simulate the
-	// summary_enabled=off gate.
-	if err := r.Summarize(ctx, "disabled"); err == nil {
-		t.Fatal("expected an error when summarize is disabled server-side")
+	if err := r.SetProject(ctx, "s1", "other"); err == nil {
+		t.Fatal("expected the fake's 400 to surface")
+	}
+	if err := r.SetProjectColor(ctx, "web", "random"); err != nil {
+		t.Fatalf("SetProjectColor: %v", err)
 	}
 }
 

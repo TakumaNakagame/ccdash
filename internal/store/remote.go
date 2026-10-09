@@ -41,7 +41,7 @@ func NewRemote(baseURL, token string) *Remote {
 	}
 }
 
-// mutationTimeout caps small write requests (archive/favorite/title/group/
+// mutationTimeout caps small write requests (archive/favorite/title/group/project/
 // settings). Some of these run synchronously inside Bubble Tea's Update
 // (the settings page mutates via settings.Set inline), so a dead collector
 // must not freeze the UI longer than this. Reads and the summarize kick
@@ -162,6 +162,16 @@ func (r *Remote) SetUserGroup(ctx context.Context, sessionID, group string) erro
 		map[string]any{"group": group}, nil)
 }
 
+func (r *Remote) SetProject(ctx context.Context, sessionID, project string) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "project"), nil,
+		map[string]any{"project": project}, nil)
+}
+
+func (r *Remote) SetProjectColor(ctx context.Context, project, color string) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/projects/color", nil,
+		map[string]any{"project": project, "color": color}, nil)
+}
+
 // DecideApproval hits the same /approvals/{id}/decide route the embedded
 // collector has always exposed — it isn't under /api because it predates
 // remote mode and Local uses the identical route against its own loopback
@@ -198,17 +208,8 @@ func (r *Remote) AllSettings(ctx context.Context) (map[string]string, error) {
 	return all, nil
 }
 
-// Summarize only kicks off the server-side flow; the 10s budget covers the
-// round trip to start it (status flip to "running"), not the summarization
-// itself, which the server runs in its own background goroutine and reports
-// back through the session row (summary/summary_status), same as Local.
-func (r *Remote) Summarize(ctx context.Context, sessionID string) error {
-	return r.doJSON(ctx, 10*time.Second, http.MethodPost, sessionPath(sessionID, "summarize"), nil, nil, nil)
-}
-
 // GenerateTitles starts title generation on the collector host, which has
-// the claude binary and the transcripts; like Summarize it only waits for
-// the kickoff.
+// the claude binary and the transcripts; it only waits for the kickoff.
 func (r *Remote) GenerateTitles(ctx context.Context, sessionIDs []string) error {
 	return r.doJSON(ctx, 10*time.Second, http.MethodPost, "/api/titles", nil,
 		map[string]any{"sessionIds": sessionIDs}, nil)

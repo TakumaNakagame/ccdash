@@ -183,47 +183,60 @@ func TestAPISettings(t *testing.T) {
 	}
 }
 
-func TestAPISummarizeGatingAndNotFound(t *testing.T) {
+func TestAPIProject(t *testing.T) {
 	s, d, tok := newTestServer(t)
+	insertSession(t, d, "sess-1", "")
 
-	// Unknown session id → 404, never touches the filesystem.
-	rec := do(t, s, http.MethodPost, "/api/sessions/does-not-exist/summarize", tok, nil)
-	if rec.status != http.StatusNotFound {
-		t.Fatalf("unknown session: status = %d, want 404", rec.status)
+	rec := do(t, s, http.MethodPost, "/api/sessions/sess-1/project", tok, []byte(`{"project":" web "}`))
+	if rec.status != http.StatusOK {
+		t.Fatalf("project: status = %d body=%s", rec.status, rec.body)
 	}
+	got, _, _ := d.GetSession(context.Background(), "sess-1")
+	if got.Project != "web" || got.ProjectColor == "" {
+		t.Fatalf("project = %q color = %q", got.Project, got.ProjectColor)
+	}
+	rec = do(t, s, http.MethodPost, "/api/projects/color", tok, []byte(`{"project":"web","color":"#123456"}`))
+	if rec.status != http.StatusOK {
+		t.Fatalf("project color: status = %d body=%s", rec.status, rec.body)
+	}
+	got, _, _ = d.GetSession(context.Background(), "sess-1")
+	if got.ProjectColor != "#123456" {
+		t.Fatalf("project color = %q", got.ProjectColor)
+	}
+	rec = do(t, s, http.MethodPost, "/api/projects/color", tok, []byte(`{"project":"web","color":"red"}`))
+	if rec.status != http.StatusBadRequest {
+		t.Fatalf("bad color: status = %d, want 400", rec.status)
+	}
+	// The summary route is gone.
+	rec = do(t, s, http.MethodPost, "/api/sessions/sess-1/summarize", tok, nil)
+	if rec.status != http.StatusNotFound && rec.status != http.StatusMethodNotAllowed {
+		t.Fatalf("summarize: status = %d, want 404", rec.status)
+	}
+}
 
-	dir := t.TempDir()
-	transcriptPath := filepath.Join(dir, "sess-2.jsonl")
-	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user","message":{"role":"user","content":"hi"}}`+"\n"), 0o600); err != nil {
+func TestMaybeAutoArchiveOncePerDay(t *testing.T) {
+	s, d, _ := newTestServer(t)
+	ctx := context.Background()
+	old := &model.Session{SessionID: "old", Cwd: "/x", Status: model.StatusStopped, LastSeen: time.Now().AddDate(0, 0, -30)}
+	if err := d.UpsertSession(ctx, old); err != nil {
 		t.Fatal(err)
 	}
-	insertSession(t, d, "sess-2", transcriptPath)
-
-	// summary_enabled off → 403, and it must not have flipped summary_status.
-	if err := d.SetSetting(context.Background(), "summary_enabled", "0"); err != nil {
-		t.Fatal(err)
+	now := time.Now()
+	s.maybeAutoArchive(ctx, now)
+	if got, _, _ := d.GetSession(ctx, "old"); !got.Archived {
+		t.Fatal("old session not archived")
 	}
-	rec = do(t, s, http.MethodPost, "/api/sessions/sess-2/summarize", tok, nil)
-	if rec.status != http.StatusForbidden {
-		t.Fatalf("summary disabled: status = %d, want 403", rec.status)
+	// Same day: unarchived by hand, a second run leaves it alone.
+	_ = d.SetArchived(ctx, "old", false)
+	s.maybeAutoArchive(ctx, now)
+	if got, _, _ := d.GetSession(ctx, "old"); got.Archived {
+		t.Fatal("ran twice on the same day")
 	}
-
-	// summary_enabled on → 202 Accepted (the actual claude -p run happens
-	// async in a goroutine and isn't awaited here).
-	if err := d.SetSetting(context.Background(), "summary_enabled", "1"); err != nil {
-		t.Fatal(err)
-	}
-	rec = do(t, s, http.MethodPost, "/api/sessions/sess-2/summarize", tok, nil)
-	if rec.status != http.StatusAccepted {
-		t.Fatalf("summarize: status = %d body=%s", rec.status, rec.body)
-	}
-
-	// The row is now summary_status='running' — a second POST must be a
-	// deduplicated no-op that still answers 202 (summarize.Kickoff skips
-	// the spawn when a run is already in flight).
-	rec = do(t, s, http.MethodPost, "/api/sessions/sess-2/summarize", tok, nil)
-	if rec.status != http.StatusAccepted {
-		t.Fatalf("duplicate summarize: status = %d body=%s, want 202 no-op", rec.status, rec.body)
+	// Off: nothing happens even on a new day.
+	_ = d.SetSetting(ctx, "auto_archive_days", "0")
+	s.maybeAutoArchive(ctx, now.AddDate(0, 0, 1))
+	if got, _, _ := d.GetSession(ctx, "old"); got.Archived {
+		t.Fatal("archived while off")
 	}
 }
 

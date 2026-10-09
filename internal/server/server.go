@@ -95,13 +95,6 @@ func New(d *db.DB, addr string) *Server {
 		pending: map[int64]chan approvalDecision{},
 		ptyMap:  map[string]*ptyEntry{},
 	}
-	// The summarize goroutine lives in the collector process; a
-	// summary_status='running' row at startup means a previous run died
-	// mid-flight. Sweep it to 'error' so the list row doesn't show a
-	// spinner forever.
-	if err := d.SweepRunningSummaries(context.Background()); err != nil {
-		log.Printf("summary sweep: %v", err)
-	}
 	if err := d.SweepRunningTitles(context.Background()); err != nil {
 		log.Printf("title sweep: %v", err)
 	}
@@ -153,7 +146,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/title", wrap(s.handleAPITitle))
 	s.mux.HandleFunc("POST /api/sessions/{id}/group", wrap(s.handleAPIGroup))
 	s.mux.HandleFunc("POST /api/sessions/{id}/seen", wrap(s.handleAPISeen))
-	s.mux.HandleFunc("POST /api/sessions/{id}/summarize", wrap(s.handleAPISummarize))
+	s.mux.HandleFunc("POST /api/sessions/{id}/project", wrap(s.handleAPIProject))
+	s.mux.HandleFunc("POST /api/projects/color", wrap(s.handleAPIProjectColor))
 	s.mux.HandleFunc("POST /api/titles", wrap(s.handleAPITitles))
 	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
 	s.mux.HandleFunc("GET /api/sessions/{id}/usage", wrap(s.handleAPISessionUsage))
@@ -362,6 +356,8 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 		if err := s.db.AssignRunningColors(ctx); err != nil {
 			log.Printf("assign colors: %v", err)
 		}
+		// After the scan, so last_seen / status are current.
+		s.maybeAutoArchive(ctx, time.Now())
 	}()
 
 	accs, err := accounts.Load()
@@ -1079,36 +1075,46 @@ func (s *Server) handleAPIGroup(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, nil)
 }
 
-// handleAPISummarize kicks off the same claude -p flow the local TUI runs
-// (summarize.Kickoff — the shared implementation with store.Local), but on
-// the collector host: the server has the claude binary and the transcripts,
-// a remote TUI's host may have neither. The gate lives inside Kickoff — a
-// remote client bypasses the TUI's own "s is disabled" shortcut check, so
-// it has to be enforced where it actually matters. An already-running
-// summary makes Kickoff a no-op, so a double-tap still gets 202 without
-// stacking a second claude -p run.
-func (s *Server) handleAPISummarize(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAPIProject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	err := summarize.Kickoff(r.Context(), s.db, id)
-	switch {
-	case errors.Is(err, summarize.ErrDisabled):
-		http.Error(w, err.Error(), http.StatusForbidden)
+	var body struct {
+		Project string `json:"project"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
-	case errors.Is(err, summarize.ErrSessionNotFound):
-		http.NotFound(w, r)
-		return
-	case errors.Is(err, summarize.ErrNoTranscript):
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-		return
-	case err != nil:
+	}
+	if err := s.db.SetProject(r.Context(), id, strings.TrimSpace(body.Project)); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSONStatus(w, http.StatusAccepted, nil)
+	writeOK(w, nil)
 }
 
-// handleAPITitles is handleAPISummarize for batch title generation
-// (summarize.KickoffTitles). Body: {"sessionIds": ["...", ...]}.
+// handleAPIProjectColor: {"project": name, "color": "#rrggbb" | "random"}.
+func (s *Server) handleAPIProjectColor(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Project string `json:"project"`
+		Color   string `json:"color"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	body.Project = strings.TrimSpace(body.Project)
+	if body.Project == "" || (body.Color != db.ColorRandom && !model.ValidColor(body.Color)) {
+		http.Error(w, "project and a #rrggbb color (or \"random\") are required", http.StatusBadRequest)
+		return
+	}
+	if err := s.db.SetProjectColor(r.Context(), body.Project, body.Color); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+// handleAPITitles kicks off batch title generation on the collector host
+// (summarize.KickoffTitles; the summary_enabled gate is enforced inside). Body: {"sessionIds": ["...", ...]}.
 func (s *Server) handleAPITitles(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		SessionIDs []string `json:"sessionIds"`

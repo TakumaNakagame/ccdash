@@ -1,6 +1,6 @@
 // Package store is the seam between the TUI (and the non-TUI CLI
 // subcommands) and where session data actually lives. Local wraps *db.DB
-// plus direct file reads plus internal/summarize — this is ccdash's
+// plus direct file reads plus internal/summarize (titles) — this is ccdash's
 // original, same-host behavior. Remote talks the same shape of operations
 // to a ccdash collector's HTTP API (internal/server) so the TUI can run on a
 // different machine than the collector ("remote mode").
@@ -45,6 +45,11 @@ type Store interface {
 	UsageSummary(ctx context.Context, days int) (usage.Summary, error)
 	SetCustomTitle(ctx context.Context, sessionID, title string) error
 	SetUserGroup(ctx context.Context, sessionID, group string) error
+	// SetProject puts the session into a project ("" takes it out); a new
+	// name creates the project with its own color.
+	SetProject(ctx context.Context, sessionID, project string) error
+	// SetProjectColor sets a project's color ("#rrggbb", or "random").
+	SetProjectColor(ctx context.Context, project, color string) error
 
 	// DecideApproval sends the operator's allow/deny choice for a pending
 	// PermissionRequest. keep=true on an allow asks Claude to remember the
@@ -60,16 +65,9 @@ type Store interface {
 	// startup costs one HTTP round trip, not one per key.
 	AllSettings(ctx context.Context) (map[string]string, error)
 
-	// Summarize kicks off the claude -p summary flow for sessionID and
-	// returns as soon as the "running" status is recorded — it does not
-	// block for the summary itself. The result (summary text / status)
-	// lands in the session row and is picked up on the next ListSessions
-	// poll, same as every other background update.
-	Summarize(ctx context.Context, sessionID string) error
-
 	// GenerateTitles kicks off claude -p title generation for up to
-	// summarize.MaxTitleBatch sessions in one batch (ctrl+t). Like
-	// Summarize it returns once title_status is "running"; the titles land
+	// summarize.MaxTitleBatch sessions in one batch (ctrl+t). It returns
+	// once title_status is "running"; the titles land
 	// in the rows (gen_title) and show up on a later ListSessions poll.
 	GenerateTitles(ctx context.Context, sessionIDs []string) error
 

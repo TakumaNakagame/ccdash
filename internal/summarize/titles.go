@@ -21,8 +21,9 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
-// Title generation (ctrl+t) shares the summary machinery: same isolated
-// `claude -p` spawn, same digest, same summary_enabled gate. Several
+// Title generation (ctrl+t): an isolated `claude -p` spawn over transcript
+// digests, gated by summary_enabled (the setting's key predates the removal
+// of the summary feature; it now gates only this). Several
 // sessions go out in ONE claude call — a batch costs one CLI startup and
 // one model round trip instead of N, and seeing the sessions side by side
 // helps the model keep titles distinct.
@@ -39,12 +40,15 @@ const (
 	maxTitleWidth = 48
 )
 
+// ErrDisabled is returned while title generation is switched off.
+var ErrDisabled = errors.New("title generation is disabled (summary_enabled=off)")
+
 // ErrNoSessions is returned when none of the requested sessions can be
 // titled (unknown IDs, or no transcript recorded).
 var ErrNoSessions = errors.New("no titleable sessions (unknown or no transcript)")
 
-// KickoffTitles starts title generation for sessionIDs against d. Like
-// Kickoff it enforces summary_enabled, flips title_status to "running"
+// KickoffTitles starts title generation for sessionIDs against d. It
+// enforces summary_enabled, flips title_status to "running"
 // synchronously, and runs claude in a background goroutine; results land
 // via SetGenTitle (per session) or title_status "error". Sessions already
 // running or without a transcript are skipped; IDs past MaxTitleBatch are

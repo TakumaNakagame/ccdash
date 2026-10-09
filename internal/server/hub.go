@@ -205,10 +205,10 @@ func (s *Server) hubHandler() http.Handler {
 
 var (
 	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|usage|usage/sessions|sessions/[^/]+/(transcript|usage|statusline))$`)
-	hubSessionEdit = regexp.MustCompile(`^/api/sessions/[^/]+/(archive|favorite|color|title|group|seen)$`)
-	// claude -p runs; summarize.Kickoff / KickoffTitles refuse them
-	// themselves while summary_enabled is off.
-	hubSummarize   = regexp.MustCompile(`^/api/(sessions/[^/]+/summarize|titles)$`)
+	hubSessionEdit = regexp.MustCompile(`^/api/(sessions/[^/]+/(archive|favorite|color|title|group|project|seen)|projects/color)$`)
+	// claude -p runs; summarize.KickoffTitles refuses them itself while
+	// summary_enabled is off.
+	hubTitles      = regexp.MustCompile(`^/api/titles$`)
 	hubDecideRoute = regexp.MustCompile(`^/approvals/\d+/decide$`)
 )
 
@@ -220,7 +220,7 @@ func hubAllowed(r *http.Request, cfg settings.Settings) (bool, string) {
 		return true, ""
 	case r.Method == http.MethodPost && hubSessionEdit.MatchString(p):
 		return true, ""
-	case r.Method == http.MethodPost && hubSummarize.MatchString(p):
+	case r.Method == http.MethodPost && hubTitles.MatchString(p):
 		return true, ""
 	case r.Method == http.MethodGet && (p == "/pty/" || p == "/pty"):
 		return true, ""

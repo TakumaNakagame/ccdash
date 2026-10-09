@@ -404,6 +404,52 @@ function sessionColor(sid) {
 // get different, far-apart colors (model.Session.Color does the same).
 const sessionColorOf = (s) => s?.color || (s?.num > 0 ? SESSION_PALETTE[(s.num * 7) % SESSION_PALETTE.length] : sessionColor(s?.session_id));
 
+// projectColorOf mirrors model.ProjectColorOf: the project's stored color
+// (projects table, on each row as project_color), else an FNV-1a hash of
+// the name into the palette.
+function projectColorOf(name, stored) {
+  if (stored) return stored;
+  if (!name) return "";
+  let x = 0x811c9dc5;
+  for (const b of new TextEncoder().encode(name)) x = Math.imul(x ^ b, 16777619) >>> 0;
+  return SESSION_PALETTE[x % SESSION_PALETTE.length];
+}
+// inkOn mirrors model.InkOn: black or white text on a "#rrggbb" band.
+function inkOn(bg) {
+  const v = parseInt((bg || "").slice(1), 16);
+  if (!(bg?.length === 7) || Number.isNaN(v)) return "#ffffff";
+  return 0.299 * (v >> 16 & 255) + 0.587 * (v >> 8 & 255) + 0.114 * (v & 255) > 150 ? "#111111" : "#ffffff";
+}
+// uniqueProjects: [{name, color}] of the projects among sessions, by name.
+function uniqueProjects(sessions) {
+  const m = new Map();
+  for (const s of sessions) if (s.project && !m.has(s.project)) m.set(s.project, projectColorOf(s.project, s.project_color));
+  return [...m].sort((a, b) => a[0].localeCompare(b[0])).map(([name, color]) => ({ name, color }));
+}
+// projectsFirst mirrors the TUI: project members go to the top, one block
+// per project (most recent activity first, newest session first inside);
+// the rest keep their order.
+function projectsFirst(rows) {
+  const latest = new Map();
+  for (const s of rows) {
+    if (!s.project) continue;
+    const t = new Date(s.last_seen).getTime();
+    if (!latest.has(s.project) || t > latest.get(s.project)) latest.set(s.project, t);
+  }
+  if (!latest.size) return rows;
+  const inP = rows.filter((s) => s.project).sort((a, b) =>
+    a.project === b.project ? new Date(b.last_seen) - new Date(a.last_seen)
+      : (latest.get(b.project) - latest.get(a.project)) || a.project.localeCompare(b.project));
+  return [...inP, ...rows.filter((s) => !s.project)];
+}
+function projectHeader(name, color, members) {
+  const running = members.filter((s) => s.status === "active" || s.status === "idle").length;
+  const needs = members.filter((s) => s.attention === "needs_you").length;
+  const meta = [`${members.length} セッション`, running ? `${running} 稼働中` : null, needs ? `${needs} 要対応` : null].filter(Boolean).join(" · ");
+  return h("div", { class: "bucket project", style: `--proj:${color};--ink:${inkOn(color)}` },
+    h("span", { class: "proj-label" }, "PROJECT"), h("b", {}, name), h("span", { class: "proj-meta" }, meta));
+}
+
 function sessionTitle(s) {
   return s.custom_title || s.gen_title || s.title || "(無題)";
 }
@@ -498,7 +544,8 @@ async function devicePage(id, opts = {}) {
     } catch (e) { toast(e.message); }
   });
   // Checkboxes on the rows select sessions for bulk actions: put them on
-  // the grid, archive (or unarchive), or generate titles with claude -p.
+  // the grid, archive (or unarchive), put them in a project, or generate
+  // titles with claude -p.
   const selected = new Set();
   const selBar = h("div", { class: "sel-bar", hidden: true });
   const sel = {
@@ -515,6 +562,14 @@ async function devicePage(id, opts = {}) {
     selected.clear();
     paintSel();
     refreshNow();
+  };
+  const setProject = () => {
+    const names = uniqueProjects(last?.sessions || []).map((p) => p.name);
+    const v = prompt(`プロジェクト名（空にするとプロジェクトから外す）` + (names.length ? `\n既存: ${names.join(", ")}` : ""), names[0] || "");
+    if (v === null) return;
+    const name = v.trim();
+    bulk(name ? `プロジェクト「${name}」に追加` : "プロジェクトから外す",
+      (sid) => dev(id).post(`/api/sessions/${encodeURIComponent(sid)}/project`, { project: name }));
   };
   const genTitles = async () => {
     const ids = [...selected];
@@ -546,6 +601,7 @@ async function devicePage(id, opts = {}) {
       h("button", { class: "btn small", onclick: () => bulk(showArchived ? "アーカイブ解除" : "アーカイブ",
         (sid) => dev(id).post(`/api/sessions/${encodeURIComponent(sid)}/archive`, { archived: !showArchived })) },
         showArchived ? "アーカイブ解除" : "アーカイブ"),
+      h("button", { class: "btn small", title: "複数のセッションを一つのプロジェクトにまとめる", onclick: setProject }, "▤ プロジェクト"),
       h("button", { class: "btn small", title: "claude -p でタイトルを生成", onclick: genTitles }, "タイトル生成"),
       h("span", { class: "grow" }),
       h("button", { class: "btn small", onclick: () => { for (const sid of visible) selected.add(sid); paintSel(); render(); } }, "表示中を全選択"),
@@ -585,16 +641,19 @@ async function devicePage(id, opts = {}) {
     const q = filter.value.trim().toLowerCase();
     const rows = sessions
       .filter((s) => !tab || groupOf(s) === tab)
-      .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${groupOf(s)}`.toLowerCase().includes(q))
+      .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${groupOf(s)} ${s.project || ""}`.toLowerCase().includes(q))
       .sort((a, b) => (!!b.favorite - !!a.favorite) || (new Date(b.last_seen) - new Date(a.last_seen)));
+    const ordered = projectsFirst(rows);
     const out = [];
     let bucket = null;
-    visible = rows.slice(0, limit).map((s) => s.session_id);
-    for (const s of rows.slice(0, limit)) {
-      const b = dateBucket(s);
+    visible = ordered.slice(0, limit).map((s) => s.session_id);
+    for (const s of ordered.slice(0, limit)) {
+      const b = s.project ? "\0" + s.project : dateBucket(s);
       if (b !== bucket) {
         bucket = b;
-        out.push(h("div", { class: "bucket" }, b));
+        out.push(s.project
+          ? projectHeader(s.project, projectColorOf(s.project, s.project_color), ordered.filter((x) => x.project === s.project))
+          : h("div", { class: "bucket" }, b));
       }
       out.push(sessionRow(id, s, live.has(s.session_id), info, !tab, sel, briefs[s.session_id]));
     }
@@ -678,8 +737,9 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
     check.addEventListener("click", (e) => e.stopPropagation());
     check.addEventListener("change", () => sel.toggle(s.session_id, check.checked));
   }
-  return h("div", { class: "item" + (here ? " selected" : "") + (check?.checked ? " checked" : ""), "data-sid": s.session_id,
-    style: `--sess:${sessionColorOf(s)}`, onclick: (e) => {
+  const proj = s.project ? `;--proj:${projectColorOf(s.project, s.project_color)}` : "";
+  return h("div", { class: "item" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : ""), "data-sid": s.session_id,
+    style: `--sess:${sessionColorOf(s)}${proj}`, onclick: (e) => {
     if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
     location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`;
   } },
@@ -1228,9 +1288,9 @@ function askScreenCard(a, keys, d, ptyKey) {
     a.multi ? h("div", { class: "row" }, h("button", { type: "button", class: "btn primary", onclick: () => keys("\x1b[C") }, "次へ →")) : null);
 }
 
-// sessionMenu: the TUI's per-session keys (t rename, T group, f favorite,
-// x archive, s summarize, ctrl+t title) as one dialog.
-function sessionMenu(id, s, groups, refresh) {
+// sessionMenu: the TUI's per-session keys (t rename, T group, p project,
+// P project color, f favorite, x archive, ctrl+t title) as one dialog.
+function sessionMenu(id, s, groups, projects, refresh) {
   const sid = s.session_id;
   const d = dev(id);
   const post = async (path, json, done) => {
@@ -1240,9 +1300,16 @@ function sessionMenu(id, s, groups, refresh) {
   dialog((body, close) => {
     const title = h("input", { class: "grow", value: s.custom_title || "", placeholder: s.gen_title || s.title || "タイトル" });
     const group = h("input", { class: "grow", value: s.user_group || "", placeholder: s.repo || base(s.cwd) || "グループ", list: "group-names" });
+    const project = h("input", { class: "grow", value: s.project || "", placeholder: "プロジェクト名", list: "project-names" });
+    const projColor = projectColorOf(s.project, s.project_color);
+    const postProjectColor = async (color, done) => {
+      close();
+      try { await d.post("/api/projects/color", { project: s.project, color }); toast(done); refresh(); } catch (e) { toast(e.message); }
+    };
     body.append(
       h("h1", {}, (s.num ? `#${s.num} ` : "") + sessionTitle(s)),
       h("datalist", { id: "group-names" }, groups.map((g) => h("option", { value: g }))),
+      h("datalist", { id: "project-names" }, projects.map((p) => h("option", { value: p.name }))),
       h("label", {}, "タイトル（空にすると自動のものに戻す）"),
       h("div", { class: "row" }, title, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/title", { title: title.value.trim() }, "タイトルを保存しました"); } }, "保存")),
       h("label", {}, "色（一覧・グリッドの縦線。TUI の c / C と共通）"),
@@ -1256,12 +1323,20 @@ function sessionMenu(id, s, groups, refresh) {
           post("/color", { color: "random" }, "色を引き直しました");
         } }, "🎲 引き直す"),
         h("button", { type: "button", class: "btn small", disabled: !s.color, onclick: () => { close(); post("/color", { color: "" }, "色を自動に戻しました"); } }, "自動に戻す")),
+      h("label", {}, "プロジェクト（複数のセッションをまとめて一覧の上に表示。空にすると外す）"),
+      h("div", { class: "row" }, project, h("button", { type: "button", class: "btn", onclick: () => { close(); const v = project.value.trim(); post("/project", { project: v }, v ? `プロジェクト「${v}」に入れました` : "プロジェクトから外しました"); } }, "保存")),
+      s.project ? h("label", {}, `プロジェクト「${s.project}」の色（TUI の P と共通）`) : null,
+      s.project ? h("div", { class: "swatches" },
+        SESSION_PALETTE.map((c) => h("button", {
+          type: "button", class: "swatch" + (projColor === c ? " on" : ""), style: `--c:${c}`, title: c,
+          onclick: () => postProjectColor(c, "プロジェクトの色を変更しました"),
+        })),
+        h("button", { type: "button", class: "btn small", title: "ほかのプロジェクトと被らない色を引き直す", onclick: () => postProjectColor("random", "プロジェクトの色を引き直しました") }, "🎲 引き直す")) : null,
       h("label", {}, "グループ（空にすると repo 名に戻す）"),
       h("div", { class: "row" }, group, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/group", { group: group.value.trim() }, "グループを保存しました"); } }, "保存")),
       h("div", { class: "menu-grid" },
         h("button", { type: "button", class: "btn", onclick: () => { close(); post("/favorite", { favorite: !s.favorite }, s.favorite ? "お気に入りを外しました" : "お気に入りにしました"); } }, s.favorite ? "☆ お気に入りを外す" : "★ お気に入り"),
         h("button", { type: "button", class: "btn", onclick: () => { close(); post("/archive", { archived: !s.archived }, s.archived ? "アーカイブを解除しました" : "アーカイブしました"); } }, s.archived ? "アーカイブを解除" : "アーカイブ"),
-        h("button", { type: "button", class: "btn", onclick: () => { close(); post("/summarize", {}, "要約を作成しています（claude -p）"); } }, "要約を作成"),
         h("button", { type: "button", class: "btn", onclick: async () => {
           close();
           try { await d.post("/api/titles", { sessionIds: [sid] }); toast("タイトルを生成しています（claude -p）"); refresh(); } catch (e) { toast(e.message); }
@@ -2026,7 +2101,7 @@ async function chatPage(id, { sid, key }) {
   const name = await deviceName(id);
   const d = dev(id);
   let session = null, ptyKey = key || null, hosted = false, info = null;
-  let lastStat = "", items = [], pendingSends = [], summaryOpen = false;
+  let lastStat = "", items = [], pendingSends = [];
   // History window: the poll reads only the last TAIL bytes and splices
   // them onto what's loaded (by entry uuid), so "older history" loaded
   // once stays without re-downloading megabytes on every update.
@@ -2057,10 +2132,10 @@ async function chatPage(id, { sid, key }) {
     catch (e) { toast(e.message); }
     finally { restartBtn.disabled = false; setTimeout(poll, 800); }
   } }, "再起動");
-  let allGroups = [];
+  let allGroups = [], allProjects = [];
   const diffBtn = h("a", { class: "btn small", hidden: true, title: "変更の差分を見てコメントする" }, "差分");
   let lastUsage = null;
-  const menuBtn = h("button", { class: "btn small", title: "セッションの操作", onclick: () => session ? sessionMenu(id, session, allGroups, poll) : toast("まだセッションが登録されていません") }, "⋯");
+  const menuBtn = h("button", { class: "btn small", title: "セッションの操作", onclick: () => session ? sessionMenu(id, session, allGroups, allProjects, poll) : toast("まだセッションが登録されていません") }, "⋯");
   const bar = h("div", { class: "term-bar" },
     h("a", { class: "btn small", href: `#/d/${id}` }, "←"), titleEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
   const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, "読み込み中…"));
@@ -2241,12 +2316,6 @@ async function chatPage(id, { sid, key }) {
   const render = (stick) => {
     if (deferWhileSelecting(log, () => render(atBottom()))) return;
     const nodes = items.map((it) => renderItem(it, askCtx)).filter(Boolean);
-    if (session?.summary_status === "running") nodes.unshift(h("div", { class: "note" }, "要約を作成中…"));
-    else if (session?.summary) {
-      const det = h("details", { class: "summary-card", open: summaryOpen }, h("summary", {}, "要約"), h("div", {}, session.summary));
-      det.addEventListener("toggle", () => (summaryOpen = det.open));
-      nodes.unshift(det);
-    }
     if (hasOlder && nodes.length) {
       nodes.unshift(h("button", { class: "btn older", disabled: loadingOlder, onclick: loadOlder },
         loadingOlder ? "読み込み中…" : "↑ 古い履歴を読み込む"));
@@ -2325,6 +2394,7 @@ async function chatPage(id, { sid, key }) {
     ]);
     info = info || (await deviceInfo(id));
     allGroups = uniqueGroups(sessions, true).filter(Boolean);
+    allProjects = uniqueProjects(sessions);
     if (!sid && ptyKey) {
       const a = aliasOf(ptys, ptyKey);
       if (a) { sid = a; history.replaceState(null, "", `#/d/${id}/s/${encodeURIComponent(sid)}`); }
