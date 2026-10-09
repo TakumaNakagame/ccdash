@@ -60,6 +60,8 @@ class HTTPError extends Error {
   constructor(status, msg) { super(msg); this.status = status; }
 }
 
+let loggingIn = false;
+
 async function api(path, opts = {}) {
   const init = { credentials: "same-origin", ...opts, headers: { ...(opts.headers || {}) } };
   if (opts.json !== undefined) {
@@ -69,8 +71,12 @@ async function api(path, opts = {}) {
   }
   const r = await fetch(path, init);
   if (r.status === 401) {
-    try { sessionStorage.setItem("ccdash.next", location.hash); } catch {}
-    location.href = "/auth/login?next=/";
+    // Several polls hit the expired session at once; start one login.
+    if (!loggingIn) {
+      loggingIn = true;
+      try { sessionStorage.setItem("ccdash.next", location.hash); } catch {}
+      location.href = "/auth/login?next=/";
+    }
     throw new HTTPError(401, "login required");
   }
   if (!r.ok) throw new HTTPError(r.status, (await r.text()).trim() || r.statusText);

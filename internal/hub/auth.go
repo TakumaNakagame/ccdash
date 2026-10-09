@@ -42,9 +42,15 @@ const tailscaleLoginHeader = "Tailscale-User-Login"
 
 const (
 	sessionCookie = "ccdash_hub"
-	loginCookie   = "ccdash_hub_login"
-	sessionTTL    = 24 * time.Hour
-	loginTTL      = 10 * time.Minute
+	// loginCookie prefixes one cookie per in-flight login, named by its
+	// state: an expired session makes every open tab (and the installed
+	// PWA) start a login at once, and with a single cookie each one
+	// overwrote the others' state, so all but the last callback failed
+	// with "state mismatch".
+	loginCookie = "ccdash_hub_login_"
+	loginPath   = "/auth/"
+	sessionTTL  = 24 * time.Hour
+	loginTTL    = 10 * time.Minute
 )
 
 type authn struct {
@@ -144,10 +150,14 @@ func (a *authn) allowed(email string) bool {
 }
 
 func (a *authn) setCookie(w http.ResponseWriter, name, value string, ttl time.Duration) {
+	a.setCookiePath(w, name, value, "/", ttl)
+}
+
+func (a *authn) setCookiePath(w http.ResponseWriter, name, value, path string, ttl time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    value,
-		Path:     "/",
+		Path:     path,
 		MaxAge:   int(ttl.Seconds()),
 		HttpOnly: true,
 		Secure:   a.secure,
@@ -156,7 +166,11 @@ func (a *authn) setCookie(w http.ResponseWriter, name, value string, ttl time.Du
 }
 
 func (a *authn) clearCookie(w http.ResponseWriter, name string) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteLaxMode})
+	a.clearCookiePath(w, name, "/")
+}
+
+func (a *authn) clearCookiePath(w http.ResponseWriter, name, path string) {
+	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: path, MaxAge: -1, HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteLaxMode})
 }
 
 // safeNext keeps post-login redirects on this origin.
@@ -185,22 +199,25 @@ func (a *authn) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Next:     safeNext(r.URL.Query().Get("next")),
 		Exp:      time.Now().Add(loginTTL).Unix(),
 	}
-	a.setCookie(w, loginCookie, a.sign(ls), loginTTL)
+	a.setCookiePath(w, loginCookie+ls.State, a.sign(ls), loginPath, loginTTL)
 	http.Redirect(w, r, oc.AuthCodeURL(ls.State, oidc.Nonce(ls.Nonce), oauth2.S256ChallengeOption(ls.Verifier)), http.StatusFound)
 }
 
 func (a *authn) handleCallback(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie(loginCookie)
+	state := r.URL.Query().Get("state")
 	var ls loginState
-	if err != nil || !a.open(c.Value, &ls) || time.Now().Unix() > ls.Exp {
+	c, err := r.Cookie(loginCookie + state)
+	if state == "" || err != nil || !a.open(c.Value, &ls) || time.Now().Unix() > ls.Exp || ls.State != state {
+		// A tab whose login was overtaken by another one that already
+		// finished: the browser is logged in, so just go back.
+		if _, ok := a.user(r); ok {
+			http.Redirect(w, r, "/", http.StatusFound)
+			return
+		}
 		http.Error(w, "login expired — start again from the portal", http.StatusBadRequest)
 		return
 	}
-	a.clearCookie(w, loginCookie)
-	if r.URL.Query().Get("state") != ls.State {
-		http.Error(w, "state mismatch", http.StatusBadRequest)
-		return
-	}
+	a.clearCookiePath(w, loginCookie+state, loginPath)
 	if e := r.URL.Query().Get("error"); e != "" {
 		http.Error(w, "login failed: "+e, http.StatusUnauthorized)
 		return

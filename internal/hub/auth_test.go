@@ -125,6 +125,43 @@ func TestOIDCLogin(t *testing.T) {
 		t.Errorf("login outside the allowlist = %d, want 403", cw.Code)
 	}
 
+	// Two tabs start a login at once (an expired session): each callback
+	// finds its own state cookie, so neither fails with a state mismatch.
+	f.email = "me@example.com"
+	var starts []*httptest.ResponseRecorder
+	for range 2 {
+		starts = append(starts, serve(handler, "GET", "/auth/login?next=/", "", nil))
+	}
+	jar := map[string]*http.Cookie{}
+	for _, w := range starts {
+		for _, c := range w.Result().Cookies() {
+			jar[c.Name] = c
+		}
+	}
+	for i, w := range starts {
+		loc, _ := url.Parse(w.Header().Get("Location"))
+		f.nonce = loc.Query().Get("nonce")
+		r := httptest.NewRequest("GET", "/auth/callback?code=good-code&state="+loc.Query().Get("state"), nil)
+		for _, c := range jar {
+			r.AddCookie(c)
+		}
+		cw := httptest.NewRecorder()
+		handler.ServeHTTP(cw, r)
+		if cw.Code != http.StatusFound {
+			t.Fatalf("concurrent login %d callback = %d %s", i, cw.Code, cw.Body)
+		}
+	}
+
+	// A late callback whose login cookie is gone but whose browser is
+	// already logged in goes back to the portal instead of erroring.
+	r = httptest.NewRequest("GET", "/auth/callback?code=good-code&state=x", nil)
+	r.AddCookie(sess)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusFound {
+		t.Errorf("stale callback while logged in = %d, want 302", w.Code)
+	}
+
 	// A callback without the login cookie (CSRF / replay) is refused.
 	if w := serve(handler, "GET", "/auth/callback?code=good-code&state=x", "", nil); w.Code != http.StatusBadRequest {
 		t.Errorf("callback without login cookie = %d, want 400", w.Code)
