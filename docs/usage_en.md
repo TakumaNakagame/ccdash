@@ -113,14 +113,14 @@ lists every key; scroll it with `j` / `k`.
 
 Sessions are bucketed by `last_seen`:
 
-- ★ **Favorites** (anything pinned, regardless of date)
+- 📌 **Pinned** (pinned sessions, regardless of date — the most recently pinned first)
 - **Today** (sessions seen today)
 - **Yesterday** (sessions seen the previous day)
 - **This week** (2-7 days ago)
 - **Earlier this month** (8-30 days)
 - `Month YYYY` (older)
 
-`f` toggles favorite. Favorites pin to the top of the list.
+`f` pins / unpins a session. Pins stay at the top of the list (inside a project, at the top of its block), the most recently pinned first, and activity never moves them.
 
 Sessions in a **project** (`p`, see §7) are pulled out of these date
 buckets and shown as project blocks at the newest end of the list.
@@ -233,7 +233,7 @@ the same tab.
 Once per local day — on the collector's first discovery tick of the day,
 or the first tick after midnight for a collector left running — sessions
 whose `last_seen` is older than **Auto-archive after (days)** (settings
-page, default 7, `0` = off) are archived. Favorites, project members and
+page, default 7, `0` = off) are archived. Pinned sessions, project members and
 running (active / idle) sessions are never auto-archived. Resuming an
 auto-archived session (it becomes active / idle again, or shows newer
 activity) brings it back automatically. Sessions you archived yourself
@@ -564,7 +564,7 @@ machine never accepts inbound connections — its collector dials out.
 - **⋯** in a chat does what the TUI's per-session keys do: rename (`t`),
   set the group (`T`), set the project (`p`, a name field with the
   existing names offered) and its color (swatches / 🎲, like `P`),
-  favorite (`f`), archive (`x`) and generate a title (`ctrl+t`).
+  pin (`f`), archive (`x`) and generate a title (`ctrl+t`).
   **Archive** on the session list shows the archived ones.
 - In the session list, project members are grouped under a band in the
   project's color, their rows tinted with a project stripe.

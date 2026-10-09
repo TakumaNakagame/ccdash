@@ -130,6 +130,7 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN project TEXT`,
 		`ALTER TABLE sessions ADD COLUMN auto_archived INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE projects ADD COLUMN ord INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN favorite_at INTEGER`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -157,6 +158,11 @@ func (d *DB) migrate() error {
 	// (lower ord = nearer the newest end of the list).
 	if _, err := d.sql.Exec(`UPDATE projects SET ord = -created_at WHERE ord IS NULL`); err != nil {
 		return fmt.Errorf("migrate project order: %w", err)
+	}
+	// Pins (the favorite flag) made before favorite_at existed keep their
+	// relative order by number.
+	if _, err := d.sql.Exec(`UPDATE sessions SET favorite_at = COALESCE(num, 0) WHERE favorite = 1 AND favorite_at IS NULL`); err != nil {
+		return fmt.Errorf("migrate pin order: %w", err)
 	}
 	if err := d.backfillNums(); err != nil {
 		return fmt.Errorf("backfill session numbers: %w", err)
@@ -384,7 +390,8 @@ func (d *DB) MarkStalePendingTimeout(ctx context.Context, age time.Duration) err
 }
 
 // ListSessions returns sessions matching the archived flag. When archived is
-// false you get the working set (favorites first, then by last_seen DESC);
+// false you get the working set (pins first, most recently pinned first,
+// then by last_seen DESC);
 // when true you get the archive view ordered the same way.
 func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, error) {
 	archivedInt := 0
@@ -397,7 +404,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.tmux_pane,''), COALESCE(s.tmux_session,''),
 		       COALESCE(s.transcript_path,''), COALESCE(s.model,''),
 		       COALESCE(s.title,''), COALESCE(s.custom_title,''), COALESCE(s.user_group,''),
-		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
+		       COALESCE(s.archived,0), COALESCE(s.favorite,0), COALESCE(s.favorite_at,0),
 		       COALESCE(s.project,''), COALESCE(p.color,''), COALESCE(p.ord,0),
 		       s.first_seen, s.last_seen, s.status,
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
@@ -407,7 +414,9 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.color,'')
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE COALESCE(s.archived,0) = ?
-		ORDER BY COALESCE(s.favorite,0) DESC, s.last_seen DESC
+		ORDER BY COALESCE(s.favorite,0) DESC,
+		         CASE WHEN COALESCE(s.favorite,0) = 1 THEN COALESCE(s.favorite_at,0) END DESC,
+		         s.last_seen DESC
 	`, archivedInt)
 	if err != nil {
 		return nil, err
@@ -416,7 +425,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 	var out []model.Session
 	for rows.Next() {
 		var s model.Session
-		var first, last, genAt, attAt int64
+		var first, last, genAt, attAt, pinAt int64
 		var status string
 		var arch, fav int
 		if err := rows.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -424,7 +433,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.TmuxPane, &s.TmuxSession,
 			&s.TranscriptPath, &s.Model,
 			&s.Title, &s.CustomTitle, &s.UserGroup,
-			&arch, &fav,
+			&arch, &fav, &pinAt,
 			&s.Project, &s.ProjectColor, &s.ProjectOrder,
 			&first, &last, &status, &s.PendingCount, &s.Account,
 			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
@@ -440,6 +449,12 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		s.Status = model.SessionStatus(status)
 		s.Archived = arch != 0
 		s.Favorite = fav != 0
+	if fav != 0 && pinAt > 0 {
+		s.PinnedAt = time.UnixMilli(pinAt).UTC()
+	}
+		if fav != 0 && pinAt > 0 {
+			s.PinnedAt = time.UnixMilli(pinAt).UTC()
+		}
 		out = append(out, s)
 	}
 	return out, rows.Err()
@@ -456,7 +471,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       COALESCE(s.tmux_pane,''), COALESCE(s.tmux_session,''),
 		       COALESCE(s.transcript_path,''), COALESCE(s.model,''),
 		       COALESCE(s.title,''), COALESCE(s.custom_title,''), COALESCE(s.user_group,''),
-		       COALESCE(s.archived,0), COALESCE(s.favorite,0),
+		       COALESCE(s.archived,0), COALESCE(s.favorite,0), COALESCE(s.favorite_at,0),
 		       COALESCE(s.project,''), COALESCE(p.color,''), COALESCE(p.ord,0),
 		       s.first_seen, s.last_seen, s.status,
 		       (SELECT COUNT(*) FROM approvals a WHERE a.session_id = s.session_id AND a.status = 'pending') AS pending,
@@ -468,7 +483,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		WHERE s.session_id = ?
 	`, sessionID)
 	var s model.Session
-	var first, last, genAt, attAt int64
+	var first, last, genAt, attAt, pinAt int64
 	var status string
 	var arch, fav int
 	err := row.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -476,7 +491,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&s.TmuxPane, &s.TmuxSession,
 		&s.TranscriptPath, &s.Model,
 		&s.Title, &s.CustomTitle, &s.UserGroup,
-		&arch, &fav,
+		&arch, &fav, &pinAt,
 		&s.Project, &s.ProjectColor, &s.ProjectOrder,
 		&first, &last, &status, &s.PendingCount, &s.Account,
 		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
@@ -642,13 +657,16 @@ func mapValues(m map[string]string) []string {
 	return out
 }
 
-// SetFavorite flips the favorite flag.
+// SetFavorite pins (or unpins) a session; the UIs call it "pin". Pinning
+// stamps favorite_at, which orders pins: the most recently pinned first.
 func (d *DB) SetFavorite(ctx context.Context, sessionID string, favorite bool) error {
 	v := 0
 	if favorite {
 		v = 1
 	}
-	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET favorite = ? WHERE session_id = ?`, v, sessionID)
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET favorite = ?,
+		favorite_at = CASE WHEN ? = 1 THEN ? ELSE NULL END WHERE session_id = ?`,
+		v, v, time.Now().UnixMilli(), sessionID) // ms: two quick pins still order
 	return err
 }
 
@@ -907,7 +925,7 @@ func (d *DB) SetProjectColor(ctx context.Context, project, color string) error {
 }
 
 // AutoArchive archives sessions whose last activity is older than before:
-// not running, not favorites, not in a project (both are the operator's
+// not running, not pinned, not in a project (both are the operator's
 // "keep this" marks). Rows archived here carry auto_archived=1, so the
 // upsert brings them back as soon as the session is resumed. Returns how
 // many rows it archived.

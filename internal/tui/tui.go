@@ -1451,9 +1451,10 @@ func (m *model) applyGroupFilter() {
 // end of the list (the top; the bottom with newest_at_bottom, since the
 // caller reverses afterwards), one block per project. The order is stable
 // — activity never moves anything: projects by their operator-set order
-// ([ / ], new projects at the newest end), their sessions newest-started
+// ([ / ], new projects at the newest end); inside a block pinned sessions
+// come first (most recently pinned first), then the rest newest-started
 // first. Everything else keeps its order
-// (favorites, then by date). Returns a new slice when it reorders anything.
+// (pins, then by date). Returns a new slice when it reorders anything.
 func projectsFirst(src []mdl.Session) []mdl.Session {
 	order := map[string]int{}
 	for _, s := range src {
@@ -1479,6 +1480,13 @@ func projectsFirst(src []mdl.Session) []mdl.Session {
 				return oa < ob
 			}
 			return a.Project < b.Project
+		}
+		// Pins lead their block, the most recently pinned first.
+		if a.Favorite != b.Favorite {
+			return a.Favorite
+		}
+		if a.Favorite && !a.PinnedAt.Equal(b.PinnedAt) {
+			return a.PinnedAt.After(b.PinnedAt)
 		}
 		if !a.FirstSeen.Equal(b.FirstSeen) {
 			return a.FirstSeen.After(b.FirstSeen)
@@ -2019,9 +2027,9 @@ func (m *model) toggleFavoriteCurrent() tea.Cmd {
 	s := m.sessions[m.selSess]
 	want := !s.Favorite
 	sid := s.SessionID
-	verb := "favorited"
+	verb := "pinned"
 	if !want {
-		verb = "unfavorited"
+		verb = "unpinned"
 	}
 	return func() tea.Msg {
 		if err := m.store.SetFavorite(m.ctx, sid, want); err != nil {
@@ -3036,7 +3044,7 @@ func (m *model) renderFooter() string {
 		candLine := subtitleStyle.Render("existing: ") + strings.Join(labels, "  ")
 		return candLine + "\n" + pendingStyle.Render(prompt) + "  " + hint
 	}
-	keys := "↑/↓ sel  h/l tabs  / search  enter open  n new  a/A/d allow/keep/deny  p project  t rename  ctrl+t titles  f fav  x/X arch  ! needs-you  , settings  ? help  q quit"
+	keys := "↑/↓ sel  h/l tabs  / search  enter open  n new  a/A/d allow/keep/deny  p project  t rename  ctrl+t titles  f pin  x/X arch  ! needs-you  , settings  ? help  q quit"
 	if m.pane == paneSessions {
 		if live := m.liveForCurrent(); live != nil && !live.exited {
 			if m.liveFocus {
@@ -3726,7 +3734,7 @@ func (m *model) renderSessionsList(width, height int) string {
 			case s.Project != "":
 				header = renderProjectHeader(s, stats[s.Project], width)
 			case bucket == bucketFavorites:
-				header = groupHeaderStyle.Render(padRight("★ "+bucket, width))
+				header = groupHeaderStyle.Render(padRight("📌 "+bucket, width))
 			default:
 				header = groupHeaderStyle.Render(padRight(bucket, width))
 			}
@@ -3807,7 +3815,7 @@ func (m *model) renderSessionsList(width, height int) string {
 	return lipgloss.NewStyle().Width(width).Height(height).Render(body + "\n" + subtitleStyle.Render(indicator))
 }
 
-const bucketFavorites = "Favorites"
+const bucketFavorites = "Pinned"
 
 // projectBucketPrefix marks bucketFor labels that are projects (a NUL can't
 // collide with a date label).
@@ -3867,7 +3875,7 @@ func renderProjectHeader(s mdl.Session, st projectStat, width int) string {
 
 // bucketFor returns the group label that a session belongs to. Project
 // members are grouped by project (projectsFirst puts them at the newest
-// end); favorites go to the top regardless of date; everything else is
+// end); pinned sessions go to the top regardless of date; everything else is
 // bucketed by last_seen.
 func bucketFor(s mdl.Session, now time.Time) string {
 	if s.Project != "" {
@@ -3942,7 +3950,7 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		title = "(no prompt yet)"
 	}
 	if s.Favorite {
-		title = "★ " + title
+		title = "📌 " + title
 	}
 	if s.PendingCount > 0 {
 		title = "⚠ " + title

@@ -54,7 +54,7 @@ var helpSections = []helpSection{
 		{"ctrl+t", "generate titles (claude -p)"},
 		{"T", "assign a tab group"},
 		{"R", "toggle auto repo tabs"},
-		{"f", "favorite"},
+		{"f", "pin / unpin (pins stay on top, latest pin first)"},
 		{"c / C", "next color / random color"},
 		{"x", "archive / unarchive"},
 		{"ctrl+x", "archive the whole tab"},

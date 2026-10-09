@@ -163,3 +163,34 @@ func TestAutoArchive(t *testing.T) {
 		t.Fatal("manual archive was undone")
 	}
 }
+
+// TestPinOrder: pins come first, the most recently pinned first, whatever
+// their activity; unpinning drops the stamp.
+func TestPinOrder(t *testing.T) {
+	ctx := context.Background()
+	d := openTest(t)
+	now := time.Now()
+	for i, id := range []string{"a", "b", "c"} {
+		if err := d.UpsertSession(ctx, &model.Session{SessionID: id, Cwd: "/x", Status: model.StatusStopped, LastSeen: now.Add(-time.Duration(i) * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = d.SetFavorite(ctx, "c", true)
+	time.Sleep(5 * time.Millisecond)
+	_ = d.SetFavorite(ctx, "b", true)
+	ss, _ := d.ListSessions(ctx, false)
+	var got []string
+	for _, s := range ss {
+		got = append(got, s.SessionID)
+	}
+	if strings.Join(got, ",") != "b,c,a" {
+		t.Fatalf("order = %v, want b,c,a", got)
+	}
+	if ss[0].PinnedAt.IsZero() || !ss[0].PinnedAt.After(ss[1].PinnedAt) {
+		t.Fatalf("pinned_at: %v %v", ss[0].PinnedAt, ss[1].PinnedAt)
+	}
+	_ = d.SetFavorite(ctx, "b", false)
+	if b, _, _ := d.GetSession(ctx, "b"); b.Favorite || !b.PinnedAt.IsZero() {
+		t.Fatalf("unpinned: %+v", b)
+	}
+}

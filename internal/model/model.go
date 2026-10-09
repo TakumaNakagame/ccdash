@@ -38,10 +38,12 @@ type Session struct {
 	UserGroup      string    `json:"user_group,omitempty"`   // operator-named group; overrides repo-based grouping. Rendered as a tab in the strip.
 	Account        string    `json:"account,omitempty"`      // account name from accounts.json (e.g. "personal", "enterprise")
 	Archived       bool      `json:"archived,omitempty"`
-	Favorite       bool      `json:"favorite,omitempty"`
-	ColorOverride  string    `json:"color,omitempty"`         // operator-picked "#rrggbb"; see Color
-	Project        string    `json:"project,omitempty"`       // operator-named project; groups sessions at the top of the list
-	ProjectColor   string    `json:"project_color,omitempty"` // the project's "#rrggbb" (projects table)
+	Favorite       bool      `json:"favorite,omitempty"` // shown as "pinned" in the UIs
+	// PinnedAt is when the session was pinned; pins sort most recent first.
+	PinnedAt      time.Time `json:"pinned_at,omitzero"`
+	ColorOverride string    `json:"color,omitempty"`         // operator-picked "#rrggbb"; see Color
+	Project       string    `json:"project,omitempty"`       // operator-named project; groups sessions at the top of the list
+	ProjectColor  string    `json:"project_color,omitempty"` // the project's "#rrggbb" (projects table)
 	// ProjectOrder is the project's place in the list (lower = nearer the
 	// newest end). Set by the operator, never by activity.
 	ProjectOrder int           `json:"project_order,omitempty"`

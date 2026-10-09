@@ -358,7 +358,7 @@ type sessionRow struct {
 	Account   string `json:"account,omitempty"`
 	LastSeen  string `json:"last_seen"`
 	Ago       string `json:"last_seen_ago"`
-	Favorite  bool   `json:"favorite,omitempty"`
+	Pinned    bool   `json:"pinned,omitempty"`
 	Archived  bool   `json:"archived,omitempty"`
 	SessionID string `json:"session_id"`
 }
@@ -367,7 +367,7 @@ func (s *Server) row(x model.Session) sessionRow {
 	r := sessionRow{
 		Ref: x.Ref(), Title: x.DisplayTitle(), Project: x.Project, Group: groupOf(x),
 		Status: string(x.Status), Attention: x.Attention, Reason: x.AttentionReason, Pending: x.PendingCount,
-		Cwd: x.Cwd, Branch: x.Branch, Favorite: x.Favorite, Archived: x.Archived, SessionID: x.SessionID,
+		Cwd: x.Cwd, Branch: x.Branch, Pinned: x.Favorite, Archived: x.Archived, SessionID: x.SessionID,
 	}
 	if x.Account != "default" {
 		r.Account = x.Account

@@ -47,6 +47,17 @@ func TestProjectsFirst(t *testing.T) {
 		got = append(got, s.SessionID)
 	}
 	want := "a-new a-old b fav plain"
+	// A pin in a project leads its block whatever its age; the later pin first.
+	in = append(in,
+		mdl.Session{SessionID: "a-pin1", Project: "a", ProjectOrder: -2, Favorite: true, PinnedAt: at(5), FirstSeen: at(90)},
+		mdl.Session{SessionID: "a-pin2", Project: "a", ProjectOrder: -2, Favorite: true, PinnedAt: at(1), FirstSeen: at(99)})
+	got2 := []string{}
+	for _, s := range projectsFirst(in) {
+		got2 = append(got2, s.SessionID)
+	}
+	if w := "a-pin2 a-pin1 a-new a-old b fav plain"; strings.Join(got2, " ") != w {
+		t.Fatalf("pinned order = %v, want %s", got2, w)
+	}
 	if strings.Join(got, " ") != want {
 		t.Fatalf("order = %v, want %s", got, want)
 	}

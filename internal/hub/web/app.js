@@ -422,13 +422,20 @@ function inkOn(bg) {
 }
 // projectsFirst mirrors the TUI: project members go to the top, one block
 // per project, in a stable order that activity never changes — projects by
-// their operator-set order (project_order; ▲▼ on the band), their sessions
-// newest-started first; the rest keep their order.
+// their operator-set order (project_order; ▲▼ on the band); inside a block
+// pins first (latest pin first), then newest-started; the rest keep their
+// order.
+// pinOrder: among two pinned sessions, the more recently pinned first.
+function pinOrder(a, b) {
+  if (!a.favorite || !b.favorite) return 0;
+  const t = (v) => (v ? new Date(v).getTime() : 0);
+  return t(b.pinned_at) - t(a.pinned_at);
+}
 function projectsFirst(rows) {
   const t = (v) => (v ? new Date(v).getTime() : 0);
   if (!rows.some((s) => s.project)) return rows;
   const inP = rows.filter((s) => s.project).sort((a, b) =>
-    a.project === b.project ? (t(b.first_seen) - t(a.first_seen)) || ((b.num || 0) - (a.num || 0))
+    a.project === b.project ? (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (t(b.first_seen) - t(a.first_seen)) || ((b.num || 0) - (a.num || 0))
       : ((a.project_order || 0) - (b.project_order || 0)) || a.project.localeCompare(b.project));
   return [...inP, ...rows.filter((s) => !s.project)];
 }
@@ -509,9 +516,9 @@ function uniqueGroups(sessions, autoRepo) {
   return ["", ...[...user, ...auto].sort()];
 }
 
-// dateBucket follows the TUI's date grouping (favorites pinned on top).
+// dateBucket follows the TUI's date grouping (pinned sessions on top).
 function dateBucket(s) {
-  if (s.favorite) return "★ お気に入り";
+  if (s.favorite) return "📌 ピン留め";
   const t = new Date(s.last_seen);
   const now = new Date();
   const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
@@ -676,7 +683,7 @@ async function devicePage(id, opts = {}) {
     const rows = sessions
       .filter((s) => !tab || groupOf(s) === tab)
       .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${groupOf(s)} ${s.project || ""}`.toLowerCase().includes(q))
-      .sort((a, b) => (!!b.favorite - !!a.favorite) || (new Date(b.last_seen) - new Date(a.last_seen)));
+      .sort((a, b) => (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (new Date(b.last_seen) - new Date(a.last_seen)));
     const ordered = projectsFirst(rows);
     const out = [];
     let bucket = null;
@@ -785,7 +792,7 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
     check || null,
     h("span", { class: "num" }, s.num ? `#${s.num}` : ""),
     h("div", { class: "grow" },
-      h("div", { class: "title" }, (s.favorite ? "★ " : "") + sessionTitle(s)),
+      h("div", { class: "title" }, (s.favorite ? "📌 " : "") + sessionTitle(s)),
       h("div", { class: "sub" }, sub),
       brief ? h("div", { class: "sub meta" }, usageLine(brief)) : null),
     ...chips, mark);
@@ -1329,7 +1336,7 @@ function askScreenCard(a, keys, d, ptyKey) {
 }
 
 // sessionMenu: the TUI's per-session keys (t rename, T group, p project,
-// P project color, f favorite, x archive, ctrl+t title) as one dialog.
+// P project color, f pin, x archive, ctrl+t title) as one dialog.
 function sessionMenu(id, s, groups, refresh) {
   const sid = s.session_id;
   const d = dev(id);
@@ -1379,7 +1386,7 @@ function sessionMenu(id, s, groups, refresh) {
       h("label", {}, "グループ（空にすると repo 名に戻す）"),
       h("div", { class: "row" }, group, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/group", { group: group.value.trim() }, "グループを保存しました"); } }, "保存")),
       h("div", { class: "menu-grid" },
-        h("button", { type: "button", class: "btn", onclick: () => { close(); post("/favorite", { favorite: !s.favorite }, s.favorite ? "お気に入りを外しました" : "お気に入りにしました"); } }, s.favorite ? "☆ お気に入りを外す" : "★ お気に入り"),
+        h("button", { type: "button", class: "btn", onclick: () => { close(); post("/favorite", { favorite: !s.favorite }, s.favorite ? "ピン留めを外しました" : "ピン留めしました"); } }, s.favorite ? "ピン留めを外す" : "📌 ピン留め"),
         h("button", { type: "button", class: "btn", onclick: () => { close(); post("/archive", { archived: !s.archived }, s.archived ? "アーカイブを解除しました" : "アーカイブしました"); } }, s.archived ? "アーカイブを解除" : "アーカイブ"),
         h("button", { type: "button", class: "btn", onclick: async () => {
           close();
