@@ -44,11 +44,11 @@ type Session struct {
 	ProjectColor   string    `json:"project_color,omitempty"` // the project's "#rrggbb" (projects table)
 	// ProjectOrder is the project's place in the list (lower = nearer the
 	// newest end). Set by the operator, never by activity.
-	ProjectOrder int `json:"project_order,omitempty"`
-	FirstSeen        time.Time     `json:"first_seen"`
-	LastSeen         time.Time     `json:"last_seen"`
-	Status           SessionStatus `json:"status"`
-	PendingCount     int           `json:"pending_count,omitempty"`
+	ProjectOrder int           `json:"project_order,omitempty"`
+	FirstSeen    time.Time     `json:"first_seen"`
+	LastSeen     time.Time     `json:"last_seen"`
+	Status       SessionStatus `json:"status"`
+	PendingCount int           `json:"pending_count,omitempty"`
 	// Attention is what the session wants from the operator: "needs_you"
 	// (an approval, a question, a menu on screen) or "done" (finished a turn
 	// the operator hasn't looked at yet); "" otherwise. See internal/server
