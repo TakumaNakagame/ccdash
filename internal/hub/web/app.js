@@ -267,7 +267,7 @@ function boardCard(c) {
   const reason = s.attention === "needs_you" ? (s.attention_reason || "要対応") : s.attention === "done" ? "完了" : "作業中";
   return h("a", { class: "card " + (s.attention || "working"), href: `#/d/${c.device_id}/s/${encodeURIComponent(s.session_id)}` },
     h("div", { class: "row" }, h("span", { class: "chip" }, c.device_name), h("span", { class: "grow" }), h("span", { class: "muted small" }, rel(s.last_seen))),
-    h("div", { class: "card-title" }, (s.num ? `#${s.num} ` : "") + sessionTitle(s)),
+    h("div", { class: titleClass("card-title", s) }, (s.num ? `#${s.num} ` : "") + sessionTitle(s)),
     h("div", { class: "card-reason" }, reason));
 }
 
@@ -499,6 +499,13 @@ function projectHeader(name, color, members, onNew, onMove) {
 function sessionTitle(s) {
   return s.custom_title || s.gen_title || s.title || "(無題)";
 }
+
+// titleClass adds "titling" (a spinner before the title, app.css) while
+// claude -p is generating the session's title.
+function titleClass(base, s) {
+  return s?.title_status === "running" ? base + " titling" : base;
+}
+const TITLING_TIP = "タイトルを生成しています（claude -p）";
 
 // Tabs mirror the TUI's strip: "" = 最新 (everything, newest first), then
 // user-named groups and — unless the device turned auto_repo_tabs off —
@@ -807,7 +814,7 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
     check || null,
     h("span", { class: "num" }, s.num ? `#${s.num}` : ""),
     h("div", { class: "grow" },
-      h("div", { class: "title" }, (s.favorite ? "📌 " : "") + sessionTitle(s)),
+      h("div", { class: titleClass("title", s), title: s.title_status === "running" ? TITLING_TIP : null }, (s.favorite ? "📌 " : "") + sessionTitle(s)),
       h("div", { class: "sub" }, sub),
       brief ? h("div", { class: "sub meta" }, usageLine(brief)) : null),
     ...chips, mark);
@@ -1500,6 +1507,7 @@ function gridTile(c) {
     update(c2) {
       session = c2.session;
       title.textContent = (session.num ? `#${session.num} ` : "") + sessionTitle(session);
+      title.classList.toggle("titling", session.title_status === "running");
       const st = gridState(session);
       status.textContent = st;
       status.className = "chip " + (session.attention === "needs_you" ? "pend" : session.attention === "done" && session.status !== "active" ? "done" : session.status);
@@ -1723,7 +1731,7 @@ function gridPage() {
       } },
         h("div", { class: "row" }, h("span", { class: "chip dev" }, c.device_name), h("span", { class: "chip" }, gridState(c.session)),
           h("span", { class: "grow" }), h("span", { class: "muted small" }, rel(c.session.last_seen))),
-        h("div", { class: "card-title" }, (c.session.num ? `#${c.session.num} ` : "") + sessionTitle(c.session))))
+        h("div", { class: titleClass("card-title", c.session) }, (c.session.num ? `#${c.session.num} ` : "") + sessionTitle(c.session))))
         : [h("div", { class: "muted small" }, rest.length ? "一致するセッションはありません" : "追加できるセッションはありません（すべて配置済み）")]));
     };
     q.addEventListener("input", draw);
@@ -2478,6 +2486,7 @@ async function chatPage(id, { sid, key }) {
 
     const title = session ? (session.num ? `#${session.num} ` : "") + sessionTitle(session) : sid ? sid : "新規セッション";
     titleEl.textContent = title;
+    titleEl.classList.toggle("titling", session?.title_status === "running");
     titleEl.style.setProperty("--sess", session ? sessionColorOf(session) : sessionColor(sid));
     crumbs({ text: "端末", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: title });
     // A ccdash-hosted claude is alive even when discovery still files the

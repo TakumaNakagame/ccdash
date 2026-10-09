@@ -329,6 +329,14 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .card { display: block; text-decoration: none; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--bg); }
 .card.needs_you { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--bg)); }
 .card.done { border-color: color-mix(in srgb, var(--ok) 60%, var(--line)); background: color-mix(in srgb, var(--ok) 8%, var(--bg)); }
+/* Title generation in flight: a small spinner before the title. */
+.titling::before {
+  content: ""; display: inline-block; width: .8em; height: .8em; margin-right: .4em; vertical-align: -.1em;
+  border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%;
+  animation: titling-spin .8s linear infinite;
+}
+@keyframes titling-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .titling::before { animation: blink 1.2s infinite ease-in-out; } }
 .card-title { font-weight: 600; font-size: 13px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-reason { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip.done { color: var(--ok); }

@@ -3960,6 +3960,13 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if ref != "" {
 		titleBudget -= runewidth.StringWidth(ref) + 1
 	}
+	// Title generation in flight: a spinner in front of the title, so it
+	// shows even when line 2 is cut short.
+	titling := ""
+	if s.TitleStatus == "running" {
+		titling = titleSpinner(m.animTick) + " "
+		titleBudget -= runewidth.StringWidth(titling)
+	}
 	if titleBudget < 10 {
 		titleBudget = 10
 	}
@@ -3972,6 +3979,9 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		titleStyled = pendingRowStyle.Render(titleText)
 	case s.DisplayTitle() == "":
 		titleStyled = subtitleStyle.Render(titleText)
+	}
+	if titling != "" {
+		titleStyled = pendingStyle.Render(titling) + titleStyled
 	}
 	if ref != "" {
 		titleStyled = refStyle.Render(ref) + " " + titleStyled
@@ -4000,7 +4010,7 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	}
 	switch s.TitleStatus {
 	case "running":
-		parts = append(parts, pendingStyle.Render("⏳ titling"))
+		parts = append(parts, pendingStyle.Render(titleSpinner(m.animTick)+" generating title…"))
 	case "error":
 		parts = append(parts, statusStop.Render("✗ title error"))
 	}
@@ -4507,6 +4517,13 @@ func wrapToWidth(s string, width int) []string {
 // terminal worth supporting and the rotation is recognisable as motion
 // even at small sizes.
 var activeSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// titleSpinner is the frame shown while a session's title is being
+// generated (title_status "running").
+func titleSpinner(tick int) string {
+	n := len(activeSpinnerFrames)
+	return activeSpinnerFrames[((tick%n)+n)%n]
+}
 
 func renderStatusDot(s mdl.SessionStatus, tick int) string {
 	switch s {
