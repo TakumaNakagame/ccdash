@@ -929,7 +929,7 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
     check.addEventListener("change", () => sel.toggle(s.session_id, check.checked));
   }
   const proj = s.project ? `;--proj:${projectColorOf(s.project, s.project_color)}` : "";
-  return h("div", { class: "item" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : ""), "data-sid": s.session_id,
+  return h("div", { class: "item srow" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : ""), "data-sid": s.session_id,
     style: `--sess:${sessionColorOf(s)}${proj}`, onclick: (e) => {
     if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
     location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`;
@@ -940,7 +940,7 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
       h("div", { class: titleClass("title", s), title: s.title_status === "running" ? TITLING_TIP : null }, (s.favorite ? "📌 " : "") + sessionTitle(s)),
       h("div", { class: "sub" }, sub),
       brief ? h("div", { class: "sub meta" }, usageLine(brief)) : null),
-    ...chips, mark);
+    h("span", { class: "srow-tail" }, ...chips, mark));
 }
 
 function renderApprovals(el, id, aps, sessions) {
