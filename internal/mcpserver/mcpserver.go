@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -43,14 +44,25 @@ Sessions are referred to as "#N" (their short number) or by session id.
 The organizing tools (set_project, rename_project, order_projects, set_project_color, set_title, set_later, set_archived)
 change what the operator sees in ccdash; projects are just names, created on first use.
 start_session opens a new claude session in a directory (optionally in a project, with a
-first prompt); the operator sees and drives it in ccdash.`
+first prompt); the operator sees and drives it in ccdash.
+When this machine is joined to a ccdash hub, each session carries "url": a link that opens
+that session's chat in the hub portal (browser or installed app). Put it next to a session
+whenever you list sessions for the operator, e.g. the ones that need them.`
 
 // Server serves one stdio connection.
 type Server struct {
 	st       store.Store
 	version  string
 	readOnly bool
+	hubURL   string // hub origin for session links; "" = not joined, no links
 	now      func() time.Time
+}
+
+// WithHubURL makes every session row carry a link to its chat in that hub's
+// portal (<hub>/s/<session id>; the hub finds the device).
+func (s *Server) WithHubURL(u string) *Server {
+	s.hubURL = strings.TrimRight(u, "/")
+	return s
 }
 
 // New returns a server over st; readOnly leaves out the organizing tools.
@@ -407,6 +419,7 @@ type sessionRow struct {
 	Later     bool   `json:"watch_later,omitempty"`
 	Archived  bool   `json:"archived,omitempty"`
 	SessionID string `json:"session_id"`
+	URL       string `json:"url,omitempty"` // the session's chat in the hub portal
 }
 
 func (s *Server) row(x model.Session) sessionRow {
@@ -414,6 +427,9 @@ func (s *Server) row(x model.Session) sessionRow {
 		Ref: x.Ref(), Title: x.DisplayTitle(), Project: x.Project, Group: groupOf(x),
 		Status: string(x.Status), Attention: x.Attention, Reason: x.AttentionReason, Pending: x.PendingCount,
 		Cwd: x.Cwd, Branch: x.Branch, Pinned: x.Favorite, New: x.Unseen, Later: x.Later, Archived: x.Archived, SessionID: x.SessionID,
+	}
+	if s.hubURL != "" {
+		r.URL = s.hubURL + "/s/" + url.PathEscape(x.SessionID)
 	}
 	if x.Account != "default" {
 		r.Account = x.Account

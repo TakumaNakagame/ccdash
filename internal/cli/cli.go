@@ -26,6 +26,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/clientcfg"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/hookcfg"
+	"github.com/takumanakagame/ccmanage/internal/hubcfg"
 	"github.com/takumanakagame/ccmanage/internal/mcpserver"
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/selfupdate"
@@ -568,6 +569,7 @@ ccdash to also record tmux pane / session and the wrapper PID.`,
 // `claude mcp add ccdash -- ccdash mcp` (add -r to read a remote collector).
 func mcpCmd(rf *remoteFlags, version string) *cobra.Command {
 	var readOnly bool
+	var hubURL string
 	c := &cobra.Command{
 		Use:   "mcp",
 		Short: "Let Claude see and organize ccdash (projects, sessions, status) as an MCP server (stdio)",
@@ -579,7 +581,9 @@ It never stops claude or answers approvals; --read-only keeps only the viewing t
 
   claude mcp add --scope user ccdash -- ccdash mcp
 
-(append -r to read the remote collector configured with 'ccdash remote set').`,
+(append -r to read the remote collector configured with 'ccdash remote set').
+When this machine is joined to a hub ('ccdash hub join'), sessions carry a "url" that
+opens their chat in the hub portal; --hub-url sets or overrides that origin.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// stdout carries the protocol; keep logs off it.
 			log.SetOutput(os.Stderr)
@@ -588,10 +592,16 @@ It never stops claude or answers approvals; --read-only keeps only the viewing t
 				return err
 			}
 			defer closeFn()
-			return mcpserver.New(st, version, readOnly).Serve(cmd.Context(), os.Stdin, os.Stdout)
+			if hubURL == "" {
+				if hc, err := hubcfg.Load(); err == nil {
+					hubURL = hc.URL
+				}
+			}
+			return mcpserver.New(st, version, readOnly).WithHubURL(hubURL).Serve(cmd.Context(), os.Stdin, os.Stdout)
 		},
 	}
 	c.Flags().BoolVar(&readOnly, "read-only", false, "only offer the viewing tools")
+	c.Flags().StringVar(&hubURL, "hub-url", "", "hub origin for session links (default: the hub this machine joined)")
 	return c
 }
 

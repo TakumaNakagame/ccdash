@@ -354,6 +354,37 @@ func (h *Hub) dropSnapshot(id string) {
 	h.mu.Unlock()
 }
 
+// handleSessionLink sends /s/<session id> to that session's chat on
+// whichever device reports it. A session the snapshots don't list (e.g.
+// archived) goes to the only connected device when there is just one —
+// its chat loads any session by id.
+func (h *Hub) handleSessionLink(w http.ResponseWriter, r *http.Request) {
+	sid := r.PathValue("session")
+	dev := ""
+	h.mu.Lock()
+	for id, snap := range h.snapshots {
+		for _, s := range snap.Sessions {
+			if s.SessionID == sid {
+				dev = id
+			}
+		}
+	}
+	if dev == "" && len(h.conns) == 1 {
+		for id := range h.conns {
+			dev = id
+		}
+	}
+	h.mu.Unlock()
+	if dev == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ccdash hub</title>` +
+			`<p style="font-family:sans-serif">このセッションを持つ端末が見つかりません（オフラインかもしれません）。 <a href="/">ポータルを開く</a></p>`))
+		return
+	}
+	http.Redirect(w, r, "/#/d/"+url.PathEscape(dev)+"/s/"+url.PathEscape(sid), http.StatusFound)
+}
+
 type boardCard struct {
 	DeviceID   string        `json:"device_id"`
 	DeviceName string        `json:"device_name"`

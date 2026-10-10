@@ -672,3 +672,10 @@ Tools:
 
 It never stops claude and never answers approvals. Add
 `--read-only` (`ccdash mcp --read-only`) to offer only the first four.
+
+When this machine is joined to a hub (`ccdash hub join`), every session
+carries a `url` (`https://<hub>/s/<session id>`). Opening it in a browser or
+the installed app lets the hub find the device that has the session and open
+its chat (after a login if needed), so a managing Claude can hand you a list
+of "sessions that need you" you can tap straight into. `--hub-url` sets or
+overrides the hub origin.

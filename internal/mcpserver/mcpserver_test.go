@@ -190,3 +190,24 @@ func TestStartSession(t *testing.T) {
 		t.Error("read-only: want error")
 	}
 }
+
+// TestHubLinks: with a hub URL every session row links to its portal chat;
+// without one there is no url field.
+func TestHubLinks(t *testing.T) {
+	ctx := context.Background()
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	_ = d.UpsertSession(ctx, &model.Session{SessionID: "abc-1", Cwd: "/w", Status: model.StatusIdle})
+	_ = d.SetAttention(ctx, "abc-1", model.AttentionNeedsYou, "question")
+	out, err := New(store.NewLocal(d), "test", true).WithHubURL("https://hub.example/").call(ctx, "overview", nil)
+	if err != nil || !strings.Contains(out, `"url": "https://hub.example/s/abc-1"`) {
+		t.Fatalf("overview = %s, %v", out, err)
+	}
+	out, _ = New(store.NewLocal(d), "test", true).call(ctx, "get_session", json.RawMessage(`{"session":"#1"}`))
+	if strings.Contains(out, `"url"`) {
+		t.Fatalf("url without a hub: %s", out)
+	}
+}

@@ -482,3 +482,5 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | `start_session` | 指定ディレクトリ (絶対パス) で新しい claude セッションを起動 (TUI の `n` と同じ)。`project` / 最初の `prompt` / `permission_mode` を指定可。設定の Attach が OFF なら使えない |
 
 claude の停止や承認の判断はできません。`ccdash mcp --read-only` にすると上の 4 つ (参照系) だけになります。
+
+この端末がハブに参加している (`ccdash hub join` 済み) と、各セッションに `url` (`https://<ハブ>/s/<セッションID>`) が付きます。ブラウザやインストールしたアプリで開くと、ハブがそのセッションを持つ端末を探してチャット画面を開きます (未ログインならログイン後に移動)。「対応が必要なセッションを、開けるリンク付きで一覧にして」と頼めば、管理役の Claude がそのまま飛べるリストを作れます。ハブの URL は `--hub-url` で指定・上書きできます。

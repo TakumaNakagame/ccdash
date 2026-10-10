@@ -129,9 +129,9 @@ func newPTYEntry(sess *attach.Session, key string, cols, rows int) *ptyEntry {
 		rows = defaultPTYRows
 	}
 	e := &ptyEntry{
-		sess:     sess,
-		ptyKey:   key,
-		emu:      vt.NewEmulator(cols, rows),
+		sess:       sess,
+		ptyKey:     key,
+		emu:        vt.NewEmulator(cols, rows),
 		curBlink:   true,
 		viewers:    map[*screenViewer]struct{}{},
 		mouseModes: map[ansi.Mode]bool{},

@@ -206,6 +206,9 @@ func (h *Hub) Handler() http.Handler {
 			files.ServeHTTP(w, r)
 		}))
 	}
+	// /s/<session id> is a shareable link to one session's chat (ccdash mcp
+	// hands these out); the hub finds the device.
+	mux.Handle("GET /s/{session}", h.requireUser(http.HandlerFunc(h.handleSessionLink), true))
 	mux.Handle("/", h.requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("X-Frame-Options", "DENY")

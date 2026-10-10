@@ -154,3 +154,22 @@ func TestPushSubscribeAndKey(t *testing.T) {
 		t.Fatalf("unsubscribe = %d", w.Code)
 	}
 }
+
+// TestSessionLink: /s/<id> lands on that session's chat on the device that
+// reports it, asks for a login first, and says so when nobody has it.
+func TestSessionLink(t *testing.T) {
+	hub := newTestHub(t, true)
+	hub.storeSnapshot(Device{ID: "d1"}, []model.Session{{SessionID: "x"}})
+	hub.storeSnapshot(Device{ID: "d2"}, []model.Session{{SessionID: "abc-123"}})
+	w := serve(hub.Handler(), "GET", "/s/abc-123", "", nil)
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/#/d/d2/s/abc-123" {
+		t.Fatalf("link = %d %q", w.Code, w.Header().Get("Location"))
+	}
+	if w := serve(hub.Handler(), "GET", "/s/nope", "", nil); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown session = %d", w.Code)
+	}
+	w = serve(newTestHub(t, false).Handler(), "GET", "/s/abc-123", "", nil)
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/auth/login?next=%2Fs%2Fabc-123" {
+		t.Fatalf("logged out = %d %q", w.Code, w.Header().Get("Location"))
+	}
+}
