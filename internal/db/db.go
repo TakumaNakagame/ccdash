@@ -453,7 +453,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			return nil, err
 		}
 		finishAttention(&s, attAt)
-		finishSeen(&s, actAt, seenAt)
+		finishSeen(&s, model.SessionStatus(status), actAt, seenAt)
 		if laterAt > 0 {
 			s.Later, s.LaterAt = true, time.UnixMilli(laterAt).UTC()
 		}
@@ -527,7 +527,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		s.GenTitleAt = time.Unix(genAt, 0).UTC()
 	}
 	finishAttention(&s, attAt)
-	finishSeen(&s, actAt, seenAt)
+	finishSeen(&s, model.SessionStatus(status), actAt, seenAt)
 	if laterAt > 0 {
 		s.Later, s.LaterAt = true, time.UnixMilli(laterAt).UTC()
 	}
@@ -535,15 +535,17 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 }
 
 // finishSeen fills LastActivity / SeenAt and Unseen: something happened in
-// the session after the operator last looked at it.
-func finishSeen(s *model.Session, actAt, seenAt int64) {
+// the session after the operator last looked at it — and the turn is over.
+// A session still working (active) isn't NEW yet: there's no result to
+// look at until it stops (or stops running).
+func finishSeen(s *model.Session, status model.SessionStatus, actAt, seenAt int64) {
 	if actAt > 0 {
 		s.LastActivity = time.Unix(actAt, 0).UTC()
 	}
 	if seenAt > 0 {
 		s.SeenAt = time.Unix(seenAt, 0).UTC()
 	}
-	s.Unseen = actAt > seenAt
+	s.Unseen = actAt > seenAt && status != model.StatusActive
 }
 
 func unixOrZero(t time.Time) int64 {

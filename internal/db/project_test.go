@@ -211,8 +211,14 @@ func TestUnseen(t *testing.T) {
 	if err := d.UpsertSession(ctx, &model.Session{SessionID: "a", Cwd: "/x", Status: model.StatusActive, LastActivity: later}); err != nil {
 		t.Fatal(err)
 	}
+	if a, _, _ := d.GetSession(ctx, "a"); a.Unseen {
+		t.Fatal("NEW while the turn is still running")
+	}
+	if err := d.UpsertSession(ctx, &model.Session{SessionID: "a", Cwd: "/x", Status: model.StatusIdle, LastActivity: later}); err != nil {
+		t.Fatal(err)
+	}
 	if a, _, _ := d.GetSession(ctx, "a"); !a.Unseen {
-		t.Fatal("activity after the last look is not NEW")
+		t.Fatal("activity after the last look is not NEW once the turn is over")
 	}
 	if err := d.MarkSeen(ctx, "a"); err != nil {
 		t.Fatal(err)
