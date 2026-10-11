@@ -914,8 +914,24 @@ async function restartCollector(id, last) {
 // beamPhase: the working beam's animation delay, tied to the wall clock so
 // a row rebuilt by a refresh carries on where the old one was instead of
 // jumping back to the start.
-const BEAM_MS = 2800;
+const BEAM_MS = 3200;
 const beamPhase = () => `--beam-delay:-${(Date.now() % BEAM_MS) / 1000}s`;
+
+// beamSVG is the working beam's outline (see .beam in app.css): rects with
+// pathLength=100, so the dashes move at one speed all the way round.
+const SVG_NS = "http://www.w3.org/2000/svg";
+function beamSVG() {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "beam");
+  svg.setAttribute("aria-hidden", "true");
+  for (const c of ["base", "tail", "head"]) {
+    const r = document.createElementNS(SVG_NS, "rect");
+    r.setAttribute("class", c);
+    r.setAttribute("pathLength", "100");
+    svg.append(r);
+  }
+  return svg;
+}
 
 function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
   const chips = [];
@@ -955,7 +971,8 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
       h("div", { class: titleClass("title", s), title: s.title_status === "running" ? TITLING_TIP : null }, (s.favorite ? "📌 " : "") + sessionTitle(s)),
       h("div", { class: "sub" }, sub),
       brief ? h("div", { class: "sub meta" }, usageLine(brief)) : null),
-    h("span", { class: "srow-tail" }, ...chips, mark));
+    h("span", { class: "srow-tail" }, ...chips, mark),
+    s.status === "active" ? beamSVG() : null);
 }
 
 function renderApprovals(el, id, aps, sessions) {
@@ -1818,8 +1835,12 @@ function gridTile(c) {
       status.textContent = st;
       status.className = "chip " + (session.attention === "needs_you" ? "pend" : session.attention === "done" && session.status !== "active" ? "done" : session.status);
       el.classList.toggle("needs", session.attention === "needs_you");
-      if (session.status === "active" && !el.classList.contains("working")) el.style.setProperty("--beam-delay", `-${(Date.now() % BEAM_MS) / 1000}s`);
-      el.classList.toggle("working", session.status === "active");
+      const working = session.status === "active";
+      if (working && !el.classList.contains("working")) {
+        el.style.setProperty("--beam-delay", `-${(Date.now() % BEAM_MS) / 1000}s`);
+        el.append(beamSVG());
+      } else if (!working) el.querySelector(":scope > .beam")?.remove();
+      el.classList.toggle("working", working);
       reason.replaceChildren(...(session.attention === "needs_you"
         ? [h("span", {}, "? " + (session.attention_reason || "要対応")), h("a", { class: "btn small", href: chatHref }, "開いて回答")]
         : []));
@@ -1831,7 +1852,7 @@ function gridTile(c) {
       stopBtn.hidden = session.status !== "active";
       resumeBtn.disabled = waiting;
       resumeBtn.textContent = waiting ? "再開中…" : "▶ 再開";
-      input.placeholder = running ? "返信（Enter で送信）" : "送信すると再開します";
+      input.placeholder = running ? "返信（Enter で送信・Shift+Enter で改行）" : "送信すると再開します";
     },
     async refresh() {
       const d = dev(id);
@@ -3040,6 +3061,25 @@ async function pushSubscription() {
   return reg ? reg.pushManager.getSubscription() : null;
 }
 
+// beamButton turns the working beam (the animated outline on working
+// sessions) on / off for this browser — on a slow phone it costs.
+function beamButton() {
+  const get = () => { try { return localStorage.getItem("ccdash.beam") !== "off"; } catch { return true; } };
+  const btn = h("button", { class: "btn small" });
+  const paint = () => {
+    const on = get();
+    document.documentElement.classList.toggle("no-beam", !on);
+    btn.textContent = on ? "✨" : "◌";
+    btn.title = on ? "作業中アニメーション ON（タップで OFF）" : "作業中アニメーション OFF（タップで ON）";
+  };
+  btn.addEventListener("click", () => {
+    try { localStorage.setItem("ccdash.beam", get() ? "off" : "on"); } catch {}
+    paint();
+  });
+  paint();
+  return btn;
+}
+
 function notifyButton() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return null;
   const btn = h("button", { class: "btn small bell", title: "通知" }, "🔕");
@@ -3103,7 +3143,7 @@ function updateBadge(b) {
   } catch {}
   try {
     me = await api("/api/me");
-    $("#me").replaceChildren(h("span", {}, notifyButton(), h("span", { class: "email" }, me.email), me.noAuth ? null : h("a", { href: "/auth/logout" }, "ログアウト")));
+    $("#me").replaceChildren(h("span", {}, beamButton(), notifyButton(), h("span", { class: "email" }, me.email), me.noAuth ? null : h("a", { href: "/auth/logout" }, "ログアウト")));
   } catch {}
   // Reload into a new hub build: a single-page app otherwise keeps running
   // the JS it loaded, however long the tab stays open. Wait while the user
