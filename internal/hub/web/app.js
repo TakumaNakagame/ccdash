@@ -911,6 +911,12 @@ async function restartCollector(id, last) {
   } catch (e) { toast(e.message); }
 }
 
+// beamPhase: the working beam's animation delay, tied to the wall clock so
+// a row rebuilt by a refresh carries on where the old one was instead of
+// jumping back to the start.
+const BEAM_MS = 2800;
+const beamPhase = () => `--beam-delay:-${(Date.now() % BEAM_MS) / 1000}s`;
+
 function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
   const chips = [];
   if (s.unseen) chips.push(h("span", { class: "chip new", title: "最後に見た後に進捗あり" }, "NEW"));
@@ -938,8 +944,8 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
     check.addEventListener("change", () => sel.toggle(s.session_id, check.checked));
   }
   const proj = s.project ? `;--proj:${projectColorOf(s.project, s.project_color)}` : "";
-  return h("div", { class: "item srow" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : ""), "data-sid": s.session_id,
-    style: `--sess:${sessionColorOf(s)}${proj}`, onclick: (e) => {
+  return h("div", { class: "item srow" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : "") + (s.status === "active" ? " working" : ""), "data-sid": s.session_id,
+    style: `--sess:${sessionColorOf(s)}${proj}${s.status === "active" ? ";" + beamPhase() : ""}`, onclick: (e) => {
     if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
     location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`;
   } },
@@ -1791,6 +1797,7 @@ function gridTile(c) {
       status.textContent = st;
       status.className = "chip " + (session.attention === "needs_you" ? "pend" : session.attention === "done" && session.status !== "active" ? "done" : session.status);
       el.classList.toggle("needs", session.attention === "needs_you");
+      if (session.status === "active" && !el.classList.contains("working")) el.style.setProperty("--beam-delay", `-${(Date.now() % BEAM_MS) / 1000}s`);
       el.classList.toggle("working", session.status === "active");
       reason.replaceChildren(...(session.attention === "needs_you"
         ? [h("span", {}, "? " + (session.attention_reason || "要対応")), h("a", { class: "btn small", href: chatHref }, "開いて回答")]

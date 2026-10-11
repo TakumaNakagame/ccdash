@@ -526,3 +526,26 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   }
 }
+
+/* Working beam: while Claude is mid-turn, a gradient comet runs around the
+   session's row (session list) or tile (grid). A conic gradient whose start
+   angle (--beam, a registered <angle> so it animates) spins, masked down to
+   a thin ring; a faint full ring under it keeps the frame visible. */
+@property --beam { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+.item.working, .tile.working { position: relative; }
+.item.working::after, .tile.working::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 2px; pointer-events: none; z-index: 2;
+  background:
+    conic-gradient(from var(--beam), transparent 0deg 150deg, #38bdf8 230deg, #a78bfa 285deg, #f472b6 330deg, #fbbf24 360deg),
+    conic-gradient(from var(--beam), color-mix(in srgb, #a78bfa 30%, transparent), color-mix(in srgb, #38bdf8 30%, transparent), color-mix(in srgb, #a78bfa 30%, transparent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  animation: beam 2.8s linear infinite; /* 2.8 s = BEAM_MS in app.js */
+  animation-delay: var(--beam-delay, 0s);
+}
+.tile.working::after { padding: 2px; }
+.tile.working { border-color: transparent; box-shadow: 0 0 18px -6px color-mix(in srgb, #a78bfa 55%, transparent); }
+.item.working { background: linear-gradient(90deg, color-mix(in srgb, #a78bfa 7%, transparent), transparent 60%); }
+@keyframes beam { to { --beam: 360deg; } }
+@media (prefers-reduced-motion: reduce) { .item.working::after, .tile.working::after { animation: none; } }
