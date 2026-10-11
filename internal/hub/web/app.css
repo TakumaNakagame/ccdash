@@ -52,7 +52,11 @@
 ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 40%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--muted) 70%, transparent); }
 ::-webkit-scrollbar-corner { background: transparent; }
-html, body { height: 100%; }
+/* The app shell never scrolls as a document: iOS Safari would otherwise
+   drag the whole page (header and all) on an overscroll and leave a blank
+   band. Content scrolls inside main#view (or the split panes / chat). */
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+body { height: 100dvh; }
 body {
   margin: 0;
   background: var(--bg);
@@ -84,7 +88,7 @@ header#top {
 #me { color: var(--muted); font-size: 12px; white-space: nowrap; }
 #me a { margin-left: 8px; }
 
-main#view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+main#view { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .page { width: 100%; max-width: 960px; margin: 0 auto; padding: 16px; }
 .row { display: flex; align-items: center; gap: 8px; }
 .grow { flex: 1; min-width: 0; }
