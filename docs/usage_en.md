@@ -558,6 +558,10 @@ machine never accepts inbound connections — its collector dials out.
 - **＋** next to the input attaches images (camera on a phone); pasting or
   dropping an image works too. They're saved on the device under
   `$XDG_STATE_HOME/ccdash/uploads/` (kept 7 days) and attached to the prompt.
+- A `! command` line in Claude's reply (a plain `! cmd` line, inline code or
+  a `!` line in a code block) is tappable: a dialog shows the command, and
+  **Yes** sends it to that session's claude in `!` (bash) mode. The output
+  shows up as **Shell output**. Only for sessions running under ccdash.
 - When Claude asks a multiple-choice question, a **question card** appears:
   tap an option (single choice moves on by itself), toggle options and press
   **Next** for multi-select, or type into **Other**. A review step confirms

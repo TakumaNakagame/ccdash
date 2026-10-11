@@ -1191,6 +1191,14 @@ function parseTranscript(entries, opts = {}) {
             continue;
           }
           if (/^\[Request interrupted/.test(t)) { items.push({ kind: "note", text: "中断しました" }); continue; }
+          // Bash mode ("! cmd"): the command, then its output as its own entry.
+          const bin = t.match(/^<bash-input>([\s\S]*)<\/bash-input>$/);
+          if (bin) { items.push({ kind: "user", text: "! " + bin[1].trim() }); continue; }
+          if (/^<bash-(stdout|stderr)>/.test(t)) {
+            const tag = (k) => t.match(new RegExp(`<bash-${k}>([\\s\\S]*?)</bash-${k}>`))?.[1] || "";
+            items.push({ kind: "bashout", stdout: tag("stdout").trimEnd(), stderr: tag("stderr").trimEnd() });
+            continue;
+          }
           items.push({ kind: "user", text: t });
         } else {
           items.push({ kind: "assistant", text: t });
@@ -1305,6 +1313,61 @@ function userText(text) {
   return out;
 }
 
+// ---- "! command" lines in Claude's replies ----
+
+// bangCmd returns the command of a one-line "! command" (Claude Code's
+// bash mode, the way Claude asks you to run something), or "". Prose
+// (prose = true) needs the space after "!", so "!important" stays text.
+function bangCmd(line, prose) {
+  const m = String(line).trim().match(prose ? /^!\s+([^\s!=].*)$/ : /^!\s*([^\s!=].*)$/);
+  return m && !m[1].includes("\n") ? m[1].trim() : "";
+}
+
+// bangLinks makes each "! command" in a rendered reply tappable — a plain
+// line, a list item, an inline `! cmd` or a line of a code block — and
+// hands the command to run (which asks before sending anything).
+function bangLinks(el, run) {
+  const mark = (node, cmd) => {
+    node.classList.add("bang");
+    node.title = "タップしてこのセッションで実行";
+    node.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); run(cmd); });
+  };
+  for (const c of el.querySelectorAll("code")) {
+    if (c.closest("pre")) continue;
+    const cmd = bangCmd(c.textContent);
+    if (cmd) mark(c, cmd);
+  }
+  for (const n of el.querySelectorAll(":scope > div, li")) {
+    if (n.querySelector(".bang")) continue;
+    const cmd = bangCmd(n.textContent, true);
+    if (cmd) mark(n, cmd);
+  }
+  for (const pre of el.querySelectorAll("pre.code")) {
+    const cmds = pre.textContent.split("\n").map(bangCmd).filter(Boolean);
+    if (!cmds.length) continue;
+    pre.after(h("div", { class: "bang-row" }, ...cmds.map((cmd) =>
+      h("button", { class: "btn small bang-btn", type: "button", onclick: () => run(cmd) }, "▸ ! " + cmd))));
+  }
+}
+
+// confirmBang shows the command and sends it only on an explicit yes.
+function confirmBang(cmd, send) {
+  dialog((body, close) => {
+    const yes = h("button", { class: "btn primary", type: "button" }, "はい（実行する）");
+    yes.addEventListener("click", async () => {
+      yes.disabled = true;
+      try { await send(cmd); close(); toast("コマンドを送りました"); }
+      catch (e) { toast(e.message); yes.disabled = false; }
+    });
+    body.append(h("h1", {}, "このコマンドを実行しますか？"),
+      h("div", { class: "muted small" }, "このセッションの claude にシェルコマンド（! モード）として送ります。端末上でそのまま実行されます。"),
+      h("pre", { class: "mono bang-cmd" }, "! " + cmd),
+      h("div", { class: "actions" },
+        h("button", { class: "btn", value: "cancel", formnovalidate: true }, "いいえ"),
+        yes));
+  });
+}
+
 function renderItem(it, ctx) {
   if (it.kind === "tool" && it.name === "AskUserQuestion" && ctx) return askCard(it, ctx);
   switch (it.kind) {
@@ -1315,7 +1378,15 @@ function renderItem(it, ctx) {
     case "assistant": {
       const el = h("div", { class: "bubble assistant" });
       el.innerHTML = md(it.text);
+      if (ctx?.runBang) bangLinks(el, ctx.runBang);
       return el;
+    }
+    case "bashout": {
+      const out = [it.stdout, it.stderr].filter(Boolean).join("\n");
+      const lines = out ? out.split("\n").length : 0;
+      return h("details", { class: "tool bashout", open: lines > 0 && lines <= 12 },
+        h("summary", {}, it.stderr && !it.stdout ? "✗ " : "$ ", "シェルの出力", lines ? `（${lines} 行）` : "（出力なし）"),
+        out ? h("pre", { class: it.stderr && !it.stdout ? "err" : "" }, out.length > 6000 ? out.slice(0, 6000) + "\n…" : out) : null);
     }
     case "thinking":
       return h("details", { class: "thinking" }, h("summary", {}, "思考"), h("div", {}, it.text));
@@ -2473,6 +2544,20 @@ async function chatPage(id, { sid, key }) {
     agentFor: (toolUseId) => agents.find((a) => a.toolUseId === toolUseId),
     openAgent: (a) => openAgent(id, sid, a),
     hosted: () => hosted,
+    runBang: (cmd) => {
+      if (!hosted || !ptyKey) return toast("このセッションは ccdash 上で動いていないため実行できません", 4000);
+      if (promptEl.childElementCount) return toast("Claude が選択を待っています。先に上のカードで回答してください", 4000);
+      confirmBang(cmd, async (c) => {
+        // "!" typed into claude's empty input switches it to bash mode;
+        // the command follows as plain text, then Enter.
+        await d.post(`/pty/${encodeURIComponent(ptyKey)}/input`, { keys: "!" });
+        await new Promise((r) => setTimeout(r, 250));
+        await d.post(`/pty/${encodeURIComponent(ptyKey)}/input`, { text: c, submit: true });
+        pendingSends.push({ text: "! " + c, match: c, at: Date.now() });
+        render(true);
+        setTimeout(poll, 600);
+      });
+    },
     answer: async (qs, state) => {
       if (!hosted) throw new Error("ccdash 上で動いていないため回答できません");
       const pause = (ms) => new Promise((r) => setTimeout(r, ms));
