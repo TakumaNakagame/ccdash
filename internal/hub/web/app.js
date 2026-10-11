@@ -1097,8 +1097,42 @@ function inlineMd(s) {
   return s
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-    .replace(/(^|[\s（])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // Bare URLs are linked after rendering (linkify), wherever they are.
+}
+
+// linkify turns every bare http(s) URL in el's text into a link — after
+// Japanese text, inside inline code, code blocks, tool output — leaving
+// existing links alone. Trailing punctuation stays text.
+const URL_RE = /https?:\/\/[^\s<>"'`\u0080-\uffff]+/g; // raw non-ASCII ends it (日本語 right after a URL)
+function linkify(el) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => n.parentElement?.closest("a, textarea, input") ? NodeFilter.FILTER_REJECT
+      : /https?:\/\//.test(n.data) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+  });
+  const nodes = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
+  for (const n of nodes) {
+    const frag = document.createDocumentFragment();
+    let at = 0;
+    for (const m of n.data.matchAll(URL_RE)) {
+      let url = m[0];
+      // Sentence punctuation and an unmatched closing bracket aren't part of it.
+      const count = (c) => url.split(c).length - 1;
+      for (;;) {
+        const ch = url.slice(-1);
+        if (/[.,;:!?。、」』）]/.test(ch) || (ch === ")" && count(")") > count("(")) || (ch === "]" && count("]") > count("["))) url = url.slice(0, -1);
+        else break;
+      }
+      if (url.length <= "https://".length) continue;
+      frag.append(n.data.slice(at, m.index), h("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, url));
+      at = m.index + url.length;
+    }
+    if (!at) continue;
+    frag.append(n.data.slice(at));
+    n.replaceWith(frag);
+  }
+  return el;
 }
 
 function md(text) {
@@ -1363,7 +1397,10 @@ function bangLinks(el, run) {
   const mark = (node, cmd) => {
     node.classList.add("bang");
     node.title = "タップしてこのセッションで実行";
-    node.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); run(cmd); });
+    node.addEventListener("click", (e) => {
+      if (e.target.closest("a")) return; // a URL inside the line opens as a link
+      e.preventDefault(); e.stopPropagation(); run(cmd);
+    });
   };
   for (const c of el.querySelectorAll("code")) {
     if (c.closest("pre")) continue;
@@ -1402,6 +1439,11 @@ function confirmBang(cmd, send) {
 }
 
 function renderItem(it, ctx) {
+  const el = renderItemRaw(it, ctx);
+  return el ? linkify(el) : el;
+}
+
+function renderItemRaw(it, ctx) {
   if (it.kind === "tool" && it.name === "AskUserQuestion" && ctx) return askCard(it, ctx);
   switch (it.kind) {
     case "user":
