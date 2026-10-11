@@ -453,6 +453,8 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .tile-log .chat-img { max-width: 50%; }
 .tile-reply { display: flex; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--line); }
 .tile-reply { align-items: flex-end; }
+.tile-reply .col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tile-thumbs .thumb { width: 44px; height: 44px; }
 .tile-reply textarea { flex: 1; min-width: 0; resize: none; min-height: 32px; max-height: 120px; line-height: 1.4; font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 6px 10px; }
 @media (max-width: 640px) { .grid-page { padding: 8px; } }
 
@@ -528,30 +530,21 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
   }
 }
 
-/* Working beam (runBeam in app.js): two glowing blobs run round the box
-   by transform only. .ring masks them to a 2px edge over a faint base
-   ring; .glow lets a larger, dimmer copy light the inside of the edge. */
+/* Working beam (runBeam in app.js): a conic-gradient comet on a square
+   that the compositor rotates, masked to a 2px ring over a faint base. */
 .item.working, .tile.working { position: relative; }
-.beam, .beam .ring, .beam .glow { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
-/* Layers: the glow under the row / tile content, the edge over it. .beam
-   itself makes no stacking context, so its children sort among the
-   content (lifted to z-index 1). */
-.item.working > :not(.beam), .tile.working > :not(.beam):not(.tile-resize) { position: relative; z-index: 1; }
-.beam .glow { overflow: hidden; opacity: .30; z-index: 0; }
-.beam .ring { z-index: 2; }
-.beam .ring {
-  padding: 2px;
-  background: color-mix(in srgb, #a78bfa 26%, transparent);
+.beam {
+  position: absolute; inset: 0; border-radius: inherit; padding: 2px; overflow: hidden; pointer-events: none; z-index: 2;
+  background: conic-gradient(color-mix(in srgb, #a78bfa 30%, transparent), color-mix(in srgb, #38bdf8 30%, transparent), color-mix(in srgb, #a78bfa 30%, transparent));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
 }
-.beam i { position: absolute; left: -70px; top: -70px; width: 140px; height: 140px; border-radius: 50%; will-change: transform; }
-.beam .glow i { left: -120px; top: -120px; width: 240px; height: 240px; }
-.item .beam .glow i { left: -80px; top: -80px; width: 160px; height: 160px; }
-.beam .b1 { background: radial-gradient(closest-side, #fff 0%, #f472b6 22%, #a78bfa 52%, rgb(167 139 250 / 0) 100%); }
-.beam .b2 { background: radial-gradient(closest-side, #fef3c7 0%, #fbbf24 20%, #38bdf8 52%, rgb(56 189 248 / 0) 100%); }
-.tile.working { border-color: transparent; box-shadow: 0 0 22px -6px color-mix(in srgb, #a78bfa 60%, transparent); }
+.beam i {
+  position: absolute; left: 50%; top: 50%; will-change: transform;
+  background: conic-gradient(transparent 0deg 150deg, #38bdf8 230deg, #a78bfa 285deg, #f472b6 330deg, #fbbf24 360deg);
+}
+.tile.working { border-color: transparent; box-shadow: 0 0 18px -6px color-mix(in srgb, #a78bfa 55%, transparent); }
 .item.working { background: linear-gradient(90deg, color-mix(in srgb, #a78bfa 7%, transparent), transparent 60%); }
 .no-beam .beam i { display: none; } /* ◌ in the header: the still ring only */
 @media (prefers-reduced-motion: reduce) { .beam i { display: none; } }

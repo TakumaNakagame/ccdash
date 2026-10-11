@@ -912,14 +912,15 @@ async function restartCollector(id, last) {
 }
 
 // ---- working beam ----
-// While Claude is mid-turn, glowing blobs run round the session's row or
-// tile (see .beam in app.css): one masked to a thin ring (the bright edge)
-// and a larger, faint copy inside (light sweeping along the edge). They
-// move by transform only — a compositor animation, no repaint per frame —
-// on keyframes placed by each side's length, so the speed is the same all
-// the way round whatever the box's shape. Phase follows the clock, so a row
-// rebuilt by a refresh carries on where the old one was.
-const BEAM_MS = 3600;
+// While Claude is mid-turn, a gradient comet circles the session's row or
+// tile (see .beam in app.css): a conic gradient, masked to a thin ring.
+// The gradient is drawn once on a square the size of the box's diagonal
+// and turned by transform: rotate — a compositor animation, no repaint per
+// frame. The angle keyframes are computed so the comet's head moves along
+// the edge at one speed, whatever the box's shape (a plain spin crawls
+// along the long sides). Phase follows the clock, so a row rebuilt by a
+// refresh carries on where the old one was.
+const BEAM_MS = 3200;
 const beamOff = () => document.documentElement.classList.contains("no-beam") || matchMedia("(prefers-reduced-motion: reduce)").matches;
 const beamRO = new ResizeObserver((entries) => {
   for (const e of entries) {
@@ -927,24 +928,42 @@ const beamRO = new ResizeObserver((entries) => {
     runBeam(e.target);
   }
 });
-function stopBeam(b) { (b._anims || []).forEach((a) => a.cancel()); b._anims = []; }
+function stopBeam(b) { b._anim?.cancel(); b._anim = null; }
+// beamKeyframes: rotate angles (clockwise from 12 o'clock) that aim at
+// evenly spaced points round a w×h box, starting at the top centre.
+function beamKeyframes(w, ht, n = 72) {
+  const P = 2 * (w + ht);
+  const at = (d) => { // point at distance d clockwise from the top centre, relative to the centre
+    d = (d + w / 2) % P;
+    if (d < w) return [d - w / 2, -ht / 2];
+    if ((d -= w) < ht) return [w / 2, d - ht / 2];
+    if ((d -= ht) < w) return [w / 2 - d, ht / 2];
+    return [-w / 2, ht / 2 - (d - w)];
+  };
+  const out = [];
+  let prev = 0;
+  for (let k = 0; k <= n; k++) {
+    const [x, y] = at((P * k) / n);
+    let deg = (Math.atan2(x, -y) * 180) / Math.PI;
+    while (deg < prev - 1e-6) deg += 360; // keep turning one way
+    if (k === n) deg = 360;
+    out.push({ transform: `rotate(${deg}deg)`, offset: k / n });
+    prev = deg;
+  }
+  return out;
+}
 function runBeam(b) {
   stopBeam(b);
-  const w = b.clientWidth, ht = b.clientHeight;
-  if (!w || !ht || beamOff()) return;
-  const P = 2 * (w + ht), t = (x, y) => ({ transform: `translate(${x}px, ${y}px)` });
-  const kf = [{ ...t(0, 0), offset: 0 }, { ...t(w, 0), offset: w / P }, { ...t(w, ht), offset: (w + ht) / P },
-    { ...t(0, ht), offset: (2 * w + ht) / P }, { ...t(0, 0), offset: 1 }];
-  const now = Date.now();
-  b._anims = [...b.querySelectorAll("i")].map((i) => {
-    const a = i.animate(kf, { duration: BEAM_MS, iterations: Infinity, easing: "linear" });
-    a.currentTime = (now + (i.classList.contains("b2") ? BEAM_MS / 2 : 0)) % BEAM_MS;
-    return a;
-  });
+  const w = b.clientWidth, ht = b.clientHeight, i = b.firstChild;
+  if (!w || !ht || !i) return;
+  const D = Math.ceil(Math.hypot(w, ht)) + 4;
+  Object.assign(i.style, { width: D + "px", height: D + "px", marginLeft: -D / 2 + "px", marginTop: -D / 2 + "px" });
+  if (beamOff()) return;
+  b._anim = i.animate(beamKeyframes(w, ht), { duration: BEAM_MS, iterations: Infinity, easing: "linear" });
+  b._anim.currentTime = Date.now() % BEAM_MS;
 }
 function beamEl() {
-  const blobs = () => [h("i", { class: "b1" }), h("i", { class: "b2" })];
-  const b = h("span", { class: "beam", "aria-hidden": "true" }, h("span", { class: "glow" }, ...blobs()), h("span", { class: "ring" }, ...blobs()));
+  const b = h("span", { class: "beam", "aria-hidden": "true" }, h("i"));
   beamRO.observe(b); // fires once laid out → runBeam
   return b;
 }
@@ -1777,7 +1796,29 @@ function gridTile(c) {
   // chat view's draft for this session, so it survives leaving the grid and
   // follows you into the chat.
   const input = h("textarea", { rows: 1, placeholder: "返信（Enter で送信・Shift+Enter で改行）", enterkeyhint: "send" });
-  const form = h("form", { class: "tile-reply" }, input, h("button", { class: "btn small primary" }, "送信"));
+  // Images: ＋ (camera on phones) or paste into the box, shown as
+  // thumbnails until sent — like the chat's composer.
+  let attachments = []; // { blob, url }
+  const thumbs = h("div", { class: "thumbs tile-thumbs" });
+  const fileInput = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
+  const attachBtn = h("button", { type: "button", class: "btn small", title: "画像を添付", onclick: () => fileInput.click() }, "＋");
+  const renderThumbs = () => thumbs.replaceChildren(...attachments.map((a, i) => h("div", { class: "thumb" },
+    h("img", { src: a.url, alt: "" }),
+    h("button", { type: "button", title: "外す", onclick: () => { URL.revokeObjectURL(a.url); attachments.splice(i, 1); renderThumbs(); } }, "×"))));
+  const addFiles = async (files) => {
+    for (const f of files) {
+      if (!f.type.startsWith("image/")) continue;
+      try { const blob = await prepareImage(f); attachments.push({ blob, url: URL.createObjectURL(blob) }); }
+      catch (e) { toast("画像を読み込めませんでした: " + e.message); }
+    }
+    renderThumbs();
+  };
+  fileInput.addEventListener("change", () => { addFiles([...fileInput.files]); fileInput.value = ""; });
+  input.addEventListener("paste", (e) => {
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+    if (files.length) { e.preventDefault(); addFiles(files); }
+  });
+  const form = h("form", { class: "tile-reply" }, attachBtn, fileInput, h("div", { class: "grow col" }, thumbs, input), h("button", { class: "btn small primary" }, "送信"));
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; };
   input.value = loadDraft(id, sid);
   if (input.value) requestAnimationFrame(autosize);
@@ -1822,20 +1863,43 @@ function gridTile(c) {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text) return;
+    if (!text && !attachments.length) return;
     if (session.attention === "needs_you") { toast("Claude が回答を待っています。開いて質問カードから答えてください"); location.hash = chatHref; return; }
+    const imgs = attachments;
+    attachments = [];
+    renderThumbs();
     input.value = "";
     autosize();
     saveDraft(id, sid, "");
-    const p = { text, at: Date.now() };
+    const p = { text: [imgs.length ? `🖼 ×${imgs.length}` : "", text].filter(Boolean).join(" "), match: text || "[Image", at: Date.now() };
     pending.push(p);
     if (!shown) shown = [];
     paint();
-    try { await sendToSession(id, sid, text); }
-    catch (err) {
+    try {
+      const paths = [];
+      for (const a of imgs) {
+        const r = await fetch(`/api/d/${id}/hub/upload`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": a.blob.type }, body: a.blob });
+        if (!r.ok) throw new Error("画像のアップロードに失敗: " + ((await r.text()).trim() || r.status));
+        paths.push((await r.json()).path);
+      }
+      const d = dev(id);
+      const ptys = paths.length ? ((await d.get("/pty/").catch(() => [])) || []) : [];
+      if (paths.length && ptys.some((x) => x.key === sid && x.alive)) {
+        // Running here: each path as its own paste becomes an [Image #N].
+        for (const path of paths) {
+          await d.post(`/pty/${encodeURIComponent(sid)}/input`, { text: path, paste: true });
+          await new Promise((res) => setTimeout(res, 350));
+        }
+        await d.post(`/pty/${encodeURIComponent(sid)}/input`, { text: text ? " " + text : "", submit: true });
+      } else {
+        await sendToSession(id, sid, [...paths, text].filter(Boolean).join(" "));
+      }
+      imgs.forEach((a) => URL.revokeObjectURL(a.url));
+    } catch (err) {
       toast(err.message);
       pending = pending.filter((x) => x !== p);
       if (!input.value) { input.value = text; saveDraft(id, sid, text); autosize(); }
+      if (!attachments.length) { attachments = imgs; renderThumbs(); }
       paint();
     }
   });
@@ -1892,7 +1956,7 @@ function gridTile(c) {
       const t = await d.get(`/api/sessions/${encodeURIComponent(sid)}/transcript?mode=tail&bytes=98304`);
       const all = parseTranscript(decodeEntries(t.data));
       const users = all.filter((x) => x.kind === "user").map((x) => x.text);
-      pending = pending.filter((p) => !users.some((u) => u.includes(p.text)));
+      pending = pending.filter((p) => !users.some((u) => u.includes(p.match || p.text)));
       shown = all.filter((x) => x.kind !== "thinking").slice(-8);
       const last = all.filter((x) => x.kind === "tool").pop();
       running = last && last.result == null ? last : null;
