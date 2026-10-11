@@ -216,10 +216,8 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .bubble.assistant ul, .bubble.assistant ol { margin: 4px 0; padding-left: 22px; }
 .bubble.assistant code { font-family: var(--mono); font-size: .9em; background: var(--chip); padding: 1px 5px; border-radius: 5px; }
 .bubble.assistant pre.code { background: var(--term-bg); color: #e6e8eb; padding: 10px 12px; border-radius: 8px; overflow-x: auto; font-size: 12.5px; margin: 6px 0; }
-.bubble.assistant .bang { cursor: pointer; text-decoration: underline dotted var(--accent); text-underline-offset: 3px; }
-.bubble.assistant code.bang::before, .bubble.assistant div.bang::before, .bubble.assistant li.bang::before { content: "▸ "; color: var(--accent); }
 .bang-row { display: flex; flex-wrap: wrap; gap: 6px; margin: -2px 0 6px; }
-.bang-btn { font-family: var(--mono); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bang-btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; border-color: var(--accent); color: var(--accent); }
 pre.bang-cmd { white-space: pre-wrap; word-break: break-all; background: var(--term-bg); color: #e6e8eb; padding: 10px 12px; border-radius: 8px; margin: 0; }
 .bubble.assistant pre.code code { background: none; padding: 0; color: inherit; }
 .bubble.assistant a { color: var(--accent); }

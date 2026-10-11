@@ -1390,33 +1390,33 @@ function bangCmd(line, prose) {
   return m && !m[1].includes("\n") ? m[1].trim() : "";
 }
 
-// bangLinks makes each "! command" in a rendered reply tappable — a plain
-// line, a list item, an inline `! cmd` or a line of a code block — and
-// hands the command to run (which asks before sending anything).
+// bangLinks puts a "コマンドを実行する" button next to each "! command" in a
+// rendered reply — a plain line, a list item, an inline `! cmd` or a line
+// of a code block — and hands the command to run (which asks before
+// sending anything). The command text itself stays plain text.
 function bangLinks(el, run) {
-  const mark = (node, cmd) => {
-    node.classList.add("bang");
-    node.title = "タップしてこのセッションで実行";
-    node.addEventListener("click", (e) => {
-      if (e.target.closest("a")) return; // a URL inside the line opens as a link
-      e.preventDefault(); e.stopPropagation(); run(cmd);
-    });
-  };
+  const btn = (cmd, label) => h("button", { class: "btn small bang-btn", type: "button", title: "! " + cmd,
+    onclick: (e) => { e.preventDefault(); e.stopPropagation(); run(cmd); } }, "▶ " + (label || "コマンドを実行する"));
+  const done = new Set();
   for (const c of el.querySelectorAll("code")) {
     if (c.closest("pre")) continue;
     const cmd = bangCmd(c.textContent);
-    if (cmd) mark(c, cmd);
+    if (!cmd) continue;
+    c.after(" ", btn(cmd));
+    let top = c; // the line it sits in: its list item, or the bubble's child
+    while (top.parentElement && top.parentElement !== el && top.tagName !== "LI") top = top.parentElement;
+    done.add(top);
   }
   for (const n of el.querySelectorAll(":scope > div, li")) {
-    if (n.querySelector(".bang")) continue;
+    if (done.has(n)) continue;
     const cmd = bangCmd(n.textContent, true);
-    if (cmd) mark(n, cmd);
+    if (cmd) n.append(" ", btn(cmd));
   }
   for (const pre of el.querySelectorAll("pre.code")) {
-    const cmds = pre.textContent.split("\n").map(bangCmd).filter(Boolean);
+    const cmds = pre.textContent.split("\n").map((l) => bangCmd(l)).filter(Boolean);
     if (!cmds.length) continue;
     pre.after(h("div", { class: "bang-row" }, ...cmds.map((cmd) =>
-      h("button", { class: "btn small bang-btn", type: "button", onclick: () => run(cmd) }, "▸ ! " + cmd))));
+      btn(cmd, cmds.length > 1 ? "実行: " + (cmd.length > 40 ? cmd.slice(0, 40) + "…" : cmd) : ""))));
   }
 }
 
