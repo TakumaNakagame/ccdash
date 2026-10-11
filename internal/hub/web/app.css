@@ -785,3 +785,10 @@ button.sent-file { width: 100%; font: inherit; color: inherit; cursor: pointer; 
 .board-empty { padding: 10px 12px; border: 1px dashed var(--line); border-radius: var(--r-md); }
 .bubble.assistant .md-callout { margin: 8px 0; padding: 8px 12px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: 0 var(--r-md) var(--r-md) 0; }
 .bubble.assistant .md-callout-h { font-size: var(--fs-xs); font-weight: 700; color: var(--accent); margin-bottom: 2px; }
+
+/* Preview in a sidebar (desktop): docked right, the page makes room. */
+aside.viewer.side { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; width: var(--side-w, min(46vw, 760px)); display: flex; flex-direction: column;
+  background: var(--panel); border-left: 1px solid var(--line); box-shadow: -12px 0 32px rgb(0 0 0 / .12); animation: side-in .22s cubic-bezier(.2, .8, .2, 1); }
+@keyframes side-in { from { transform: translateX(40px); opacity: 0; } }
+body.side-open header#top, body.side-open main#view { margin-right: var(--side-w, min(46vw, 760px)); }
+aside.viewer.side .doc { padding: 22px 22px 40px; }

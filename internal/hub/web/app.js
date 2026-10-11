@@ -264,6 +264,8 @@ const ICONS = {
   settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
   search: '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>',
+  sidebar: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/>',
+  expand: '<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/>',
   eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
   download: '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
 };
@@ -1615,23 +1617,43 @@ function loadScript(src) {
   return scriptLoads.get(src);
 }
 
-// previewFile opens a full-size viewer: Markdown rendered (marked +
-// DOMPurify), an HTML report in a sandboxed frame (scripts run in an opaque
-// origin — no access to the portal), plain text as is. The file comes from
-// the device's /hub/file (the transcript-recorded paths only).
-async function previewFile(url, path) {
+// previewFile opens a document: Markdown rendered (marked + DOMPurify),
+// an HTML report in a sandboxed frame (scripts run in an opaque origin — no
+// access to the portal), plain text as is. The file comes from the device's
+// /hub/file (transcript-recorded paths only). It opens either as a large
+// viewer or (desktop) in a sidebar beside the chat; the bar's button
+// switches, and the choice is remembered.
+const previewModeKey = "ccdash.previewMode";
+function previewMode() {
+  if (!matchMedia("(min-width: 768px)").matches) return "modal";
+  try { return localStorage.getItem(previewModeKey) === "side" ? "side" : "modal"; } catch { return "modal"; }
+}
+async function previewFile(url, path, mode = previewMode()) {
   const kind = previewKind(path), name = path.split("/").pop();
   const content = h("div", { class: "viewer-body" }, h("div", { class: "muted" }, "読み込み中…"));
-  const dlg = h("dialog", { class: "viewer" },
-    h("div", { class: "viewer-bar" },
-      h("button", { type: "button", class: "btn small icon", "aria-label": "閉じる", title: "閉じる", onclick: () => dlg.close() }, icon("x")),
-      h("div", { class: "grow viewer-title" }, h("b", {}, name), h("span", { class: "muted small mono" }, path)),
-      h("a", { class: "btn small", href: url, download: name }, icon("download"), "ダウンロード")),
-    content);
-  dlg.addEventListener("close", () => dlg.remove());
-  dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
-  document.body.append(dlg);
-  dlg.showModal();
+  let close;
+  const swap = h("button", { type: "button", class: "btn small icon hide-sm", title: mode === "side" ? "大きく開く" : "サイドバーで開く", "aria-label": mode === "side" ? "大きく開く" : "サイドバーで開く",
+    onclick: () => { const next = mode === "side" ? "modal" : "side"; try { localStorage.setItem(previewModeKey, next); } catch {} close(); previewFile(url, path, next); } },
+    icon(mode === "side" ? "expand" : "sidebar"));
+  const bar = h("div", { class: "viewer-bar" },
+    h("button", { type: "button", class: "btn small icon", "aria-label": "閉じる", title: "閉じる", onclick: () => close() }, icon("x")),
+    h("div", { class: "grow viewer-title" }, h("b", {}, name), h("span", { class: "muted small mono" }, path)),
+    swap,
+    h("a", { class: "btn small", href: url, download: name }, icon("download"), h("span", { class: "hide-sm" }, "ダウンロード")));
+  if (mode === "side") {
+    document.querySelector("#side")?.remove();
+    const side = h("aside", { id: "side", class: "viewer side" }, bar, content);
+    close = () => { side.remove(); document.body.classList.remove("side-open"); };
+    document.body.append(side);
+    document.body.classList.add("side-open");
+  } else {
+    const dlg = h("dialog", { class: "viewer" }, bar, content);
+    close = () => dlg.close();
+    dlg.addEventListener("close", () => dlg.remove());
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+    document.body.append(dlg);
+    dlg.showModal();
+  }
   try {
     const r = await fetch(url, { credentials: "same-origin" });
     if (!r.ok) throw new Error(r.status === 404 ? "ファイルが見つかりません（端末から消えたか、移動されました）" : (await r.text()).trim() || r.statusText);
