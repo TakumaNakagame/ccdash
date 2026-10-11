@@ -75,6 +75,7 @@ internal/paths/                 state dir / db / settings paths (XDG-aware)
 internal/gitinfo/               `git -C cwd rev-parse` lookups for repo/branch/commit
 internal/mcpserver/             `ccdash mcp`: MCP tools (view + organize + start_session; --read-only) over store.Store (stdio)
 internal/model/                 plain data types (Session / Event / Approval) and DisplayTitle
+docs/design.md                  portal design rules (tokens, icons, colour, status words) — read before touching internal/hub/web
 docs/usage_en.md                hands-on usage guide (English)
 docs/usage_jp.md                hands-on usage guide (Japanese)
 task.md                         original product spec; historical, not authoritative

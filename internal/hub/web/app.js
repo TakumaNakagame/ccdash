@@ -160,6 +160,42 @@ async function copy(text) {
   catch { toast("コピーできませんでした（手動で選択してください）"); }
 }
 
+// ---------- icons ----------
+// Stroke icons drawn after Lucide (ISC). docs/design.md: icons come from
+// here, never emoji. icon(name) is an inline SVG sized 1em in currentColor.
+const ICONS = {
+  bell: '<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>',
+  "bell-off": '<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M17 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6 6 0 0 1 .258-1.742"/><path d="m2 2 20 20"/><path d="M8.668 3.01A6 6 0 0 1 18 8c0 2.687.77 4.653 1.707 6.05"/>',
+  sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  pin: '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>',
+  grid: '<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  mic: '<path d="M12 19v3"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><rect x="9" y="2" width="6" height="13" rx="3"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  restart: '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
+  open: '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  stop: '<rect width="12" height="12" x="6" y="6" rx="1.5" fill="currentColor"/>',
+  play: '<path d="M6 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L7.5 3.64A1 1 0 0 0 6 4.5z" fill="currentColor"/>',
+  edit: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/>',
+  shuffle: '<path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-7.6a4 4 0 0 1 3.3-1.7H22"/><path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"/><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"/>',
+  up: '<path d="m18 15-6-6-6 6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  back: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+  terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+};
+function icon(name) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  el.setAttribute("viewBox", "0 0 24 24");
+  el.setAttribute("class", "ic");
+  el.setAttribute("aria-hidden", "true");
+  el.innerHTML = ICONS[name] || "";
+  return el;
+}
+
 const deviceCache = new Map(); // id → device row, for crumbs
 
 // ---------- router ----------
@@ -390,12 +426,14 @@ function devicesPage() {
     board,
     h("div", { class: "row" },
       h("h1", { class: "grow" }, "端末"),
-      h("button", { class: "btn primary", onclick: addDevice }, "＋ 端末を追加")),
+      h("button", { class: "btn primary", onclick: addDevice }, icon("plus"), "端末を追加")),
     h("h2", {}, "登録済み"),
     list,
     h("p", { class: "muted small" },
       "端末側で ", h("span", { class: "mono" }, "ccdash hub join"), " を実行すると、その端末の collector がこのハブへ接続します。端末にポートを開ける必要はありません。")));
 
+  // Empty columns say what that means (docs/design.md: empty states guide).
+  const BOARD_EMPTY = { needs_you: "あなたを待っているセッションはありません", working: "作業中のセッションはありません", done: "未確認の完了はありません" };
   every(4000, async () => {
     const b = await api("/api/board");
     updateBadge(b);
@@ -403,7 +441,7 @@ function devicesPage() {
       const cards = b[k] || [];
       return h("div", { class: "board-col " + k },
         h("div", { class: "board-head" }, label, h("span", { class: "count" }, cards.length)),
-        ...(cards.length ? cards.slice(0, 30).map(boardCard) : [h("div", { class: "muted small board-empty" }, "なし")]));
+        ...(cards.length ? cards.slice(0, 30).map(boardCard) : [h("div", { class: "muted small board-empty" }, BOARD_EMPTY[k] || "なし")]));
     });
     board.replaceChildren(...cols);
   });
@@ -609,10 +647,10 @@ function projectHeader(name, color, members, onNew, onMove) {
   const fresh = members.filter((s) => s.unseen).length;
   const meta = [`${members.length} セッション`, running ? `${running} 稼働中` : null, needs ? `${needs} 要対応` : null, fresh ? `${fresh} NEW` : null].filter(Boolean).join(" · ");
   return h("div", { class: "bucket project", style: `--proj:${color};--ink:${inkOn(color)}` },
-    h("span", { class: "proj-label" }, "PROJECT"), h("b", {}, name), h("span", { class: "proj-meta" }, meta),
-    onMove ? h("button", { type: "button", class: "proj-new", title: "プロジェクトを上へ", onclick: (e) => { e.stopPropagation(); onMove(-1); } }, "▲") : null,
-    onMove ? h("button", { type: "button", class: "proj-new", title: "プロジェクトを下へ", onclick: (e) => { e.stopPropagation(); onMove(1); } }, "▼") : null,
-    onNew ? h("button", { type: "button", class: "proj-new", title: "このプロジェクトで新規セッション", onclick: (e) => { e.stopPropagation(); onNew(); } }, "＋") : null);
+    h("span", { class: "proj-dot" }), h("b", {}, name), h("span", { class: "proj-meta" }, meta),
+    onMove ? h("button", { type: "button", class: "proj-new", title: "プロジェクトを上へ", "aria-label": "プロジェクトを上へ", onclick: (e) => { e.stopPropagation(); onMove(-1); } }, icon("up")) : null,
+    onMove ? h("button", { type: "button", class: "proj-new", title: "プロジェクトを下へ", "aria-label": "プロジェクトを下へ", onclick: (e) => { e.stopPropagation(); onMove(1); } }, icon("down")) : null,
+    onNew ? h("button", { type: "button", class: "proj-new", title: "このプロジェクトで新規セッション", "aria-label": "このプロジェクトで新規セッション", onclick: (e) => { e.stopPropagation(); onNew(); } }, icon("plus")) : null);
 }
 
 function sessionTitle(s) {
@@ -644,7 +682,7 @@ function uniqueGroups(sessions, autoRepo) {
 
 // dateBucket follows the TUI's date grouping (pinned sessions on top).
 function dateBucket(s) {
-  if (s.favorite) return "📌 ピン留め";
+  if (s.favorite) return "ピン留め";
   const t = new Date(s.last_seen);
   const now = new Date();
   const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
@@ -769,7 +807,7 @@ async function devicePage(id, opts = {}) {
         const cur = gridList.get() || [];
         gridList.set([...cur, ...keys.filter((k) => !cur.includes(k))]);
         toast("グリッドに追加しました"); selected.clear(); paintSel(); render();
-      } }, "▦ グリッドに追加"),
+      } }, icon("grid"), "グリッドに追加"),
       h("button", { class: "btn small", onclick: () => {
         gridList.set((gridList.get() || []).filter((k) => !keys.includes(k)));
         toast("グリッドから外しました"); selected.clear(); paintSel(); render();
@@ -777,8 +815,8 @@ async function devicePage(id, opts = {}) {
       h("button", { class: "btn small", onclick: () => bulk(showArchived ? "アーカイブ解除" : "アーカイブ",
         (sid) => dev(id).post(`/api/sessions/${encodeURIComponent(sid)}/archive`, { archived: !showArchived })) },
         showArchived ? "アーカイブ解除" : "アーカイブ"),
-      h("button", { class: "btn small", title: "複数のセッションを一つのプロジェクトにまとめる", onclick: setProject }, "▤ プロジェクト"),
-      h("button", { class: "btn small", onclick: () => bulk("あとで見る", (sid) => dev(id).post(`/api/sessions/${encodeURIComponent(sid)}/later`, { later: true })) }, "⏰ あとで見る"),
+      h("button", { class: "btn small", title: "複数のセッションを一つのプロジェクトにまとめる", onclick: setProject }, icon("folder"), "プロジェクト"),
+      h("button", { class: "btn small", onclick: () => bulk("あとで見る", (sid) => dev(id).post(`/api/sessions/${encodeURIComponent(sid)}/later`, { later: true })) }, icon("clock"), "あとで見る"),
       h("button", { class: "btn small", title: "claude -p でタイトルを生成", onclick: genTitles }, "タイトル生成"),
       h("span", { class: "grow" }),
       h("button", { class: "btn small", onclick: () => { for (const sid of visible) selected.add(sid); paintSel(); render(); } }, "表示中を全選択"),
@@ -788,8 +826,8 @@ async function devicePage(id, opts = {}) {
   mount.append(h("div", { class: "page" + (opts.compact ? " compact" : "") },
     h("div", { class: "row" },
       h("h1", { class: "grow" }, name),
-      h("button", { class: "btn", title: "この端末の ccdash collector を再起動（ホスト中のセッションは自動で再開）", onclick: () => restartCollector(id, last) }, "↻ 再起動"),
-      h("button", { class: "btn primary", onclick: () => newSession(id) }, "＋ 新規セッション")),
+      h("button", { class: "btn", title: "この端末の ccdash collector を再起動（ホスト中のセッションは自動で再開）", onclick: () => restartCollector(id, last) }, icon("restart"), "再起動"),
+      h("button", { class: "btn primary", onclick: () => newSession(id) }, icon("plus"), "新規セッション")),
     status, usageCard, approvals, spawns,
     tabs,
     h("div", { class: "row", style: "margin-bottom:8px" }, filter, archBtn),
@@ -834,7 +872,7 @@ async function devicePage(id, opts = {}) {
       const b = s.later ? "\0later" : s.project ? "\0" + s.project : dateBucket(s);
       if (b !== bucket) {
         bucket = b;
-        out.push(s.later ? h("div", { class: "bucket later" }, "⏰ あとで見る")
+        out.push(s.later ? h("div", { class: "bucket later" }, icon("clock"), "あとで見る")
           : s.project
           ? projectHeader(s.project, projectColorOf(s.project, s.project_color), ordered.filter((x) => x.project === s.project),
             // The project's directory: where its most recent session works.
@@ -969,20 +1007,26 @@ function beamEl() {
 }
 const refreshBeams = () => document.querySelectorAll(".beam").forEach(runBeam);
 
+// statusTag: a session's state as a dot + Japanese word (docs/design.md:
+// status is words, not English pills).
+const STATUS_JA = { active: "作業中", idle: "待機中", stopped: "停止" };
+function statusTag(st) {
+  return h("span", { class: "stat " + st }, h("i"), STATUS_JA[st] || st);
+}
+
 function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
   const chips = [];
   if (s.unseen) chips.push(h("span", { class: "chip new", title: "最後に見た後に進捗あり" }, "NEW"));
-  if (s.later) chips.push(h("span", { class: "chip later" }, "あとで"));
-  if (live) chips.push(h("span", { class: "chip live" }, "live"));
+  // (watch-later rows sit under the あとで見る band, which says so)
+  if (live) chips.push(h("span", { class: "chip live", title: "ccdash 上で動いています（チャットから操作できます）" }, "live"));
   if (s.attention === "needs_you") chips.push(h("span", { class: "chip pend", title: s.attention_reason || "" }, "要対応"));
   else if (s.attention === "done") chips.push(h("span", { class: "chip done" }, "未確認"));
   if (s.account && s.account !== "default") chips.unshift(h("span", { class: "chip" }, s.account));
-  chips.push(h("span", { class: "chip " + s.status }, s.status));
   const sub = [s.attention === "needs_you" && s.attention_reason ? "? " + s.attention_reason : null,
     showGroup ? groupOf(s) : null, shortPath(s.cwd, info?.home), s.branch, rel(s.last_seen)].filter(Boolean).join(" · ");
   const here = decodeURIComponent(location.hash).startsWith(`#/d/${id}/s/${s.session_id}`);
   const gk = id + ":" + s.session_id;
-  const mark = h("button", { class: "grid-mark" + (gridList.has(gk) ? " on" : ""), type: "button", title: "グリッドに表示する／外す" }, "▦");
+  const mark = h("button", { class: "grid-mark" + (gridList.has(gk) ? " on" : ""), type: "button", title: "グリッドに表示する／外す", "aria-label": "グリッドに表示する／外す" }, icon("grid"));
   mark.addEventListener("click", (e) => {
     e.stopPropagation();
     const on = gridList.toggle(gk);
@@ -1004,8 +1048,8 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
     check || null,
     h("span", { class: "num" }, s.num ? `#${s.num}` : ""),
     h("div", { class: "grow" },
-      h("div", { class: titleClass("title", s), title: s.title_status === "running" ? TITLING_TIP : null }, (s.favorite ? "📌 " : "") + sessionTitle(s)),
-      h("div", { class: "sub" }, sub),
+      h("div", { class: titleClass("title", s), title: s.title_status === "running" ? TITLING_TIP : null }, s.favorite ? h("span", { class: "pin", title: "ピン留め" }, icon("pin")) : null, sessionTitle(s)),
+      h("div", { class: "sub" }, statusTag(s.status), sub),
       brief ? h("div", { class: "sub meta" }, usageLine(brief)) : null),
     h("span", { class: "srow-tail" }, ...chips, mark),
     s.status === "active" ? beamEl() : null);
@@ -1233,6 +1277,9 @@ function md(text) {
     } else if ((m = e.match(/^\s*\d+[.)]\s+(.*)$/))) {
       if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; }
       out.push(`<li>${inlineMd(m[1])}</li>`);
+    } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      closeList();
+      out.push('<hr class="md-hr">');
     } else if (e.trim() === "") {
       closeList();
       out.push('<div class="md-gap"></div>');
@@ -1455,7 +1502,7 @@ function bangCmd(line, prose) {
 // sending anything). The command text itself stays plain text.
 function bangLinks(el, run) {
   const btn = (cmd, label) => h("button", { class: "btn small bang-btn", type: "button", title: "! " + cmd,
-    onclick: (e) => { e.preventDefault(); e.stopPropagation(); run(cmd); } }, "▶ " + (label || "コマンドを実行する"));
+    onclick: (e) => { e.preventDefault(); e.stopPropagation(); run(cmd); } }, icon("terminal"), label || "コマンドを実行する");
   const done = new Set();
   for (const c of el.querySelectorAll("code")) {
     if (c.closest("pre")) continue;
@@ -1716,7 +1763,7 @@ function sessionMenu(id, s, groups, refresh) {
         h("button", { type: "button", class: "btn small", title: "いま動いているセッションの色と被らない（似ていない）色を引き直す", onclick: () => {
           close();
           post("/color", { color: "random" }, "色を引き直しました");
-        } }, "🎲 引き直す"),
+        } }, icon("shuffle"), "引き直す"),
         h("button", { type: "button", class: "btn small", disabled: !s.color, onclick: () => { close(); post("/color", { color: "" }, "色を自動に戻しました"); } }, "自動に戻す")),
       h("label", {}, "プロジェクト（複数のセッションをまとめて一覧の上に表示）"),
       h("div", { class: "row" },
@@ -1732,12 +1779,12 @@ function sessionMenu(id, s, groups, refresh) {
           type: "button", class: "swatch" + (projColor === c ? " on" : ""), style: `--c:${c}`, title: c,
           onclick: () => postProjectColor(c, "プロジェクトの色を変更しました"),
         })),
-        h("button", { type: "button", class: "btn small", title: "ほかのプロジェクトと被らない色を引き直す", onclick: () => postProjectColor("random", "プロジェクトの色を引き直しました") }, "🎲 引き直す")) : null,
+        h("button", { type: "button", class: "btn small", title: "ほかのプロジェクトと被らない色を引き直す", onclick: () => postProjectColor("random", "プロジェクトの色を引き直しました") }, icon("shuffle"), "引き直す")) : null,
       h("label", {}, "グループ（空にすると repo 名に戻す）"),
       h("div", { class: "row" }, group, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/group", { group: group.value.trim() }, "グループを保存しました"); } }, "保存")),
       h("div", { class: "menu-grid" },
-        h("button", { type: "button", class: "btn", onclick: () => { close(); post("/favorite", { favorite: !s.favorite }, s.favorite ? "ピン留めを外しました" : "ピン留めしました"); } }, s.favorite ? "ピン留めを外す" : "📌 ピン留め"),
-        h("button", { type: "button", class: "btn", onclick: () => { close(); post("/later", { later: !s.later }, s.later ? "「あとで見る」から外しました" : "「あとで見る」に入れました"); } }, s.later ? "あとで見るを外す" : "⏰ あとで見る"),
+        h("button", { type: "button", class: "btn", onclick: () => { close(); post("/favorite", { favorite: !s.favorite }, s.favorite ? "ピン留めを外しました" : "ピン留めしました"); } }, icon("pin"), s.favorite ? "ピン留めを外す" : "ピン留め"),
+        h("button", { type: "button", class: "btn", onclick: () => { close(); post("/later", { later: !s.later }, s.later ? "「あとで見る」から外しました" : "「あとで見る」に入れました"); } }, icon("clock"), s.later ? "あとで見るを外す" : "あとで見る"),
         h("button", { type: "button", class: "btn", onclick: () => { close(); post("/archive", { archived: !s.archived }, s.archived ? "アーカイブを解除しました" : "アーカイブしました"); } }, s.archived ? "アーカイブを解除" : "アーカイブ"),
         h("button", { type: "button", class: "btn", onclick: async () => {
           close();
@@ -1771,9 +1818,9 @@ function gridTile(c) {
   const id = c.device_id, sid = c.session.session_id;
   const chatHref = `#/d/${id}/s/${encodeURIComponent(sid)}`;
   const title = h("span", { class: "tile-title", title: "ダブルクリックで全画面 / 元に戻す" });
-  const openBtn = h("a", { class: "btn small", href: chatHref, title: "チャット画面で開く" }, "↗");
-  const closeBtn = h("button", { class: "btn small tile-close", type: "button", title: "グリッドから外す" }, "×");
-  const resumeBtn = h("button", { class: "btn small primary", type: "button", title: "claude --resume で再開", hidden: true }, "▶ 再開");
+  const openBtn = h("a", { class: "btn small icon", href: chatHref, title: "チャット画面で開く", "aria-label": "チャット画面で開く" }, icon("open"));
+  const closeBtn = h("button", { class: "btn small icon tile-close", type: "button", title: "グリッドから外す", "aria-label": "グリッドから外す" }, icon("x"));
+  const resumeBtn = h("button", { class: "btn small primary", type: "button", title: "claude --resume で再開", hidden: true }, icon("play"), "再開");
   let resumingUntil = 0;
   resumeBtn.addEventListener("click", async () => {
     resumeBtn.disabled = true;
@@ -1785,7 +1832,7 @@ function gridTile(c) {
     } catch (err) {
       toast(err.message);
       resumeBtn.disabled = false;
-      resumeBtn.textContent = "▶ 再開";
+      resumeBtn.replaceChildren(icon("play"), "再開");
     }
   });
   const status = h("span", { class: "chip" });
@@ -1801,10 +1848,10 @@ function gridTile(c) {
   let attachments = []; // { blob, url }
   const thumbs = h("div", { class: "thumbs tile-thumbs" });
   const fileInput = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
-  const attachBtn = h("button", { type: "button", class: "btn small", title: "画像を添付", onclick: () => fileInput.click() }, "＋");
+  const attachBtn = h("button", { type: "button", class: "btn small icon", title: "画像を添付", "aria-label": "画像を添付", onclick: () => fileInput.click() }, icon("image"));
   const renderThumbs = () => thumbs.replaceChildren(...attachments.map((a, i) => h("div", { class: "thumb" },
     h("img", { src: a.url, alt: "" }),
-    h("button", { type: "button", title: "外す", onclick: () => { URL.revokeObjectURL(a.url); attachments.splice(i, 1); renderThumbs(); } }, "×"))));
+    h("button", { type: "button", title: "外す", onclick: () => { URL.revokeObjectURL(a.url); attachments.splice(i, 1); renderThumbs(); }, "aria-label": "外す" }, icon("x")))));
   const addFiles = async (files) => {
     for (const f of files) {
       if (!f.type.startsWith("image/")) continue;
@@ -1829,7 +1876,7 @@ function gridTile(c) {
       form.requestSubmit();
     }
   });
-  const stopBtn = h("button", { class: "btn small", type: "button", title: "Esc を送って作業を中断", hidden: true }, "■ 中断");
+  const stopBtn = h("button", { class: "btn small", type: "button", title: "Esc を送って作業を中断", hidden: true }, icon("stop"), "中断");
   stopBtn.addEventListener("click", async () => {
     try { await dev(id).post(`/pty/${encodeURIComponent(sid)}/input`, { keys: "\x1b" }); toast("中断を送りました"); }
     catch (err) { toast(err.status === 404 ? "このセッションは ccdash 上で動いていないため中断できません" : err.message); }
@@ -1930,7 +1977,7 @@ function gridTile(c) {
       resumeBtn.hidden = running;
       stopBtn.hidden = session.status !== "active";
       resumeBtn.disabled = waiting;
-      resumeBtn.textContent = waiting ? "再開中…" : "▶ 再開";
+      resumeBtn.replaceChildren(...(waiting ? ["再開中…"] : [icon("play"), "再開"]));
       input.placeholder = running ? "返信（Enter で送信・Shift+Enter で改行）" : "送信すると再開します";
     },
     async refresh() {
@@ -2169,9 +2216,9 @@ function gridPage() {
   ro.observe(grid);
   cleanup.push(() => ro.disconnect());
   const count = h("span", { class: "muted small" });
-  const addBtn = h("button", { class: "btn small primary", title: "セッションをグリッドに置く", onclick: () => pick() }, "＋ 追加");
+  const addBtn = h("button", { class: "btn small primary", title: "セッションをグリッドに置く", onclick: () => pick() }, icon("plus"), "追加");
   const empty = h("div", { class: "empty", hidden: true }, h("p", {}, "グリッドにセッションがありません"),
-    h("button", { class: "btn primary", onclick: () => pick() }, "＋ セッションを追加"));
+    h("button", { class: "btn primary", onclick: () => pick() }, icon("plus"), "セッションを追加"));
   mount.append(h("div", { class: "grid-page" },
     h("div", { class: "row grid-top" }, h("h1", { class: "grow" }, "グリッド"), count, addBtn,
       h("div", { class: "seg" }, modeAuto, modeFree), resetBtn), empty, grid));
@@ -2463,7 +2510,7 @@ async function diffPage(id, sid) {
     } catch (e) { toast(e.message); paintCount(); }
   });
   mount.append(h("div", { class: "chat-wrap" },
-    h("div", { class: "term-bar" }, h("a", { class: "btn small", href: chatHref }, "←"), h("span", { class: "grow title" }, "差分レビュー"),
+    h("div", { class: "term-bar" }, h("a", { class: "btn small icon", href: chatHref, "aria-label": "戻る", title: "戻る" }, icon("back")), h("span", { class: "grow title" }, "差分レビュー"),
       h("button", { class: "btn small", onclick: () => route() }, "更新")),
     h("div", { class: "chat" }, h("div", { class: "page diff-page" }, info, filesEl)),
     h("div", { class: "chat-bottom" }, h("div", { class: "composer col" }, general, h("div", { class: "row" }, countEl, sendBtn)))));
@@ -2626,9 +2673,9 @@ async function chatPage(id, { sid, key }) {
   let allGroups = [];
   const diffBtn = h("a", { class: "btn small", hidden: true, title: "変更の差分を見てコメントする" }, "差分");
   let lastUsage = null;
-  const menuBtn = h("button", { class: "btn small", title: "セッションの操作", onclick: () => session ? sessionMenu(id, session, allGroups, poll) : toast("まだセッションが登録されていません") }, "⋯");
+  const menuBtn = h("button", { class: "btn small", title: "セッションの操作", onclick: () => session ? sessionMenu(id, session, allGroups, poll) : toast("まだセッションが登録されていません"), "aria-label": "セッションの操作" }, icon("more"));
   const bar = h("div", { class: "term-bar" },
-    h("a", { class: "btn small", href: `#/d/${id}` }, "←"), titleEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
+    h("a", { class: "btn small icon", href: `#/d/${id}`, "aria-label": "戻る", title: "戻る" }, icon("back")), titleEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
   const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, "読み込み中…"));
   const scroller = h("div", { class: "chat" }, log);
   const approvalsEl = h("div", { class: "chat-dock" });
@@ -2645,7 +2692,7 @@ async function chatPage(id, { sid, key }) {
     agentBar.replaceChildren(h("span", { class: "agent-dot" + (running ? " spin" : "") }),
       running ? `サブエージェント ${running} 件実行中` : `サブエージェント ${agents.length} 件`,
       h("span", { class: "muted small" }, running && agents.length > running ? `（全 ${agents.length} 件）` : ""),
-      h("span", { class: "grow" }), agentsOpen ? "▲" : "▼");
+      h("span", { class: "grow" }), icon(agentsOpen ? "up" : "down"));
     agentList.hidden = !agentsOpen || !agents.length;
     if (!agentList.hidden) agentList.replaceChildren(...agents.map((a) => agentRow(a, openThisAgent)));
   };
@@ -2658,11 +2705,11 @@ async function chatPage(id, { sid, key }) {
   let attachments = []; // { blob, url }
   const thumbs = h("div", { class: "thumbs" });
   const fileInput = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
-  const attachBtn = h("button", { type: "button", class: "btn attach", title: "画像を添付", onclick: () => fileInput.click() }, "＋");
+  const attachBtn = h("button", { type: "button", class: "btn attach", title: "画像を添付", "aria-label": "画像を添付", onclick: () => fileInput.click() }, icon("image"));
   const renderThumbs = () => {
     thumbs.replaceChildren(...attachments.map((a, i) => h("div", { class: "thumb" },
       h("img", { src: a.url, alt: "" }),
-      h("button", { type: "button", title: "外す", onclick: () => { URL.revokeObjectURL(a.url); attachments.splice(i, 1); renderThumbs(); } }, "×"))));
+      h("button", { type: "button", title: "外す", onclick: () => { URL.revokeObjectURL(a.url); attachments.splice(i, 1); renderThumbs(); }, "aria-label": "外す" }, icon("x")))));
   };
   const addFiles = async (files) => {
     for (const f of files) {
@@ -2681,7 +2728,7 @@ async function chatPage(id, { sid, key }) {
   });
   cleanup.push(() => attachments.forEach((a) => URL.revokeObjectURL(a.url)));
   // Voice input (Web Speech API): dictation is appended to the message.
-  const micBtn = speechSupported() ? h("button", { type: "button", class: "btn attach mic", title: "音声入力" }, "🎤") : null;
+  const micBtn = speechSupported() ? h("button", { type: "button", class: "btn attach mic", title: "音声入力", "aria-label": "音声入力" }, icon("mic")) : null;
   micBtn?.addEventListener("click", () => toggleDictation(micBtn, input, autosize));
   cleanup.push(() => stopDictation());
   // "/" completion: skills and slash commands of this device.
@@ -2706,7 +2753,7 @@ async function chatPage(id, { sid, key }) {
   const sendQuick = (text) => { input.value = text; autosize(); composer.requestSubmit(); };
   const paintQuick = (cmds) => quickRow.replaceChildren(
     ...cmds.map((c) => h("button", { type: "button", class: "chip quick", title: c, onclick: () => sendQuick(c) }, c.length > 18 ? c.slice(0, 18) + "…" : c)),
-    h("button", { type: "button", class: "chip quick edit", title: "クイックコマンドを編集", onclick: () => editQuick(paintQuick) }, "✎"));
+    h("button", { type: "button", class: "chip quick edit", title: "クイックコマンドを編集", "aria-label": "クイックコマンドを編集", onclick: () => editQuick(paintQuick) }, icon("edit")));
   api("/api/quick").then(paintQuick).catch(() => {});
   const composer = h("form", { class: "composer" }, attachBtn, micBtn, h("div", { class: "grow col" }, thumbs, slashBox, input), fileInput, h("div", { class: "row" }, stopBtn, sendBtn));
   for (const ev of ["dragover", "drop"]) {
@@ -3050,7 +3097,7 @@ function terminal(id, key, title, chatHref) {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(enc.encode(data));
   };
   const bar = h("div", { class: "term-bar" },
-    h("a", { class: "btn small", href: chatHref }, "←"),
+    h("a", { class: "btn small icon", href: chatHref, "aria-label": "戻る", title: "戻る" }, icon("back")),
     h("span", { class: "grow title" }, title),
     h("span", { class: "muted small hide-sm" }, key),
     h("a", { class: "btn small", href: chatHref, title: "ターミナルの接続を切ってチャット表示に戻ります。claude は端末上で動き続けます" }, "チャット"),
@@ -3144,11 +3191,12 @@ async function pushSubscription() {
 // sessions) on / off for this browser — on a slow phone it costs.
 function beamButton() {
   const get = () => { try { return localStorage.getItem("ccdash.beam") !== "off"; } catch { return true; } };
-  const btn = h("button", { class: "btn small" });
+  const btn = h("button", { class: "btn small icon" });
   const paint = () => {
     const on = get();
     document.documentElement.classList.toggle("no-beam", !on);
-    btn.textContent = on ? "✨" : "◌";
+    btn.replaceChildren(icon("sparkles"));
+    btn.classList.toggle("off", !on);
     btn.title = on ? "作業中アニメーション ON（タップで OFF）" : "作業中アニメーション OFF（タップで ON）";
   };
   btn.addEventListener("click", () => {
@@ -3162,10 +3210,10 @@ function beamButton() {
 
 function notifyButton() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return null;
-  const btn = h("button", { class: "btn small bell", title: "通知" }, "🔕");
+  const btn = h("button", { class: "btn small icon bell", title: "通知" }, icon("bell-off"));
   const paint = async () => {
     const on = Notification.permission === "granted" && !!(await pushSubscription().catch(() => null));
-    btn.textContent = on ? "🔔" : "🔕";
+    btn.replaceChildren(icon(on ? "bell" : "bell-off"));
     btn.title = on ? "通知 ON（タップで設定）" : "通知 OFF（タップで ON）";
     btn.dataset.on = on ? "1" : "";
   };
