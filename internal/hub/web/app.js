@@ -911,27 +911,44 @@ async function restartCollector(id, last) {
   } catch (e) { toast(e.message); }
 }
 
-// beamPhase: the working beam's animation delay, tied to the wall clock so
-// a row rebuilt by a refresh carries on where the old one was instead of
-// jumping back to the start.
-const BEAM_MS = 3200;
-const beamPhase = () => `--beam-delay:-${(Date.now() % BEAM_MS) / 1000}s`;
-
-// beamSVG is the working beam's outline (see .beam in app.css): rects with
-// pathLength=100, so the dashes move at one speed all the way round.
-const SVG_NS = "http://www.w3.org/2000/svg";
-function beamSVG() {
-  const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("class", "beam");
-  svg.setAttribute("aria-hidden", "true");
-  for (const c of ["base", "tail", "head"]) {
-    const r = document.createElementNS(SVG_NS, "rect");
-    r.setAttribute("class", c);
-    r.setAttribute("pathLength", "100");
-    svg.append(r);
+// ---- working beam ----
+// While Claude is mid-turn, glowing blobs run round the session's row or
+// tile (see .beam in app.css): one masked to a thin ring (the bright edge)
+// and a larger, faint copy inside (light sweeping along the edge). They
+// move by transform only — a compositor animation, no repaint per frame —
+// on keyframes placed by each side's length, so the speed is the same all
+// the way round whatever the box's shape. Phase follows the clock, so a row
+// rebuilt by a refresh carries on where the old one was.
+const BEAM_MS = 3600;
+const beamOff = () => document.documentElement.classList.contains("no-beam") || matchMedia("(prefers-reduced-motion: reduce)").matches;
+const beamRO = new ResizeObserver((entries) => {
+  for (const e of entries) {
+    if (!e.target.isConnected) { beamRO.unobserve(e.target); stopBeam(e.target); continue; }
+    runBeam(e.target);
   }
-  return svg;
+});
+function stopBeam(b) { (b._anims || []).forEach((a) => a.cancel()); b._anims = []; }
+function runBeam(b) {
+  stopBeam(b);
+  const w = b.clientWidth, ht = b.clientHeight;
+  if (!w || !ht || beamOff()) return;
+  const P = 2 * (w + ht), t = (x, y) => ({ transform: `translate(${x}px, ${y}px)` });
+  const kf = [{ ...t(0, 0), offset: 0 }, { ...t(w, 0), offset: w / P }, { ...t(w, ht), offset: (w + ht) / P },
+    { ...t(0, ht), offset: (2 * w + ht) / P }, { ...t(0, 0), offset: 1 }];
+  const now = Date.now();
+  b._anims = [...b.querySelectorAll("i")].map((i) => {
+    const a = i.animate(kf, { duration: BEAM_MS, iterations: Infinity, easing: "linear" });
+    a.currentTime = (now + (i.classList.contains("b2") ? BEAM_MS / 2 : 0)) % BEAM_MS;
+    return a;
+  });
 }
+function beamEl() {
+  const blobs = () => [h("i", { class: "b1" }), h("i", { class: "b2" })];
+  const b = h("span", { class: "beam", "aria-hidden": "true" }, h("span", { class: "glow" }, ...blobs()), h("span", { class: "ring" }, ...blobs()));
+  beamRO.observe(b); // fires once laid out → runBeam
+  return b;
+}
+const refreshBeams = () => document.querySelectorAll(".beam").forEach(runBeam);
 
 function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
   const chips = [];
@@ -961,7 +978,7 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
   }
   const proj = s.project ? `;--proj:${projectColorOf(s.project, s.project_color)}` : "";
   return h("div", { class: "item srow" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : "") + (s.status === "active" ? " working" : ""), "data-sid": s.session_id,
-    style: `--sess:${sessionColorOf(s)}${proj}${s.status === "active" ? ";" + beamPhase() : ""}`, onclick: (e) => {
+    style: `--sess:${sessionColorOf(s)}${proj}`, onclick: (e) => {
     if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
     location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`;
   } },
@@ -972,7 +989,7 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
       h("div", { class: "sub" }, sub),
       brief ? h("div", { class: "sub meta" }, usageLine(brief)) : null),
     h("span", { class: "srow-tail" }, ...chips, mark),
-    s.status === "active" ? beamSVG() : null);
+    s.status === "active" ? beamEl() : null);
 }
 
 function renderApprovals(el, id, aps, sessions) {
@@ -1836,10 +1853,8 @@ function gridTile(c) {
       status.className = "chip " + (session.attention === "needs_you" ? "pend" : session.attention === "done" && session.status !== "active" ? "done" : session.status);
       el.classList.toggle("needs", session.attention === "needs_you");
       const working = session.status === "active";
-      if (working && !el.classList.contains("working")) {
-        el.style.setProperty("--beam-delay", `-${(Date.now() % BEAM_MS) / 1000}s`);
-        el.append(beamSVG());
-      } else if (!working) el.querySelector(":scope > .beam")?.remove();
+      if (working && !el.classList.contains("working")) el.append(beamEl());
+      else if (!working) el.querySelector(":scope > .beam")?.remove();
       el.classList.toggle("working", working);
       reason.replaceChildren(...(session.attention === "needs_you"
         ? [h("span", {}, "? " + (session.attention_reason || "要対応")), h("a", { class: "btn small", href: chatHref }, "開いて回答")]
@@ -3075,6 +3090,7 @@ function beamButton() {
   btn.addEventListener("click", () => {
     try { localStorage.setItem("ccdash.beam", get() ? "off" : "on"); } catch {}
     paint();
+    refreshBeams();
   });
   paint();
   return btn;
