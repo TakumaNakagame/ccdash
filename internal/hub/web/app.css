@@ -244,6 +244,8 @@ pre.bang-cmd { white-space: pre-wrap; word-break: break-all; background: var(--t
 .opts .btn { text-align: left; white-space: normal; }
 
 .typing { display: flex; gap: 4px; padding: 6px 2px; }
+.tile-working { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tile-working .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite ease-in-out; }
 .typing span:nth-child(2) { animation-delay: .2s; }
 .typing span:nth-child(3) { animation-delay: .4s; }

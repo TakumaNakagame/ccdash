@@ -1697,7 +1697,7 @@ function gridTile(c) {
     h("div", { class: "tile-resize", title: "ドラッグで大きさを変更" }));
   title.addEventListener("dblclick", () => el.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   closeBtn.addEventListener("click", () => el.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })));
-  let session = c.session, sig = "", shown = null, pending = [];
+  let session = c.session, sig = "", shown = null, pending = [], running = null;
   // Sent text shows as a pending bubble (like the chat view) until it turns
   // up as a user turn in the transcript — Claude may still be busy and
   // hold it in its input queue — or after 2 minutes.
@@ -1707,6 +1707,13 @@ function gridTile(c) {
     pending = pending.filter((p) => Date.now() - p.at < 120000);
     const nodes = shown.map((it) => renderItem(it)).filter(Boolean);
     for (const p of pending) nodes.push(h("div", { class: "bubble user pending" }, p.text));
+    // While Claude works, say so — and what it is running right now — like
+    // the chat view's typing dots; the transcript alone looks frozen
+    // during a long tool call.
+    if (session.status === "active") {
+      nodes.push(h("div", { class: "tile-working" }, h("div", { class: "typing" }, h("span"), h("span"), h("span")),
+        running ? h("span", { class: "muted small mono" }, "実行中: " + toolLabel(running)) : null));
+    }
     const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     log.replaceChildren(...(nodes.length ? nodes : [h("div", { class: "muted small" }, "まだメッセージがありません")]));
     if (stick || pending.length) log.scrollTop = log.scrollHeight;
@@ -1733,7 +1740,9 @@ function gridTile(c) {
     el,
     scrollLog() { requestAnimationFrame(() => (log.scrollTop = log.scrollHeight)); },
     update(c2) {
+      const was = session.status;
       session = c2.session;
+      if (was !== session.status) paint(); // working dots on / off
       title.textContent = (session.num ? `#${session.num} ` : "") + sessionTitle(session);
       title.classList.toggle("titling", session.title_status === "running");
       const st = gridState(session);
@@ -1778,10 +1787,19 @@ function gridTile(c) {
       const users = all.filter((x) => x.kind === "user").map((x) => x.text);
       pending = pending.filter((p) => !users.some((u) => u.includes(p.text)));
       shown = all.filter((x) => x.kind !== "thinking").slice(-8);
+      const last = all.filter((x) => x.kind === "tool").pop();
+      running = last && last.result == null ? last : null;
       if (selectingIn(log)) { sig = ""; return; } // retry after the copy
       paint();
     },
   };
+}
+
+// toolLabel: "Bash npm test" — a tool call in one short line.
+function toolLabel(it) {
+  const i = it.input || {};
+  const arg = i.command || i.description || i.file_path || i.pattern || i.url || i.query || "";
+  return (it.name + " " + String(arg).split("\n")[0]).trim().slice(0, 80);
 }
 
 function gridState(s) {
