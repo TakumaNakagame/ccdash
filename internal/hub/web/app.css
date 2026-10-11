@@ -792,3 +792,10 @@ aside.viewer.side { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; w
 @keyframes side-in { from { transform: translateX(40px); opacity: 0; } }
 body.side-open header#top, body.side-open main#view { margin-right: var(--side-w, min(46vw, 760px)); }
 aside.viewer.side .doc { padding: 22px 22px 40px; }
+
+/* Tile header: compact icon buttons so the title stays readable, also on
+   touch screens (where buttons are otherwise 40px+). */
+.tile.compact .tile-head .btn.small.icon { min-width: 30px; min-height: 30px; width: 30px; height: 30px; padding: 0; }
+.tile.compact .tile-head .chip { flex: none; }
+.tile.compact .tile-head .title { flex: 1 1 auto; min-width: 4em; }
+.tile.max .tile-maxbtn { color: var(--accent); border-color: var(--accent); }

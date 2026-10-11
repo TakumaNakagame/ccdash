@@ -2240,7 +2240,8 @@ function gridPage() {
   });
   grid.addEventListener("tile-max", (e) => {
     const k = [...tiles].find(([, t]) => t.el === e.target)?.[0];
-    maxKey = maxKey === k ? null : k;
+    if (e.detail?.on && maxKey === k) return; // already the big one
+    maxKey = e.detail?.on || maxKey !== k ? k : null;
     applyMax();
   });
   const onKey = (e) => { if (e.key === "Escape" && maxKey) { maxKey = null; applyMax(); } };
@@ -2735,13 +2736,16 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   let lastUsage = null;
   const menuBtn = h("button", { class: "btn small", title: "セッションの操作", onclick: () => session ? sessionMenu(id, session, allGroups, poll) : toast("まだセッションが登録されていません"), "aria-label": "セッションの操作" }, icon("more"));
   const chatHref = () => sid ? `#/d/${id}/s/${encodeURIComponent(sid)}` : `#/d/${id}/p/${encodeURIComponent(ptyKey)}`;
-  const stopTop = h("button", { class: "btn small", type: "button", title: "Esc を送って作業を中断", hidden: true, onclick: () => keys("\x1b") }, icon("stop"), "中断");
+  const stopTop = h("button", { class: "btn small" + (compact ? " icon" : ""), type: "button", title: "Esc を送って作業を中断", "aria-label": "中断", hidden: true, onclick: () => keys("\x1b") }, icon("stop"), compact ? null : "中断");
+  // Tile: maximise / restore (double-click the title does the same).
+  const maxBtn = compact ? h("button", { class: "btn small icon tile-maxbtn", type: "button", title: "大きく表示 / 戻す", "aria-label": "大きく表示 / 戻す",
+    onclick: () => root.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })) }, icon("expand")) : null;
   let root;
   const bar = compact
     ? h("div", { class: "term-bar tile-head" },
       h("span", { class: "chip dev" }, devName), titleEl, statusEl, stopTop,
       h("a", { class: "btn small icon", href: "#", title: "チャット画面で開く", "aria-label": "チャット画面で開く", onclick: (e) => { e.preventDefault(); location.hash = chatHref(); } }, icon("open")),
-      menuBtn,
+      maxBtn, menuBtn,
       h("button", { class: "btn small icon tile-close", type: "button", title: "グリッドから外す", "aria-label": "グリッドから外す", onclick: () => root.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })) }, icon("x")))
     : h("div", { class: "term-bar" },
       h("a", { class: "btn small icon", href: `#/d/${id}`, "aria-label": "戻る", title: "戻る" }, icon("back")), titleEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
@@ -2866,6 +2870,11 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   if (input.value) requestAnimationFrame(autosize);
   input.addEventListener("input", keepDraft);
   bucket.push(keepDraft); // also catches text set by the quick buttons / slash picker
+  // On a touch screen, typing into a tile maximises it: the on-screen
+  // keyboard would otherwise cover most of a small tile.
+  if (compact) input.addEventListener("focus", () => {
+    if (matchMedia("(pointer: coarse)").matches) root.dispatchEvent(new CustomEvent("tile-max", { bubbles: true, detail: { on: true } }));
+  });
   input.addEventListener("keydown", (e) => {
     const mobile = matchMedia("(pointer: coarse)").matches;
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !mobile) {
@@ -3085,6 +3094,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     restartBtn.hidden = !hosted || !sid; // nothing to resume before the first prompt
     stopBtn.hidden = !(hosted && session?.status === "active");
     stopTop.hidden = stopBtn.hidden;
+    if (compact) stopBtn.hidden = true; // the tile's header has 中断
     input.placeholder = hosted ? "メッセージ" : compact ? "送信で再開" : "送信するとこのセッションを再開します";
 
     // approvals for this session
