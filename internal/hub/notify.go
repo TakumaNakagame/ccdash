@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -326,9 +327,56 @@ func watchOnce(ctx context.Context, c *http.Client, d Device, st *watchState) ([
 		}
 		out = append(out, n)
 	}
+	out = append(out, spawnPrompts(ctx, c, d, st, now)...)
 	st.attention = now
 	st.first = false
 	return out, sessions, nil
+}
+
+// spawnPrompts notifies about claudes started on the device that wait on a
+// dialog before they have a session at all (the folder-trust question in a
+// new folder): no session row carries their attention, so GET /pty does.
+// now gets "pty:<key>" signatures, deduped like sessions.
+func spawnPrompts(ctx context.Context, c *http.Client, d Device, st *watchState, now map[string]string) []notification {
+	var ptys []struct {
+		Key    string `json:"key"`
+		Alive  bool   `json:"alive"`
+		PID    int    `json:"pid"`
+		Cwd    string `json:"cwd"`
+		Prompt string `json:"prompt"`
+	}
+	if getJSON(ctx, c, "/pty/", &ptys) != nil {
+		return nil
+	}
+	named := map[int]bool{}
+	for _, p := range ptys {
+		if !strings.HasPrefix(p.Key, "pid-") {
+			named[p.PID] = true
+		}
+	}
+	var out []notification
+	for _, p := range ptys {
+		if !p.Alive || p.Prompt == "" || named[p.PID] || !strings.HasPrefix(p.Key, "pid-") {
+			continue
+		}
+		sk := "pty:" + p.Key
+		now[sk] = p.Prompt
+		if st.first || st.attention[sk] == p.Prompt || time.Since(st.lastSent[sk]) < sessionCooldown {
+			continue
+		}
+		st.lastSent[sk] = time.Now()
+		label := "新しいセッション"
+		if p.Cwd != "" {
+			label += "（" + filepath.Base(p.Cwd) + "）"
+		}
+		out = append(out, notification{
+			Title: d.Name + " · 要対応",
+			Body:  label + "\n" + p.Prompt,
+			URL:   "/#/d/" + d.ID + "/p/" + url.PathEscape(p.Key),
+			Tag:   d.ID + ":" + p.Key,
+		})
+	}
+	return out
 }
 
 // ---- cross-device board ----

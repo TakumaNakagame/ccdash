@@ -13,6 +13,7 @@ package store
 import (
 	"context"
 	"github.com/takumanakagame/ccmanage/internal/usage"
+	"strings"
 	"time"
 
 	"github.com/takumanakagame/ccmanage/internal/model"
@@ -88,6 +89,10 @@ type Store interface {
 	// DecideApproval this always goes over HTTP: the PTY lives in the
 	// collector process.
 	StartSession(ctx context.Context, req StartRequest) (string, error)
+	// WaitingSpawns lists hosted claudes that have no session yet and wait
+	// on a dialog (the folder-trust question in a new folder) — from the
+	// collector's GET /pty, so also over HTTP.
+	WaitingSpawns(ctx context.Context) ([]WaitingSpawn, error)
 
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
@@ -112,4 +117,39 @@ type Store interface {
 	// TranscriptFull returns the whole parsed transcript, for the
 	// full-screen modal viewer ('o').
 	TranscriptFull(ctx context.Context, s model.Session) ([]transcript.Message, error)
+}
+
+// WaitingSpawn is a hosted claude stuck on a dialog before it has a
+// session: its PTY key, start directory and the dialog's question.
+type WaitingSpawn struct {
+	Key    string `json:"pty"`
+	Cwd    string `json:"cwd,omitempty"`
+	Prompt string `json:"waiting_on"`
+}
+
+// ptyRow is one row of the collector's GET /pty.
+type ptyRow struct {
+	Key    string `json:"key"`
+	Alive  bool   `json:"alive"`
+	PID    int    `json:"pid"`
+	Cwd    string `json:"cwd"`
+	Prompt string `json:"prompt"`
+}
+
+// waitingOf keeps the pid-* spawns with a prompt whose PTY has no session
+// key yet.
+func waitingOf(rows []ptyRow) []WaitingSpawn {
+	named := map[int]bool{}
+	for _, r := range rows {
+		if !strings.HasPrefix(r.Key, "pid-") {
+			named[r.PID] = true
+		}
+	}
+	out := []WaitingSpawn{}
+	for _, r := range rows {
+		if r.Alive && r.Prompt != "" && strings.HasPrefix(r.Key, "pid-") && !named[r.PID] {
+			out = append(out, WaitingSpawn{Key: r.Key, Cwd: r.Cwd, Prompt: r.Prompt})
+		}
+	}
+	return out
 }

@@ -144,21 +144,42 @@ func (l *Local) StartSession(ctx context.Context, req StartRequest) (string, err
 	return out.PtyKey, nil
 }
 
+// WaitingSpawns reads the collector's GET /pty.
+func (l *Local) WaitingSpawns(ctx context.Context) ([]WaitingSpawn, error) {
+	var rows []ptyRow
+	if err := l.callCollector(ctx, http.MethodGet, "/pty/", nil, &rows); err != nil {
+		return nil, err
+	}
+	return waitingOf(rows), nil
+}
+
 // postCollector POSTs body as JSON to the loopback collector and decodes a
 // 2xx reply into out when out is non-nil.
 func (l *Local) postCollector(ctx context.Context, path string, body, out any) error {
-	b, err := json.Marshal(body)
-	if err != nil {
-		return err
+	return l.callCollector(ctx, http.MethodPost, path, body, out)
+}
+
+// callCollector sends method to the loopback collector, body as JSON when
+// non-nil, and decodes a 2xx reply into out when out is non-nil.
+func (l *Local) callCollector(ctx context.Context, method, path string, body, out any) error {
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		rd = bytes.NewReader(b)
 	}
 	u := fmt.Sprintf("http://%s:%d%s", paths.DefaultHost, paths.DefaultPort, path)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, method, u, rd)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if tok, err := auth.Load(); err == nil {
 		req.Header.Set(auth.HeaderName, tok)
 	}

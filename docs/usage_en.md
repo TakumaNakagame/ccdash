@@ -453,6 +453,16 @@ affected. In remote mode it only relaunches the local dashboard.
   once a day (see "Auto-archive" in §6). Default 7, `0` = off.
 - **Refresh interval (ms)**: how often the TUI re-queries the DB.
   Default 1000.
+- **Trusted folders**: comma-separated folders (`~/` allowed), e.g.
+  `~/DevWorks/TakumaNakagame`. When ccdash starts claude in one of them or
+  any subfolder (`n`, the portal, MCP `start_session`), it first marks that
+  folder trusted in `~/.claude.json`, so a brand-new folder doesn't stop at
+  Claude Code's "do you trust this folder?" question. Empty = off. From a
+  shell: `ccdash trust` lists, `ccdash trust <dir>` adds,
+  `ccdash trust --remove <dir>` removes. A spawn
+  that does stop at a dialog before it has a session is flagged anyway:
+  a "waiting for you" row in the TUI, 要対応 under 起動中 in the portal
+  (plus a push), and `waiting_on` in MCP `start_session` / `overview`.
 
 ## 11. Self-update
 

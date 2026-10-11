@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/takumanakagame/ccmanage/internal/auth"
+	"github.com/takumanakagame/ccmanage/internal/claudecfg"
 	"github.com/takumanakagame/ccmanage/internal/clientcfg"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/hookcfg"
@@ -31,6 +33,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/selfupdate"
 	"github.com/takumanakagame/ccmanage/internal/server"
+	"github.com/takumanakagame/ccmanage/internal/settings"
 	"github.com/takumanakagame/ccmanage/internal/store"
 	"github.com/takumanakagame/ccmanage/internal/tui"
 	"github.com/takumanakagame/ccmanage/internal/wrapper"
@@ -114,6 +117,7 @@ spawns a collector — everything goes over HTTP.`,
 	root.AddCommand(serverCmd())
 	root.AddCommand(claudeCmd())
 	root.AddCommand(sessionsCmd(rf))
+	root.AddCommand(trustCmd(rf))
 	root.AddCommand(eventsCmd(rf))
 	root.AddCommand(approvalsCmd(rf))
 	root.AddCommand(installHooksCmd())
@@ -602,6 +606,66 @@ opens their chat in the hub portal; --hub-url sets or overrides that origin.`,
 	}
 	c.Flags().BoolVar(&readOnly, "read-only", false, "only offer the viewing tools")
 	c.Flags().StringVar(&hubURL, "hub-url", "", "hub origin for session links (default: the hub this machine joined)")
+	return c
+}
+
+// trustCmd edits the trusted_dirs setting: folders under which ccdash marks
+// a cwd trusted in ~/.claude.json before starting claude there.
+func trustCmd(rf *remoteFlags) *cobra.Command {
+	var remove bool
+	c := &cobra.Command{
+		Use:   "trust [dir...]",
+		Short: "List / add / remove trusted folders (claude started under them skips the folder-trust question)",
+		Long: `Folders listed here (and everything under them) are marked trusted in
+~/.claude.json before ccdash starts claude there ('n', the portal, MCP start_session),
+so a brand-new folder doesn't stop at Claude Code's "do you trust this folder?" question.
+
+  ccdash trust                          # list
+  ccdash trust ~/DevWorks/TakumaNakagame  # add
+  ccdash trust --remove ~/old           # remove
+
+Same as "Trusted folders" on the TUI settings page.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, closeFn, err := openStore(rf)
+			if err != nil {
+				return err
+			}
+			defer closeFn()
+			ctx := cmd.Context()
+			cfg, err := settings.Load(ctx, st)
+			if err != nil {
+				return err
+			}
+			cur := claudecfg.SplitRoots(cfg.TrustedDirs)
+			if len(args) > 0 {
+				for _, a := range args {
+					abs := claudecfg.SplitRoots(a)
+					if len(abs) == 0 {
+						if p, err := filepath.Abs(a); err == nil {
+							abs = []string{p}
+						}
+					}
+					for _, d := range abs {
+						cur = slices.DeleteFunc(cur, func(x string) bool { return x == d })
+						if !remove {
+							cur = append(cur, d)
+						}
+					}
+				}
+				if _, err := settings.Set(ctx, st, cfg, "trusted_dirs", strings.Join(cur, ", ")); err != nil {
+					return err
+				}
+			}
+			if len(cur) == 0 {
+				fmt.Println("(no trusted folders)")
+			}
+			for _, d := range cur {
+				fmt.Println(d)
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&remove, "remove", false, "remove the given folders instead of adding them")
 	return c
 }
 

@@ -858,9 +858,18 @@ async function devicePage(id, opts = {}) {
       byPid.get(p.pid).push(p.key);
     }
     const fresh = [...byPid.values()].filter((keys) => keys.every((k) => k.startsWith("pid-"))).map((keys) => keys[0]);
+    const ptyOf = new Map(ptys.map((p) => [p.key, p]));
+    // A spawn can wait on a dialog before claude registers a session (the
+    // folder-trust question in a new folder): show it, open it to answer.
     spawns.replaceChildren(...(fresh.length ? [h("h2", {}, "起動中（未登録）"), h("div", { class: "list" },
-      fresh.map((k) => h("div", { class: "item", onclick: () => (location.hash = `#/d/${id}/p/${encodeURIComponent(k)}`) },
-        h("span", { class: "chip live" }, "live"), h("div", { class: "grow title mono" }, k))))] : []));
+      fresh.map((k) => {
+        const p = ptyOf.get(k) || {};
+        return h("div", { class: "item srow", onclick: () => (location.hash = `#/d/${id}/p/${encodeURIComponent(k)}`) },
+          h("div", { class: "grow" },
+            h("div", { class: "title mono" }, p.cwd ? p.cwd.split("/").filter(Boolean).pop() : k),
+            p.prompt ? h("div", { class: "muted small" }, p.prompt) : null),
+          h("div", { class: "srow-tail" }, p.prompt ? h("span", { class: "chip pend" }, "要対応") : h("span", { class: "chip live" }, "live")));
+      }))] : []));
   };
   filter.addEventListener("input", render);
 

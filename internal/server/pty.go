@@ -17,7 +17,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/takumanakagame/ccmanage/internal/attach"
+	"github.com/takumanakagame/ccmanage/internal/claudecfg"
 	"github.com/takumanakagame/ccmanage/internal/procmap"
+	"github.com/takumanakagame/ccmanage/internal/settings"
 )
 
 // newPTYCommand builds the child for POST /pty/start. A variable so tests
@@ -166,6 +168,7 @@ func (s *Server) startPTY(req ptyStartReq) (string, int, int, error) {
 	c := newPTYCommand(args...)
 	if req.Cwd != "" {
 		c.Dir = req.Cwd
+		s.pretrust(req.Cwd)
 	}
 	s.ptyMu.Lock()
 	s.ptyTagSeq++
@@ -182,6 +185,7 @@ func (s *Server) startPTY(req ptyStartReq) (string, int, int, error) {
 	entry := newPTYEntry(sess, "", req.Cols, req.Rows)
 	entry.tag = tag
 	entry.project = strings.TrimSpace(req.Project)
+	entry.cwd = req.Cwd
 	if err := sess.Start(); err != nil {
 		return "", 0, http.StatusInternalServerError, fmt.Errorf("pty start: %v", err)
 	}
@@ -577,3 +581,25 @@ func (s *Server) lookupPTY(id string) *ptyEntry {
 
 // Ensure brw (bufio.ReadWriter from Hijack) satisfies io.Reader for JSON decode.
 var _ io.Reader = (*bufio.ReadWriter)(nil)
+
+// pretrust marks cwd trusted in Claude Code's config when it lies under one
+// of the operator's trusted_dirs, so a new folder doesn't stop at the
+// folder-trust question before claude even registers a session.
+func (s *Server) pretrust(cwd string) {
+	if s.db == nil {
+		return
+	}
+	cfg, err := settings.Load(context.Background(), s.db)
+	if err != nil || !claudecfg.Under(cwd, cfg.TrustedDirs) {
+		return
+	}
+	path, err := claudecfg.Path()
+	if err != nil {
+		return
+	}
+	if changed, err := claudecfg.Trust(path, cwd); err != nil {
+		log.Printf("pty: trust %s: %v", cwd, err)
+	} else if changed {
+		log.Printf("pty: marked %s trusted (trusted_dirs)", cwd)
+	}
+}

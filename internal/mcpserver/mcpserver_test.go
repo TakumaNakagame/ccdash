@@ -162,6 +162,8 @@ func TestStartSession(t *testing.T) {
 		case "/pty/start":
 			_ = json.NewDecoder(r.Body).Decode(&got)
 			_, _ = w.Write([]byte(`{"ptyKey":"pid-42","tag":1000001}`))
+		case "/pty/":
+			_, _ = w.Write([]byte(`[{"key":"pid-42","alive":true,"pid":42,"cwd":"/w/new","prompt":"確認: Is this a project you trust?"}]`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -176,6 +178,9 @@ func TestStartSession(t *testing.T) {
 	}
 	if !strings.Contains(out, "pid-42") || got["cwd"] != "/w/new" || got["project"] != "infra" || got["prompt"] != "read task.md" {
 		t.Errorf("out=%s req=%v", out, got)
+	}
+	if !strings.Contains(out, `"waiting_on": "確認: Is this a project you trust?"`) {
+		t.Errorf("trust dialog not reported: %s", out)
 	}
 	for _, bad := range []string{`{"cwd":"rel/dir"}`, `{"cwd":"/w","prompt":"-x"}`} {
 		if _, err := s.call(ctx, "start_session", json.RawMessage(bad)); err == nil {

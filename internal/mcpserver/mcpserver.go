@@ -504,6 +504,10 @@ func (s *Server) overview(ctx context.Context) (any, error) {
 		"running_by_project":      byProject,
 		"running_by_project_note": `the "" key holds running sessions that are in no project`,
 	}
+	if ws, err := s.st.WaitingSpawns(ctx); err == nil && len(ws) > 0 {
+		out["new_sessions_waiting"] = ws
+		out["new_sessions_waiting_note"] = "claudes started by ccdash that stopped at a dialog (e.g. Claude Code's folder-trust question) before they have a session; the operator answers it in ccdash (TUI row / portal 起動中)"
+	}
 	if u, err := s.st.UsageSummary(ctx, 1); err == nil {
 		out["today_usage_estimate"] = map[string]any{
 			"usd_at_api_list_price": fmt.Sprintf("%.2f", u.Today.Cost),
@@ -825,6 +829,32 @@ func (s *Server) setArchived(ctx context.Context, refs []string, archived bool) 
 	return map[string]any{"archived": archived, "sessions": refsOf(ss)}, nil
 }
 
+// spawnWait is how long start_session watches a new spawn for a dialog.
+var spawnWait = 6 * time.Second
+
+// waitFor returns the dialog the spawn key waits on, watching it for up to
+// spawnWait; "" if none showed up.
+func (s *Server) waitFor(ctx context.Context, key string) string {
+	deadline := s.now().Add(spawnWait)
+	for {
+		if ws, err := s.st.WaitingSpawns(ctx); err == nil {
+			for _, w := range ws {
+				if w.Key == key {
+					return w.Prompt
+				}
+			}
+		}
+		if !s.now().Before(deadline) {
+			return ""
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 func (s *Server) startSession(ctx context.Context, cwd, project, prompt, mode string) (any, error) {
 	cwd = strings.TrimSpace(cwd)
 	if !filepath.IsAbs(cwd) {
@@ -850,6 +880,12 @@ func (s *Server) startSession(ctx context.Context, cwd, project, prompt, mode st
 		"started": key,
 		"cwd":     filepath.Clean(cwd),
 		"note":    "the session appears in ccdash once claude starts (a few seconds); open it there to drive it",
+	}
+	// A new folder can stop claude at the folder-trust question before it
+	// registers anything; say so instead of leaving the caller guessing.
+	if w := s.waitFor(ctx, key); w != "" {
+		out["waiting_on"] = w
+		out["note"] = "claude stopped at a dialog before starting the session; the operator must answer it in ccdash (TUI row / portal 起動中). Folders under ccdash's 'Trusted folders' setting skip the trust question."
 	}
 	if project != "" {
 		out["project"] = project

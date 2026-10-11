@@ -311,9 +311,10 @@ type model struct {
 	// dashboard.
 	live             *liveScreen
 	liveFocus        bool
-	liveConnecting   string          // ptyKey whose dial is in flight
-	liveFocusPending string          // focus the pane as soon as this key connects
-	ptyAlive         map[string]bool // ptyKey → child alive, from GET /pty
+	liveConnecting   string                  // ptyKey whose dial is in flight
+	liveFocusPending string                  // focus the pane as soon as this key connects
+	ptyAlive         map[string]bool         // ptyKey → child alive, from GET /pty
+	ptyWaiting       map[string]waitingSpawn // unregistered spawns stuck on a dialog, from GET /pty
 	// liveCache keeps the last screen of each stream we closed so that
 	// moving the selection back shows it at once while the new stream
 	// dials, instead of flashing the transcript view.
@@ -859,6 +860,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ptyListMsg:
 		if msg.err == nil {
 			m.ptyAlive = msg.alive
+			m.ptyWaiting = msg.waiting
 			m.ptyListWarned = false
 			m.resolveSpawnSID(msg.pids)
 		} else if !m.ptyListWarned {
@@ -1692,6 +1694,7 @@ func (m *model) cycleGroup(delta int) tea.Cmd {
 // m.allSessions (rebuilt from the store on every refresh), or forgets the
 // spawn once its PTY is gone.
 func (m *model) injectSpawnRow() {
+	m.injectWaitingSpawns()
 	if m.spawn.pty == "" {
 		return
 	}
@@ -1712,6 +1715,35 @@ func (m *model) injectSpawnRow() {
 		LastSeen:  m.spawn.at,
 		Status:    mdl.StatusActive,
 	}}, m.allSessions...)
+	if w, ok := m.ptyWaiting[m.spawn.pty]; ok {
+		m.allSessions[0].Attention, m.allSessions[0].AttentionReason = mdl.AttentionNeedsYou, w.prompt
+	}
+}
+
+// injectWaitingSpawns adds a needs-you placeholder row for every spawn
+// (from n elsewhere, the portal or MCP start_session) that waits on a
+// dialog before claude registers a session — typically the folder-trust
+// question in a new folder. Selecting it mirrors the PTY, so it can be
+// answered in the live pane.
+func (m *model) injectWaitingSpawns() {
+	have := map[string]bool{}
+	for _, s := range m.allSessions {
+		have[s.SessionID] = true
+	}
+	for key, w := range m.ptyWaiting {
+		if have[key] || key == m.spawn.pty {
+			continue
+		}
+		m.allSessions = append([]mdl.Session{{
+			SessionID:       key,
+			Cwd:             w.cwd,
+			Title:           "new claude session (waiting for you)",
+			Status:          mdl.StatusActive,
+			Attention:       mdl.AttentionNeedsYou,
+			AttentionReason: w.prompt,
+			LastSeen:        time.Now(),
+		}}, m.allSessions...)
+	}
 }
 
 // resolveSpawnSID learns the pending spawn's session ID from the /pty

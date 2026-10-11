@@ -59,6 +59,11 @@ type Settings struct {
 	// the home directory. May use ~/.
 	NewSessionDir string
 
+	// TrustedDirs lists folders (comma/newline separated, ~/ allowed)
+	// whose subfolders the collector marks trusted in ~/.claude.json
+	// before starting claude there (internal/claudecfg). Empty = off.
+	TrustedDirs string
+
 	// PaneListPct is the session list's share of the body, in percent:
 	// its width in the horizontal layout, its height in the vertical one.
 	// The right (work) pane gets the rest. Clamped to
@@ -110,6 +115,7 @@ const (
 	keySummaryTimeoutSec = "summary_timeout_sec"
 	keyRefreshIntervalMs = "refresh_interval_ms"
 	keyNewSessionDir     = "new_session_dir"
+	keyTrustedDirs       = "trusted_dirs"
 	keyPaneListPct       = "pane_list_pct"
 	// legacyKeyPaneSplit was the "50/50" / "30/70" enum PaneListPct
 	// replaced; Load folds it in once.
@@ -181,6 +187,7 @@ func loadPairs(out *Settings) []loadPair {
 		{keySummaryTimeoutSec, func(v string) { out.SummaryTimeoutSec = parseInt(v, out.SummaryTimeoutSec) }},
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
 		{keyNewSessionDir, func(v string) { out.NewSessionDir = v }},
+		{keyTrustedDirs, func(v string) { out.TrustedDirs = v }},
 		{keyPaneListPct, func(v string) { out.PaneListPct = ClampPaneListPct(parseInt(v, out.PaneListPct)) }},
 		{keyInvertListScroll, func(v string) { out.InvertListScroll = parseBool(v, out.InvertListScroll) }},
 		{keyAutoArchiveDays, func(v string) { out.AutoArchiveDays = parseInt(v, out.AutoArchiveDays) }},
@@ -352,6 +359,7 @@ func AllSpecs() []Spec {
 		{Key: keyAutoArchiveDays, Label: "Auto-archive after (days)", Help: "Once a day (first collector start of the day), archive sessions idle longer than this. Favorites, project members and running sessions are kept; resuming an auto-archived session brings it back. 0 = off.", Kind: KindInt, Min: 0, Max: 365},
 		{Key: keyRefreshIntervalMs, Label: "Refresh interval (ms)", Help: "How often the TUI re-queries the DB for new state", Kind: KindInt, Min: 250, Max: 10000},
 		{Key: keyNewSessionDir, Label: "New session directory", Help: "Where the 'n' directory picker starts (~/ allowed). Empty = home directory.", Kind: KindString, Path: true},
+		{Key: keyTrustedDirs, Label: "Trusted folders", Help: "Folders (comma-separated, ~/ allowed) where claude started by ccdash (n, the portal, MCP start_session) skips Claude Code's folder-trust question: ccdash marks the folder trusted in ~/.claude.json first. Covers subfolders. Empty = off.", Kind: KindString},
 		// System section (rendered under its own heading with the version;
 		// keep it last).
 		{Key: KeyUpdate, Label: "Update ccdash", Help: "Check for a new release, show its notes, install it (y), then offer to restart into it.", Kind: KindAction},
@@ -416,6 +424,8 @@ func Get(s Settings, key string) any {
 		return s.RefreshIntervalMs
 	case keyNewSessionDir:
 		return s.NewSessionDir
+	case keyTrustedDirs:
+		return s.TrustedDirs
 	case keyPaneListPct:
 		return s.PaneListPct
 	case keyTimeFormat:
@@ -472,6 +482,8 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.RefreshIntervalMs = value.(int)
 	case keyNewSessionDir:
 		s.NewSessionDir = value.(string)
+	case keyTrustedDirs:
+		s.TrustedDirs = value.(string)
 	case keyPaneListPct:
 		value = ClampPaneListPct(value.(int))
 		s.PaneListPct = value.(int)

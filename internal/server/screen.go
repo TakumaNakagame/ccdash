@@ -69,11 +69,16 @@ type ptyEntry struct {
 	// guarded by Server.ptyMu.
 	project     string
 	projectDone bool
-	sf          strFilter      // scrubs C1-looking bytes out of OSC etc.; see strfilter.go
-	trace       io.WriteCloser // raw child output dump; nil unless CCDASH_PTY_TRACE_DIR is set
-	curHidden   bool
-	curStyle    vt.CursorStyle
-	curBlink    bool
+	// cwd is where the child started; prompt is the dialog a spawn not yet
+	// tied to a session waits on (attentionLoop), e.g. the folder-trust
+	// question. Both guarded by Server.ptyMu.
+	cwd       string
+	prompt    string
+	sf        strFilter      // scrubs C1-looking bytes out of OSC etc.; see strfilter.go
+	trace     io.WriteCloser // raw child output dump; nil unless CCDASH_PTY_TRACE_DIR is set
+	curHidden bool
+	curStyle  vt.CursorStyle
+	curBlink  bool
 	// mouseModes mirrors the child's mouse-tracking modes (guarded by
 	// emuMu). With none set the emulator drops wheel events, so the
 	// screen stream scrolls its own scrollback instead; see wheelScrolls.
@@ -635,6 +640,10 @@ type ptyInfo struct {
 	PID   int    `json:"pid"`
 	Cols  int    `json:"cols"`
 	Rows  int    `json:"rows"`
+	// Cwd / Prompt: where it started, and — for a spawn with no session
+	// yet — the dialog it is stuck on ("" = none).
+	Cwd    string `json:"cwd,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // handlePTYList reports every registered ptyKey (aliases included) so the
@@ -644,7 +653,7 @@ func (s *Server) handlePTYList(w http.ResponseWriter, _ *http.Request) {
 	out := make([]ptyInfo, 0, len(s.ptyMap))
 	for k, e := range s.ptyMap {
 		cols, rows := e.size()
-		out = append(out, ptyInfo{Key: k, Alive: e.sess.Alive(), PID: e.sess.PID(), Cols: cols, Rows: rows})
+		out = append(out, ptyInfo{Key: k, Alive: e.sess.Alive(), PID: e.sess.PID(), Cols: cols, Rows: rows, Cwd: e.cwd, Prompt: e.prompt})
 	}
 	s.ptyMu.Unlock()
 	w.Header().Set("Content-Type", "application/json")

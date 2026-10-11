@@ -64,8 +64,13 @@ type liveFramesMsg struct {
 type ptyListMsg struct {
 	alive map[string]bool
 	pids  map[string]int // ptyKey → shell pid; aliases of one PTY share it
-	err   error
+	// waiting: spawns with no session yet that wait on a dialog (the
+	// folder-trust question), by ptyKey — shown as placeholder rows.
+	waiting map[string]waitingSpawn
+	err     error
 }
+
+type waitingSpawn struct{ cwd, prompt string }
 
 // fetchPTYListCmd polls the server for live PTY keys. Cheap loopback call;
 // runs on every refresh tick alongside the DB reads.
@@ -88,9 +93,11 @@ func fetchPTYListCmd() tea.Cmd {
 			return ptyListMsg{err: fmt.Errorf("pty list: %s", resp.Status)}
 		}
 		var rows []struct {
-			Key   string `json:"key"`
-			Alive bool   `json:"alive"`
-			PID   int    `json:"pid"`
+			Key    string `json:"key"`
+			Alive  bool   `json:"alive"`
+			PID    int    `json:"pid"`
+			Cwd    string `json:"cwd"`
+			Prompt string `json:"prompt"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
 			return ptyListMsg{err: err}
@@ -103,7 +110,19 @@ func fetchPTYListCmd() tea.Cmd {
 				pids[r.Key] = r.PID
 			}
 		}
-		return ptyListMsg{alive: alive, pids: pids}
+		named := map[int]bool{}
+		for _, r := range rows {
+			if !strings.HasPrefix(r.Key, "pid-") {
+				named[r.PID] = true
+			}
+		}
+		waiting := map[string]waitingSpawn{}
+		for _, r := range rows {
+			if r.Alive && r.Prompt != "" && strings.HasPrefix(r.Key, "pid-") && !named[r.PID] {
+				waiting[r.Key] = waitingSpawn{cwd: r.Cwd, prompt: r.Prompt}
+			}
+		}
+		return ptyListMsg{alive: alive, pids: pids, waiting: waiting}
 	}
 }
 

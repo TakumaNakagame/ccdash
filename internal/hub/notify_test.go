@@ -88,6 +88,20 @@ func TestWatchOnce(t *testing.T) {
 	if ns, _, _ := watchOnce(ctx, c, d, st); len(ns) != 0 {
 		t.Fatalf("cleared attention notified: %+v", ns)
 	}
+
+	// A fresh spawn stuck on the folder-trust question (no session yet);
+	// a spawn that already has a session key is the session's business.
+	f.mu.Lock()
+	f.ptys = `[{"key":"pid-42","alive":true,"pid":42,"cwd":"/w/market-watch","prompt":"確認: Is this a project you trust?"},
+	           {"key":"pid-43","alive":true,"pid":43,"prompt":"確認: x"},{"key":"s9","alive":true,"pid":43}]`
+	f.mu.Unlock()
+	ns, _, _ = watchOnce(ctx, c, d, st)
+	if len(ns) != 1 || ns[0].URL != "/#/d/dev1/p/pid-42" || !strings.Contains(ns[0].Body, "market-watch") || !strings.Contains(ns[0].Body, "trust") {
+		t.Fatalf("spawn prompt = %+v", ns)
+	}
+	if ns, _, _ := watchOnce(ctx, c, d, st); len(ns) != 0 {
+		t.Fatalf("spawn prompt repeated: %+v", ns)
+	}
 }
 
 func TestBoard(t *testing.T) {

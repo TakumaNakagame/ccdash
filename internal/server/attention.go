@@ -85,27 +85,35 @@ func (s *Server) attentionLoop(ctx context.Context) {
 		}
 		s.ptyMu.Lock()
 		entries := map[string]*ptyEntry{}
+		named := map[*ptyEntry]bool{}
 		for k, e := range s.ptyMap {
 			if !strings.HasPrefix(k, "pid-") && !e.exited.Load() {
 				entries[k] = e
+				named[e] = true
+			}
+		}
+		// Spawns with no session yet (no row to flag): keep what they wait
+		// on on the entry, for GET /pty — e.g. the folder-trust question
+		// claude asks before it registers anything.
+		var spawns []*ptyEntry
+		for k, e := range s.ptyMap {
+			if strings.HasPrefix(k, "pid-") && !named[e] && !e.exited.Load() {
+				spawns = append(spawns, e)
+			} else if named[e] {
+				e.prompt = ""
 			}
 		}
 		s.ptyMu.Unlock()
+		for _, e := range spawns {
+			p := screenReason(e)
+			s.ptyMu.Lock()
+			e.prompt = p
+			s.ptyMu.Unlock()
+		}
 		for sid, e := range entries {
-			rows, _, _, _ := e.snapshot()
-			for i, r := range rows {
-				rows[i] = strings.TrimRight(ansi.Strip(r), " ")
-			}
-			kind, text := screenprompt.Kind(rows)
+			reason := screenReason(e)
 			switch {
-			case kind != "":
-				reason := "確認"
-				if kind == "question" {
-					reason = "質問"
-				}
-				if text != "" {
-					reason += ": " + truncate(text, 120)
-				}
+			case reason != "":
 				if shown[sid] != reason {
 					shown[sid] = reason
 					_ = s.db.SetAttention(ctx, sid, model.AttentionNeedsYou, reason)
@@ -121,6 +129,27 @@ func (s *Server) attentionLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// screenReason is the needs-you reason for the dialog on e's screen, or ""
+// ("確認: <question>" / "質問: <question>").
+func screenReason(e *ptyEntry) string {
+	rows, _, _, _ := e.snapshot()
+	for i, r := range rows {
+		rows[i] = strings.TrimRight(ansi.Strip(r), " ")
+	}
+	kind, text := screenprompt.Kind(rows)
+	if kind == "" {
+		return ""
+	}
+	reason := "確認"
+	if kind == "question" {
+		reason = "質問"
+	}
+	if text != "" {
+		reason += ": " + truncate(text, 120)
+	}
+	return reason
 }
 
 // handleAPISeen marks a session as looked at (an unread "done" becomes read).
