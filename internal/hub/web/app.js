@@ -1738,10 +1738,29 @@ function gridTile(c) {
   const status = h("span", { class: "chip" });
   const reason = h("div", { class: "tile-reason" });
   const log = h("div", { class: "tile-log" }, h("div", { class: "muted small" }, "読み込み中…"));
-  const input = h("input", { placeholder: "返信（Enter で送信）", enterkeyhint: "send" });
+  // A textarea like the chat's composer: Enter sends, Shift+Enter breaks
+  // the line (on a phone Enter is a newline; tap 送信). The draft is the
+  // chat view's draft for this session, so it survives leaving the grid and
+  // follows you into the chat.
+  const input = h("textarea", { rows: 1, placeholder: "返信（Enter で送信・Shift+Enter で改行）", enterkeyhint: "send" });
   const form = h("form", { class: "tile-reply" }, input, h("button", { class: "btn small primary" }, "送信"));
+  const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; };
+  input.value = loadDraft(id, sid);
+  if (input.value) requestAnimationFrame(autosize);
+  input.addEventListener("input", () => { autosize(); saveDraft(id, sid, input.value); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !matchMedia("(pointer: coarse)").matches) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  const stopBtn = h("button", { class: "btn small", type: "button", title: "Esc を送って作業を中断", hidden: true }, "■ 中断");
+  stopBtn.addEventListener("click", async () => {
+    try { await dev(id).post(`/pty/${encodeURIComponent(sid)}/input`, { keys: "\x1b" }); toast("中断を送りました"); }
+    catch (err) { toast(err.status === 404 ? "このセッションは ccdash 上で動いていないため中断できません" : err.message); }
+  });
   const el = h("div", { class: "tile", style: `--sess:${sessionColorOf(c.session)}` },
-    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, resumeBtn, openBtn, closeBtn), reason, log, form,
+    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, stopBtn, resumeBtn, openBtn, closeBtn), reason, log, form,
     h("div", { class: "tile-resize", title: "ドラッグで大きさを変更" }));
   title.addEventListener("dblclick", () => el.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   closeBtn.addEventListener("click", () => el.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })));
@@ -1772,6 +1791,8 @@ function gridTile(c) {
     if (!text) return;
     if (session.attention === "needs_you") { toast("Claude が回答を待っています。開いて質問カードから答えてください"); location.hash = chatHref; return; }
     input.value = "";
+    autosize();
+    saveDraft(id, sid, "");
     const p = { text, at: Date.now() };
     pending.push(p);
     if (!shown) shown = [];
@@ -1780,7 +1801,7 @@ function gridTile(c) {
     catch (err) {
       toast(err.message);
       pending = pending.filter((x) => x !== p);
-      if (!input.value) input.value = text;
+      if (!input.value) { input.value = text; saveDraft(id, sid, text); autosize(); }
       paint();
     }
   });
@@ -1807,6 +1828,7 @@ function gridTile(c) {
       if (running) resumingUntil = 0;
       const waiting = Date.now() < resumingUntil;
       resumeBtn.hidden = running;
+      stopBtn.hidden = session.status !== "active";
       resumeBtn.disabled = waiting;
       resumeBtn.textContent = waiting ? "再開中…" : "▶ 再開";
       input.placeholder = running ? "返信（Enter で送信）" : "送信すると再開します";

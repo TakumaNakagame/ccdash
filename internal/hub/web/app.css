@@ -452,7 +452,8 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .tile-log .bubble.assistant { padding: 0 2px; }
 .tile-log .chat-img { max-width: 50%; }
 .tile-reply { display: flex; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--line); }
-.tile-reply input { flex: 1; min-width: 0; }
+.tile-reply { align-items: flex-end; }
+.tile-reply textarea { flex: 1; min-width: 0; resize: none; min-height: 32px; max-height: 120px; line-height: 1.4; font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 6px 10px; }
 @media (max-width: 640px) { .grid-page { padding: 8px; } }
 
 /* grid: free placement (draggable, resizable windows) */
