@@ -261,6 +261,10 @@ const ICONS = {
   home: '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   list: '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
   chevron: '<path d="m15 18-6-6 6-6"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  search: '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>',
+  download: '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
 };
 function icon(name) {
   const el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -374,7 +378,8 @@ function route() {
       return sessionPage(parts[1], parts[3], parts[4]);
     }
     if (parts[2] === "p" && parts[3]) return spawnPage(parts[1], parts[3], parts[4]);
-    crumbs({ text: "端末", href: "#/" }, { text: deviceCache.get(parts[1])?.name || parts[1] });
+    crumbs({ text: "端末", href: "#/" }, { text: deviceCache.get(parts[1])?.name || "…" });
+    deviceName(parts[1]).then((n) => { if (location.hash.split("/")[2] === parts[1] && !parts[2]) crumbs({ text: "端末", href: "#/" }, { text: n }); });
     split.right.append(h("div", { class: "empty split-empty" }, "左の一覧からセッションを選んでください"));
     return;
   }
@@ -799,7 +804,7 @@ async function devicePage(id, opts = {}) {
   }, { passive: false });
   const list = h("div", { class: "list" }, h("div", { class: "empty" }, "読み込み中…"));
   const more = h("div");
-  const filter = h("input", { placeholder: "絞り込み（タイトル・パス・#番号）", class: "grow" });
+  const filter = h("input", { type: "search", placeholder: "タイトル・パス・#番号で絞り込み", "aria-label": "絞り込み" });
   let showArchived = false;
   const archBtn = h("button", { class: "btn small", onclick: () => { showArchived = !showArchived; selected.clear(); paintSel(); archBtn.classList.toggle("on", showArchived); archBtn.textContent = showArchived ? "アーカイブ表示中" : "アーカイブ"; refreshNow(); } }, "アーカイブ");
   const status = h("div", { class: "muted small" });
@@ -820,9 +825,9 @@ async function devicePage(id, opts = {}) {
       h("div", { class: "row" },
         h("div", { class: "grow" }, h("div", { class: "muted small" }, "今日（API 換算）"), h("b", { class: "big" }, fmtUSD(u.today?.cost || 0))),
         h("div", {}, h("div", { class: "muted small" }, "7 日間"), h("b", {}, fmtUSD(u.range?.cost || 0)), h("span", { class: "muted small" }, ` · ${fmtTok(tokTotal(u.range || {}))} tok`))),
-      h("div", { class: "bars", title: "日別（API 換算）" }, days.map(([d, v]) => h("div", { class: "bar", title: `${d} ${fmtUSD(v)}` },
-        h("em", {}, v > 0 ? fmtUSD(v) : ""),
-        h("span", { style: `height:${Math.max(2, Math.round((v / max) * 40))}px` }), h("small", {}, d)))));
+      // Only today's value is printed; the others are in each bar's tooltip.
+      h("div", { class: "bars", title: "日別（API 換算）" }, days.map(([d, v], i) => h("div", { class: "bar" + (i === days.length - 1 ? " today" : ""), title: `${d} ${fmtUSD(v)}` },
+        h("span", { style: `height:${Math.max(3, Math.round((v / max) * 44))}px` }), h("small", {}, i === days.length - 1 ? "今日" : d)))));
   };
   loadUsage();
   const usageTimer = setInterval(loadUsage, 60000);
@@ -903,11 +908,11 @@ async function devicePage(id, opts = {}) {
   mount.append(h("div", { class: "page" + (opts.compact ? " compact" : "") },
     h("div", { class: "row" },
       h("h1", { class: "grow" }, name),
-      h("button", { class: "btn", title: "この端末の ccdash collector を再起動（ホスト中のセッションは自動で再開）", onclick: () => restartCollector(id, last) }, icon("restart"), "再起動"),
+      h("button", { class: "btn icon", title: "この端末の ccdash collector を再起動（ホスト中のセッションは自動で再開）", onclick: () => restartCollector(id, last), "aria-label": "collector を再起動" }, icon("restart")),
       h("button", { class: "btn primary", onclick: () => newSession(id) }, icon("plus"), "新規セッション")),
     status, usageCard, approvals, spawns,
     tabs,
-    h("div", { class: "row", style: "margin-bottom:8px" }, filter, archBtn),
+    h("div", { class: "row", style: "margin-bottom:8px" }, h("label", { class: "search grow" }, icon("search"), filter), archBtn),
     selBar, list, more, settingsBox));
 
   let last = null, tab = loadTab(id), limit = 100, briefs = {}, briefsAt = 0, shownTab = null;
@@ -1002,7 +1007,7 @@ async function devicePage(id, opts = {}) {
       d.get(showArchived ? "/api/usage/sessions?archived=1" : "/api/usage/sessions")
         .then((b) => { briefs = b || {}; render(); }).catch(() => {});
     }
-    status.textContent = `${info.hostname} · ccdash ${info.version}` +
+    status.textContent = (info.hostname && info.hostname !== name ? info.hostname + " · " : "") + `ccdash ${info.version}` +
       (info.attachEnabled ? "" : " · attach OFF（閲覧のみ）") + (info.approveEnabled ? "" : " · 承認 OFF");
     renderApprovals(approvals, id, aps, sessions);
     render();
@@ -1416,6 +1421,12 @@ function parseTranscript(entries, opts = {}) {
     if ((e.type !== "user" && e.type !== "assistant") || !e.message || (e.isSidechain && !opts.sidechain)) continue;
     // Context compaction writes its summary as a user turn; show a note instead.
     if (e.isCompactSummary) { items.push({ kind: "note", text: "会話が長くなったため要約して続行しました" }); continue; }
+    // Files Claude sent the operator (SendUserFile): shown as images /
+    // download cards after the tool call.
+    const att = e.toolUseResult?.attachments;
+    if (e.type === "user" && Array.isArray(att) && att.length) {
+      items.push({ kind: "files", caption: e.toolUseResult.caption || "", files: att.filter((a) => a?.path) });
+    }
     const c = e.message.content;
     const parts = typeof c === "string" ? [{ type: "text", text: c }] : Array.isArray(c) ? c : [];
     for (const p of parts) {
@@ -1577,6 +1588,15 @@ async function followPortalLink(e) {
   }
 }
 
+// fmtSize: 624633 → "610 KB".
+function fmtSize(n) {
+  if (!n && n !== 0) return "";
+  const u = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i];
+}
+
 // ---- "! command" lines in Claude's replies ----
 
 // bangCmd returns the command of a one-line "! command" (Claude Code's
@@ -1652,6 +1672,18 @@ function renderItemRaw(it, ctx) {
       el.innerHTML = md(it.text);
       if (ctx?.runBang) bangLinks(el, ctx.runBang);
       return el;
+    }
+    case "files": {
+      const url = ctx?.fileURL;
+      const kids = it.files.map((f) => {
+        const name = f.path.split("/").pop();
+        const src = url ? url(f.path) : null;
+        if (f.isImage && src) return h("a", { class: "sent-img", href: src, target: "_blank", rel: "noopener" }, h("img", { src, alt: name, loading: "lazy" }));
+        return h(src ? "a" : "div", { class: "sent-file", href: src, download: src ? name : null },
+          icon("file"), h("span", { class: "grow" }, h("b", {}, name), h("span", { class: "muted small" }, fmtSize(f.size))),
+          src ? icon("download") : null);
+      });
+      return h("div", { class: "sent" }, it.caption ? h("div", { class: "muted small" }, it.caption) : null, ...kids);
     }
     case "bashout": {
       const out = [it.stdout, it.stderr].filter(Boolean).join("\n");
@@ -1929,6 +1961,7 @@ function gridState(s) {
 // the count grows; below the minimum size the grid scrolls instead.
 function layoutGrid(grid, n) {
   if (!n) return;
+  for (const t of grid.children) t.style.gridColumn = "";
   if (grid.classList.contains("free")) { grid.style.gridTemplateColumns = ""; grid.style.gridAutoRows = ""; return; }
   if (grid.classList.contains("has-max")) {
     grid.style.gridTemplateColumns = "minmax(0, 1fr)";
@@ -1955,7 +1988,16 @@ function layoutGrid(grid, n) {
     const area = Math.min(w, h * 2.5) * Math.min(h, w / 0.6) * Math.sqrt(n / (cols * rows)) * visible;
     if (area > best.area) best = { cols, area, h };
   }
-  grid.style.gridTemplateColumns = `repeat(${best.cols}, minmax(0, 1fr))`;
+  // A part-filled last row stretches across: with C columns and r tiles
+  // left over, the grid has C·r tracks — full rows' tiles span r, the last
+  // row's span C — so 5 tiles in 3 columns end with two halves, not a gap.
+  const C = best.cols, rem = n % C;
+  if (rem && n > C) {
+    grid.style.gridTemplateColumns = `repeat(${C * rem}, minmax(0, 1fr))`;
+    [...grid.children].forEach((t, i) => { t.style.gridColumn = `span ${i >= n - rem ? C : rem}`; });
+  } else {
+    grid.style.gridTemplateColumns = `repeat(${C}, minmax(0, 1fr))`;
+  }
   grid.style.gridAutoRows = `${Math.floor(best.h)}px`;
 }
 
@@ -2751,6 +2793,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     agentFor: (toolUseId) => agents.find((a) => a.toolUseId === toolUseId),
     openAgent: (a) => openAgent(id, sid, a),
     hosted: () => hosted,
+    fileURL: (path) => sid ? `/api/d/${id}/hub/file?session=${encodeURIComponent(sid)}&path=${encodeURIComponent(path)}` : null,
     runBang: (cmd) => {
       if (!hosted || !ptyKey) return toast("このセッションは ccdash 上で動いていないため実行できません", 4000);
       if (promptEl.childElementCount) return toast("Claude が選択を待っています。先に上のカードで回答してください", 4000);
@@ -3150,25 +3193,59 @@ async function pushSubscription() {
   return reg ? reg.pushManager.getSubscription() : null;
 }
 
-// beamButton turns the working beam (the animated outline on working
-// sessions) on / off for this browser — on a slow phone it costs.
-function beamButton() {
-  const get = () => { try { return localStorage.getItem("ccdash.beam") !== "off"; } catch { return true; } };
-  const btn = h("button", { class: "btn small icon" });
-  const paint = () => {
-    const on = get();
-    document.documentElement.classList.toggle("no-beam", !on);
-    btn.replaceChildren(icon("sparkles"));
-    btn.classList.toggle("off", !on);
-    btn.title = on ? "作業中アニメーション ON（タップで OFF）" : "作業中アニメーション OFF（タップで ON）";
-  };
-  btn.addEventListener("click", () => {
-    try { localStorage.setItem("ccdash.beam", get() ? "off" : "on"); } catch {}
-    paint();
-    refreshBeams();
+// ---- look: theme + accent (per user, /api/prefs; theme.js applies) ----
+
+const ACCENTS = [
+  ["#e8590c", "オレンジ"], ["#d97706", "アンバー"], ["#e03131", "レッド"], ["#d6336c", "ピンク"],
+  ["#7048e8", "バイオレット"], ["#4263eb", "インディゴ"], ["#1c7ed6", "ブルー"], ["#0c8599", "シアン"],
+  ["#099268", "ティール"], ["#2f9e44", "グリーン"], ["#495057", "グラファイト"],
+];
+let look = {};
+try { look = JSON.parse(localStorage.getItem("ccdash.look") || "{}"); } catch {}
+function setLook(p, save = true) {
+  look = { theme: p.theme || "", accent: p.accent || "" };
+  try { localStorage.setItem("ccdash.look", JSON.stringify(look)); } catch {}
+  window.applyLook?.(look);
+  if (save) api("/api/prefs", { method: "PUT", json: look }).catch((e) => toast("設定を保存できませんでした: " + e.message));
+}
+// loadLook picks up the hub's copy (another device may have changed it).
+function loadLook() {
+  api("/api/prefs").then((p) => { if (p && (p.theme !== look.theme || p.accent !== look.accent)) setLook(p, false); }).catch(() => {});
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => window.applyLook?.(look));
+
+function lookDialog() {
+  dialog((body, close) => {
+    const seg = h("div", { class: "seg wide" });
+    const paintSeg = () => seg.replaceChildren(...[["", "自動"], ["light", "ライト"], ["dark", "ダーク"]].map(([v, label]) =>
+      h("button", { type: "button", class: "btn" + ((look.theme || "") === v ? " on" : ""), onclick: () => { setLook({ ...look, theme: v }); paintSeg(); } }, label)));
+    const sw = h("div", { class: "swatches" });
+    const custom = h("input", { type: "color", class: "swatch-custom", title: "好きな色", value: look.accent || "#e8590c" });
+    custom.addEventListener("change", () => { setLook({ ...look, accent: custom.value }); paintSw(); });
+    const paintSw = () => sw.replaceChildren(
+      ...ACCENTS.map(([c, name]) => h("button", { type: "button", class: "swatch" + ((look.accent || "#e8590c") === c ? " on" : ""), style: `--c:${c}`, title: name, "aria-label": name,
+        onclick: () => { setLook({ ...look, accent: c === "#e8590c" ? "" : c }); paintSw(); } })),
+      custom);
+    paintSeg(); paintSw();
+    const beamOn = () => { try { return localStorage.getItem("ccdash.beam") !== "off"; } catch { return true; } };
+    const beam = h("input", { type: "checkbox", checked: beamOn() });
+    beam.addEventListener("change", () => {
+      try { localStorage.setItem("ccdash.beam", beam.checked ? "on" : "off"); } catch {}
+      document.documentElement.classList.toggle("no-beam", !beam.checked);
+      refreshBeams();
+    });
+    body.append(h("h1", {}, "表示"),
+      h("label", {}, "テーマ"), seg,
+      h("label", {}, "アクセントカラー"), sw,
+      h("label", { class: "check" }, beam, "作業中のセッションの枠をアニメーションする"),
+      h("p", { class: "muted small" }, "この設定はアカウントごとに保存され、ブラウザとアプリで共通です（アニメーションのみこの端末だけ）。"),
+      h("div", { class: "actions" }, h("button", { class: "btn primary" }, "閉じる")));
   });
-  paint();
-  return btn;
+}
+
+function lookButton() {
+  try { document.documentElement.classList.toggle("no-beam", localStorage.getItem("ccdash.beam") === "off"); } catch {}
+  return h("button", { class: "btn small icon", title: "表示設定", "aria-label": "表示設定", onclick: lookDialog }, icon("settings"));
 }
 
 function notifyButton() {
@@ -3234,7 +3311,8 @@ function updateBadge(b) {
   } catch {}
   try {
     me = await api("/api/me");
-    $("#me").replaceChildren(h("span", {}, beamButton(), notifyButton(), h("span", { class: "email" }, me.email), me.noAuth ? null : h("a", { href: "/auth/logout" }, "ログアウト")));
+    loadLook();
+    $("#me").replaceChildren(h("span", {}, lookButton(), notifyButton(), h("span", { class: "email" }, me.email), me.noAuth ? null : h("a", { href: "/auth/logout" }, "ログアウト")));
   } catch {}
   // Reload into a new hub build: a single-page app otherwise keeps running
   // the JS it loaded, however long the tab stays open. Wait while the user

@@ -165,6 +165,9 @@ func (s *Server) hubHandler() http.Handler {
 		case r.Method == http.MethodGet && r.URL.Path == "/hub/git/diff":
 			s.handleHubGitDiff(w, r)
 			return
+		case r.Method == http.MethodGet && r.URL.Path == "/hub/file":
+			s.handleHubSentFile(w, r)
+			return
 		case r.Method == http.MethodGet && r.URL.Path == "/hub/subagents":
 			s.handleHubSubagents(w, r)
 			return

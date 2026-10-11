@@ -201,3 +201,22 @@ func TestPWAFilesArePublic(t *testing.T) {
 		t.Errorf("/app.js without login = %d, want redirect to login", w.Code)
 	}
 }
+
+// TestPrefs: the look round-trips per user and bad values are refused.
+func TestPrefs(t *testing.T) {
+	h := newTestHub(t, true).Handler()
+	if w := serve(h, "GET", "/api/prefs", "", nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"theme":""`) {
+		t.Fatalf("default = %d %s", w.Code, w.Body)
+	}
+	if w := serve(h, "PUT", "/api/prefs", `{"theme":"dark","accent":"#2F6BFF"}`, nil); w.Code != http.StatusOK {
+		t.Fatalf("put = %d %s", w.Code, w.Body)
+	}
+	if w := serve(h, "GET", "/api/prefs", "", nil); !strings.Contains(w.Body.String(), `"accent":"#2f6bff"`) || !strings.Contains(w.Body.String(), `"theme":"dark"`) {
+		t.Fatalf("get = %s", w.Body)
+	}
+	for _, bad := range []string{`{"theme":"blue"}`, `{"accent":"red"}`, `{"accent":"#12345"}`} {
+		if w := serve(h, "PUT", "/api/prefs", bad, nil); w.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d", bad, w.Code)
+		}
+	}
+}

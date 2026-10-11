@@ -24,7 +24,7 @@ Use the variables; don't write raw values for these in new rules.
 |---|---|---|
 | Surface | `--bg`, `--panel`, `--chip`, `--line` | page, cards/rows, quiet fills (hover, code, tags), hairlines |
 | Text | `--text`, `--muted` | body / secondary. No third grey. |
-| Accent | `--accent`, `--accent-text` | primary button, selection, links in chat, the one thing to press |
+| Accent | `--accent`, `--accent-text` | primary button, selection, links in chat, the one thing to press. The user picks it (表示 sheet → `/api/prefs`); never hard-code the orange — derive tints with `color-mix` from `--accent` |
 | Status | `--ok`, `--warn`, `--bad` | done / needs you / error — never decoration |
 | Type | `--fs-xs` 12, `--fs-sm` 13, `--fs-md` 14 (body), `--fs-lg` 16, `--fs-xl` 20 | nothing else; weights 400 / 600 / 700 |
 | Radius | `--r-sm` 6 (buttons, inputs, tags), `--r-md` 8 (cards, rows groups, dialogs' inner), `--r-lg` 12 (dialogs, tiles) | `999px` only for real pills (tabs) |

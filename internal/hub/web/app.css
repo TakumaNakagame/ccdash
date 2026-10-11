@@ -1,16 +1,18 @@
 :root {
-  --bg: #f6f7f9;
+  /* Graphite neutrals; the accent is the user's (theme.js sets --accent-l /
+     --accent-d from /api/prefs), orange by default. */
+  --bg: #f2f3f5;
   --panel: #ffffff;
-  --line: #dfe3e8;
-  --text: #1b1f24;
-  --muted: #667085;
-  --accent: #c2410c;
-  --accent-text: #ffffff;
-  --ok: #15803d;
-  --warn: #b45309;
-  --bad: #b91c1c;
-  --chip: #eef1f4;
-  --term-bg: #111418;
+  --line: #e2e4e8;
+  --text: #15171b;
+  --muted: #6a707a;
+  --chip: #eceef1;
+  --accent: var(--accent-l, #e8590c);
+  --accent-text: var(--accent-l-text, #ffffff);
+  --ok: #16a34a;
+  --warn: #c2410c;
+  --bad: #dc2626;
+  --term-bg: #121418;
   /* Japanese faces first: a generic system-ui / sans-serif lets Linux and
      Windows pick a Chinese CJK face for kanji. Noto Sans JP (webfont) is
      the guaranteed fallback. */
@@ -25,23 +27,16 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #0d1013;
-    --panel: #161a1f;
-    --line: #2a3038;
-    --text: #e6e8eb;
-    --muted: #8b95a1;
-    --accent: #f97316;
-    --accent-text: #111418;
-    --ok: #4ade80;
-    --warn: #fbbf24;
-    --bad: #f87171;
-    --chip: #222830;
+    --bg: #0a0b0d; --panel: #141519; --line: #25272d; --text: #eceef1; --muted: #8b919b; --chip: #1d1f24;
+    --accent: var(--accent-d, #ff7a2f); --accent-text: var(--accent-d-text, #160a02);
+    --ok: #4ade80; --warn: #fb923c; --bad: #f87171; --term-bg: #0a0b0d;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0d1013; --panel: #161a1f; --line: #2a3038; --text: #e6e8eb; --muted: #8b95a1;
-  --accent: #f97316; --accent-text: #111418; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --chip: #222830;
+  --bg: #0a0b0d; --panel: #141519; --line: #25272d; --text: #eceef1; --muted: #8b919b; --chip: #1d1f24;
+  --accent: var(--accent-d, #ff7a2f); --accent-text: var(--accent-d-text, #160a02);
+  --ok: #4ade80; --warn: #fb923c; --bad: #f87171; --term-bg: #0a0b0d;
 }
 
 * { box-sizing: border-box; }
@@ -427,10 +422,12 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 
 /* usage */
 .usage-card { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); padding: 10px 14px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
-.usage-card .big { font-size: 20px; }
+.usage-card .big { font-size: 24px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .bars { display: flex; gap: 6px; align-items: flex-end; height: 76px; }
 .bar { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; }
-.bar span { width: 100%; max-width: 28px; background: var(--accent); border-radius: 3px 3px 0 0; opacity: .8; }
+.bar span { width: 100%; max-width: 26px; background: color-mix(in srgb, var(--muted) 35%, transparent); border-radius: 4px; }
+.bar.today span { background: var(--accent); }
+.bar.today small { color: var(--text); font-weight: 600; }
 .bar small { font-size: 10px; color: var(--muted); }
 .bar em { font-style: normal; font-size: 10px; color: var(--text); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
@@ -457,7 +454,13 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .tile-close { padding: 0 8px; line-height: 1.6; }
 .grid-mark { flex: none; display: inline-flex; font: inherit; font-size: 15px; line-height: 1; padding: 5px; border-radius: var(--r-sm); border: 1px solid transparent; background: none; color: var(--muted); opacity: .45; cursor: pointer; }
 .grid-mark:hover { opacity: 1; border-color: var(--line); }
-.row-check { flex: none; width: 16px; height: 16px; margin: 0 2px 0 0; accent-color: var(--accent); cursor: pointer; }
+/* The selection checkbox sits over the #number (no column of its own):
+   shown on hover (desktop) or in edit mode. */
+.row-check { position: absolute; left: 14px; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; z-index: 3; }
+.item.srow { position: relative; }
+.list:not(.selecting) .item:not(:hover) .row-check:not(:checked) { opacity: 0; }
+.list.selecting .item .num, .item:hover:has(.row-check) .num, .item:has(.row-check:checked) .num { visibility: hidden; }
+@media (pointer: coarse) { .list:not(.selecting) .row-check { display: none; } .list:not(.selecting) .item .num { visibility: visible; } }
 .item.checked { border-color: var(--accent); }
 .sel-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--accent); border-radius: 10px; background: var(--panel); }
 .grid-mark.on { opacity: 1; color: var(--accent); border-color: var(--accent); }
@@ -681,24 +684,39 @@ html[data-nav="pop"]::view-transition-new(root) { animation-name: vt-in-left; }
 @keyframes vt-in-left { from { transform: translateX(-25%); opacity: .7; } }
 @media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; } }
 
-/* Phone: row checkboxes appear only in edit mode (a long press selects). */
-@media (pointer: coarse) {
-  .list:not(.selecting) .row-check { display: none; }
-  .item { -webkit-touch-callout: none; }
-}
+@media (pointer: coarse) { .item { -webkit-touch-callout: none; } }
 
-/* ---------- Palette candidates (preview: <html data-palette="a|b|c">) ---------- */
-:root[data-palette="a"] { --bg: #f2f3f5; --panel: #ffffff; --line: #e2e4e8; --text: #15171b; --muted: #6a707a; --chip: #eceef1;
-  --accent: #e8590c; --accent-text: #ffffff; --ok: #16a34a; --warn: #c2410c; --bad: #dc2626; --term-bg: #121418; }
-:root[data-palette="b"] { --bg: #f1f3f6; --panel: #ffffff; --line: #e0e4ea; --text: #111827; --muted: #687385; --chip: #e9edf3;
-  --accent: #2f6bff; --accent-text: #ffffff; --ok: #12a150; --warn: #d97706; --bad: #e5484d; --term-bg: #0f131a; }
-:root[data-palette="c"] { --bg: #f4f4f5; --panel: #ffffff; --line: #e4e4e7; --text: #18181b; --muted: #71717a; --chip: #ececee;
-  --accent: #18181b; --accent-text: #ffffff; --ok: #16a34a; --warn: #ea580c; --bad: #dc2626; --term-bg: #18181b; }
-@media (prefers-color-scheme: dark) {
-  :root[data-palette="a"]:not([data-theme="light"]) { --bg: #0a0b0d; --panel: #141519; --line: #25272d; --text: #eceef1; --muted: #8b919b; --chip: #1d1f24;
-    --accent: #ff7a2f; --accent-text: #160a02; --ok: #4ade80; --warn: #fb923c; --bad: #f87171; --term-bg: #0a0b0d; }
-  :root[data-palette="b"]:not([data-theme="light"]) { --bg: #0b0e13; --panel: #131821; --line: #232a35; --text: #e8edf5; --muted: #8893a5; --chip: #1b212c;
-    --accent: #5b8cff; --accent-text: #ffffff; --ok: #3ddc84; --warn: #fbbf24; --bad: #ff6b6b; --term-bg: #0b0e13; }
-  :root[data-palette="c"]:not([data-theme="light"]) { --bg: #09090b; --panel: #141416; --line: #26262a; --text: #f4f4f5; --muted: #8f8f99; --chip: #1e1e22;
-    --accent: #f4f4f5; --accent-text: #09090b; --ok: #4ade80; --warn: #fb923c; --bad: #f87171; --term-bg: #09090b; }
+/* 表示 sheet */
+.seg.wide { display: flex; }
+.seg.wide .btn { flex: 1; }
+.swatch-custom { width: 28px; height: 28px; padding: 0; border: 1px dashed var(--muted); border-radius: 50%; background: none; cursor: pointer; }
+.swatch-custom::-webkit-color-swatch-wrapper { padding: 3px; }
+.swatch-custom::-webkit-color-swatch { border: 0; border-radius: 50%; }
+#dlg-body label.check { display: flex; align-items: center; gap: 8px; font-size: var(--fs-md); color: var(--text); margin: 4px 0 0; }
+
+/* Files Claude sent (SendUserFile) */
+.sent { display: flex; flex-direction: column; gap: 6px; align-self: flex-start; max-width: min(420px, 100%); }
+.sent-img { display: block; border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--line); }
+.sent-img img { display: block; width: 100%; height: auto; }
+.sent-file { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); text-decoration: none; }
+.sent-file .grow { display: flex; flex-direction: column; min-width: 0; }
+.sent-file b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.sent-file:hover { border-color: var(--muted); }
+
+/* Search field with an icon */
+label.search { position: relative; display: flex; align-items: center; min-width: 0; }
+label.search .ic { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
+label.search input { width: 100%; padding-left: 32px; border-radius: var(--r-md); background: var(--panel); }
+input[type=search] { border: 1px solid var(--line); background: var(--panel); border-radius: var(--r-sm); padding: 6px 10px; min-width: 0; -webkit-appearance: none; appearance: none; }
+
+/* Group tabs: fade at the edges to show they scroll. */
+.tabs { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); padding-right: 24px; }
+
+/* Desktop: per-row controls appear on hover (the list reads cleaner). */
+@media (hover: hover) and (pointer: fine) {
+  .item .grid-mark:not(.on) { opacity: 0; transition: opacity .12s; }
+  .item:hover .grid-mark, .item .grid-mark:focus-visible { opacity: 1 !important; }
+  .item:hover .grid-mark:not(.on) { opacity: .6 !important; }
+  .bucket.project .proj-new:not(:last-child) { opacity: 0; transition: opacity .12s; }
+  .bucket.project:hover .proj-new { opacity: 1; }
 }

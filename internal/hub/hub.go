@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -180,6 +181,8 @@ func (h *Hub) Handler() http.Handler {
 	api.HandleFunc("GET /api/locate/{session}", h.handleLocate)
 	api.HandleFunc("GET /api/quick", h.handleQuickGet)
 	api.HandleFunc("PUT /api/quick", h.handleQuickPut)
+	api.HandleFunc("GET /api/prefs", h.handlePrefsGet)
+	api.HandleFunc("PUT /api/prefs", h.handlePrefsPut)
 	api.HandleFunc("GET /api/push/key", h.handlePushKey)
 	api.HandleFunc("POST /api/push/subscribe", h.handlePushSubscribe)
 	api.HandleFunc("POST /api/push/unsubscribe", h.handlePushUnsubscribe)
@@ -316,6 +319,55 @@ func (h *Hub) handleQuickPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, out)
+}
+
+// prefs is a portal user's look: theme ("" = follow the system, "light",
+// "dark") and accent ("" = the default, else "#rrggbb"). Kept per login
+// in hub.sqlite, so the browser and the installed app share it.
+type prefs struct {
+	Theme  string `json:"theme"`
+	Accent string `json:"accent"`
+}
+
+var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+func (h *Hub) prefsKey(r *http.Request) string {
+	email, _ := h.auth.user(r)
+	return "prefs:" + email
+}
+
+func (h *Hub) handlePrefsGet(w http.ResponseWriter, r *http.Request) {
+	v, err := h.st.secret(r.Context(), h.prefsKey(r), func() string { return "{}" })
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var p prefs
+	_ = json.Unmarshal([]byte(v), &p)
+	writeJSON(w, p)
+}
+
+func (h *Hub) handlePrefsPut(w http.ResponseWriter, r *http.Request) {
+	var p prefs
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&p); err != nil {
+		http.Error(w, "want {theme, accent}", http.StatusBadRequest)
+		return
+	}
+	if p.Theme != "" && p.Theme != "light" && p.Theme != "dark" {
+		http.Error(w, `theme must be "", "light" or "dark"`, http.StatusBadRequest)
+		return
+	}
+	if p.Accent != "" && !hexColor.MatchString(p.Accent) {
+		http.Error(w, "accent must be #rrggbb", http.StatusBadRequest)
+		return
+	}
+	p.Accent = strings.ToLower(p.Accent)
+	b, _ := json.Marshal(p)
+	if err := h.st.putKV(r.Context(), h.prefsKey(r), string(b)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, p)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
