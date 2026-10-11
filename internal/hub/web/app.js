@@ -264,6 +264,7 @@ const ICONS = {
   settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
   search: '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>',
+  eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
   download: '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
 };
 function icon(name) {
@@ -1337,7 +1338,7 @@ function linkify(el) {
 function md(text) {
   const out = [];
   const lines = text.split("\n");
-  let i = 0, list = null;
+  let i = 0, list = null, callout = false;
   const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
   while (i < lines.length) {
     const line = lines[i];
@@ -1373,6 +1374,15 @@ function md(text) {
     } else if ((m = e.match(/^\s*\d+[.)]\s+(.*)$/))) {
       if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; }
       out.push(`<li>${inlineMd(m[1])}</li>`);
+    } else if (/^\s*`?★\s*Insight\s*─+`?\s*$/.test(line)) {
+      // Claude's explanatory-style "★ Insight ───" … "───" block: a callout.
+      closeList();
+      out.push('<div class="md-callout"><div class="md-callout-h">★ Insight</div>');
+      callout = true;
+    } else if (/^\s*`?─{8,}`?\s*$/.test(line)) {
+      closeList();
+      out.push(callout ? "</div>" : '<hr class="md-hr">');
+      callout = false;
     } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
       closeList();
       out.push('<hr class="md-hr">');
@@ -1386,6 +1396,7 @@ function md(text) {
     i++;
   }
   closeList();
+  if (callout) out.push("</div>");
   return out.join("");
 }
 
@@ -1588,6 +1599,59 @@ async function followPortalLink(e) {
   }
 }
 
+// ---- document preview (Markdown / HTML reports Claude wrote or sent) ----
+
+// previewKind: "md" | "html" | "txt" for a previewable path, else "".
+function previewKind(path) {
+  const ext = (path.match(/\.([a-z0-9]+)$/i)?.[1] || "").toLowerCase();
+  return { md: "md", markdown: "md", html: "html", htm: "html", txt: "txt" }[ext] || "";
+}
+
+// loadScript adds a pinned CDN script once (marked / DOMPurify load only
+// when a preview is opened).
+const scriptLoads = new Map();
+function loadScript(src) {
+  if (!scriptLoads.has(src)) scriptLoads.set(src, new Promise((res, rej) => document.head.append(h("script", { src, onload: res, onerror: () => rej(new Error("読み込めませんでした: " + src)) }))));
+  return scriptLoads.get(src);
+}
+
+// previewFile opens a full-size viewer: Markdown rendered (marked +
+// DOMPurify), an HTML report in a sandboxed frame (scripts run in an opaque
+// origin — no access to the portal), plain text as is. The file comes from
+// the device's /hub/file (the transcript-recorded paths only).
+async function previewFile(url, path) {
+  const kind = previewKind(path), name = path.split("/").pop();
+  const content = h("div", { class: "viewer-body" }, h("div", { class: "muted" }, "読み込み中…"));
+  const dlg = h("dialog", { class: "viewer" },
+    h("div", { class: "viewer-bar" },
+      h("button", { type: "button", class: "btn small icon", "aria-label": "閉じる", title: "閉じる", onclick: () => dlg.close() }, icon("x")),
+      h("div", { class: "grow viewer-title" }, h("b", {}, name), h("span", { class: "muted small mono" }, path)),
+      h("a", { class: "btn small", href: url, download: name }, icon("download"), "ダウンロード")),
+    content);
+  dlg.addEventListener("close", () => dlg.remove());
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+  document.body.append(dlg);
+  dlg.showModal();
+  try {
+    const r = await fetch(url, { credentials: "same-origin" });
+    if (!r.ok) throw new Error(r.status === 404 ? "ファイルが見つかりません（端末から消えたか、移動されました）" : (await r.text()).trim() || r.statusText);
+    const text = await r.text();
+    if (kind === "html") {
+      content.replaceChildren(h("iframe", { class: "viewer-frame", sandbox: "allow-scripts allow-popups", srcdoc: text, title: name }));
+    } else if (kind === "md") {
+      await Promise.all([loadScript("https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"), loadScript("https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js")]);
+      const doc = h("article", { class: "doc" });
+      doc.innerHTML = DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: false }));
+      for (const a of doc.querySelectorAll("a[href]")) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
+      content.replaceChildren(doc);
+    } else {
+      content.replaceChildren(h("pre", { class: "doc-text" }, text));
+    }
+  } catch (e) {
+    content.replaceChildren(h("div", { class: "empty" }, e.message));
+  }
+}
+
 // fmtSize: 624633 → "610 KB".
 function fmtSize(n) {
   if (!n && n !== 0) return "";
@@ -1679,6 +1743,8 @@ function renderItemRaw(it, ctx) {
         const name = f.path.split("/").pop();
         const src = url ? url(f.path) : null;
         if (f.isImage && src) return h("a", { class: "sent-img", href: src, target: "_blank", rel: "noopener" }, h("img", { src, alt: name, loading: "lazy" }));
+        if (src && previewKind(f.path)) return h("button", { type: "button", class: "sent-file", onclick: () => previewFile(src, f.path) },
+          icon("file"), h("span", { class: "grow" }, h("b", {}, name), h("span", { class: "muted small" }, fmtSize(f.size))), icon("eye"));
         return h(src ? "a" : "div", { class: "sent-file", href: src, download: src ? name : null },
           icon("file"), h("span", { class: "grow" }, h("b", {}, name), h("span", { class: "muted small" }, fmtSize(f.size))),
           src ? icon("download") : null);
@@ -1710,8 +1776,12 @@ function renderItemRaw(it, ctx) {
       if (it.result != null) body.push(h("pre", { class: it.error ? "err" : "" }, it.result.length > 6000 ? it.result.slice(0, 6000) + "\n…" : it.result));
       const agent = (it.name === "Agent" || it.name === "Task") && ctx?.agentFor?.(it.id);
       if (agent) body.unshift(h("button", { type: "button", class: "btn small", onclick: (e) => { e.preventDefault(); ctx.openAgent(agent); } }, "サブエージェントの記録を見る"));
+      // A document Claude wrote (Markdown / HTML report): preview it.
+      const fp = it.input?.file_path;
+      const doc = /^(Write|Edit|MultiEdit)$/.test(it.name) && fp && previewKind(fp) && ctx?.fileURL?.(fp);
       return h("details", { class: "tool" + (it.error ? " error" : "") },
-        h("summary", {}, h("span", { class: "tstate" }, state), h("b", {}, it.name), " ", h("span", { class: "targ" }, toolArg(it.name, it.input))),
+        h("summary", {}, h("span", { class: "tstate" }, state), h("b", {}, it.name), " ", h("span", { class: "targ" }, toolArg(it.name, it.input)),
+          doc ? h("button", { type: "button", class: "btn small preview-btn", onclick: (e) => { e.preventDefault(); e.stopPropagation(); previewFile(doc, fp); } }, icon("eye"), "プレビュー") : null),
         ...body);
     }
   }

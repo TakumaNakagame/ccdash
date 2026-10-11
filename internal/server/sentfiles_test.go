@@ -18,11 +18,13 @@ func TestHubSentFile(t *testing.T) {
 	s, d, _ := newTestServer(t)
 	dir := t.TempDir()
 	img, page, other := filepath.Join(dir, "shot.png"), filepath.Join(dir, "x.html"), filepath.Join(dir, "secret.txt")
-	for _, f := range []string{img, page, other} {
+	doc, code := filepath.Join(dir, "design.md"), filepath.Join(dir, "main.go")
+	for _, f := range []string{img, page, other, doc, code} {
 		_ = os.WriteFile(f, []byte("data:"+f), 0o600)
 	}
 	tp := filepath.Join(dir, "t.jsonl")
-	_ = os.WriteFile(tp, []byte(`{"type":"user","toolUseResult":{"attachments":[{"path":"`+img+`","media_type":"image/png","isImage":true},{"path":"`+page+`","media_type":"text/html"}]}}`+"\n"), 0o600)
+	_ = os.WriteFile(tp, []byte(`{"type":"user","toolUseResult":{"attachments":[{"path":"`+img+`","media_type":"image/png","isImage":true},{"path":"`+page+`","media_type":"text/html"}]}}`+"\n"+
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"`+doc+`","content":"# x"}},{"type":"tool_use","name":"Write","input":{"file_path":"`+code+`"}}]}}`+"\n"), 0o600)
 	if err := d.UpsertSession(context.Background(), &model.Session{SessionID: "f1", Cwd: dir, TranscriptPath: tp, Status: model.StatusIdle}); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +41,11 @@ func TestHubSentFile(t *testing.T) {
 		w.Header().Get("Content-Security-Policy") == "" || w.Header().Get("Content-Disposition")[:10] != "attachment" {
 		t.Fatalf("html = %d %v", w.Code, w.Header())
 	}
-	for _, p := range []string{other, "/etc/passwd", "relative.png", tp} {
+	// A document Claude wrote is previewable; code it wrote is not served.
+	if w := get(doc); w.Code != http.StatusOK || w.Body.String() != "data:"+doc {
+		t.Fatalf("written md = %d %s", w.Code, w.Body)
+	}
+	for _, p := range []string{other, code, "/etc/passwd", "relative.png", tp} {
 		if w := get(p); w.Code != http.StatusNotFound {
 			t.Errorf("%s = %d, want 404", p, w.Code)
 		}

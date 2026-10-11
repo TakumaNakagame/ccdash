@@ -18,13 +18,19 @@ var inlineImage = map[string]bool{
 	"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true, "image/avif": true,
 }
 
+// previewExt are the document types the portal previews (Markdown and HTML
+// reports are what sessions write most, after code) — files Claude wrote
+// or edited in the session are served for those only.
+var previewExt = map[string]bool{".md": true, ".markdown": true, ".html": true, ".htm": true, ".txt": true}
+
 // handleHubSentFile serves a file Claude sent to the operator with
-// SendUserFile (images, APKs, reports…) so the portal can show it like
-// the Claude app does. GET /hub/file?session=<id>&path=<absolute path>.
+// SendUserFile (images, APKs, reports…) or a document it wrote, so the
+// portal can show / preview it. GET /hub/file?session=<id>&path=<abs path>.
 //
-// Only a path recorded as an attachment of that session's own transcript
-// (a toolUseResult.attachments[].path) is served — the request can't name
-// any other file on the device.
+// Only a path the session's own transcript records is served: a
+// SendUserFile attachment (toolUseResult.attachments[].path), or the
+// file_path of a Write / Edit / MultiEdit with a previewExt extension. The
+// request can't name any other file on the device.
 func (s *Server) handleHubSentFile(w http.ResponseWriter, r *http.Request) {
 	sid, path := r.URL.Query().Get("session"), r.URL.Query().Get("path")
 	sess, ok, err := s.db.GetSession(r.Context(), sid)
@@ -68,8 +74,10 @@ func (s *Server) handleHubSentFile(w http.ResponseWriter, r *http.Request) {
 }
 
 // sentAttachment reports whether transcript records path as a file sent to
-// the user, and its media type.
+// the user (or, for previewExt types, written by Claude), and its media
+// type when known.
 func sentAttachment(transcript, path string) (string, bool) {
+	writable := previewExt[strings.ToLower(filepath.Ext(path))]
 	f, err := os.Open(transcript)
 	if err != nil {
 		return "", false
@@ -81,23 +89,47 @@ func sentAttachment(transcript, path string) (string, bool) {
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
 	for sc.Scan() {
 		line := sc.Bytes()
-		if !bytes.Contains(line, []byte(`"attachments"`)) || !bytes.Contains(line, needle) {
+		if !bytes.Contains(line, needle) || !(bytes.Contains(line, []byte(`"attachments"`)) || writable && bytes.Contains(line, []byte(`"file_path"`))) {
 			continue
 		}
 		var e struct {
-			ToolUseResult struct {
-				Attachments []struct {
-					Path      string `json:"path"`
-					MediaType string `json:"media_type"`
-				} `json:"attachments"`
-			} `json:"toolUseResult"`
+			ToolUseResult json.RawMessage `json:"toolUseResult"`
+			Message       struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
 		}
 		if json.Unmarshal(line, &e) != nil {
 			continue
 		}
-		for _, a := range e.ToolUseResult.Attachments {
-			if a.Path == path {
-				return a.MediaType, true
+		var res struct {
+			Attachments []struct {
+				Path      string `json:"path"`
+				MediaType string `json:"media_type"`
+			} `json:"attachments"`
+		}
+		if json.Unmarshal(e.ToolUseResult, &res) == nil {
+			for _, a := range res.Attachments {
+				if a.Path == path {
+					return a.MediaType, true
+				}
+			}
+		}
+		if !writable {
+			continue
+		}
+		var parts []struct {
+			Type  string `json:"type"`
+			Name  string `json:"name"`
+			Input struct {
+				FilePath string `json:"file_path"`
+			} `json:"input"`
+		}
+		if json.Unmarshal(e.Message.Content, &parts) != nil {
+			continue
+		}
+		for _, p := range parts {
+			if p.Type == "tool_use" && (p.Name == "Write" || p.Name == "Edit" || p.Name == "MultiEdit") && p.Input.FilePath == path {
+				return "", true
 			}
 		}
 	}

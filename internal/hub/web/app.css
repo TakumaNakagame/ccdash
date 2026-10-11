@@ -448,12 +448,14 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .item.selected:not(.in-project) { box-shadow: inset 3px 0 0 var(--accent); }
 
 /* grid view: every running session on one screen */
-#gridlink { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); text-decoration: none; white-space: nowrap; }
+#gridlink { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); font-weight: 600; padding: 5px 14px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--panel); text-decoration: none; white-space: nowrap; }
+#gridlink .ic { font-size: 16px; }
 #gridlink:hover { border-color: var(--muted); }
 #gridlink.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .tile-close { padding: 0 8px; line-height: 1.6; }
-.grid-mark { flex: none; display: inline-flex; font: inherit; font-size: 15px; line-height: 1; padding: 5px; border-radius: var(--r-sm); border: 1px solid transparent; background: none; color: var(--muted); opacity: .45; cursor: pointer; }
-.grid-mark:hover { opacity: 1; border-color: var(--line); }
+/* Put on / take off the grid — used a lot, so a real target (36px). */
+.grid-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; font: inherit; font-size: 18px; line-height: 1; padding: 0; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; }
+.grid-mark:hover { color: var(--text); border-color: var(--muted); }
 /* The selection checkbox sits over the #number (no column of its own):
    shown on hover (desktop) or in edit mode. */
 .row-check { position: absolute; left: 14px; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; z-index: 3; }
@@ -463,7 +465,7 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 @media (pointer: coarse) { .list:not(.selecting) .row-check { display: none; } .list:not(.selecting) .item .num { visibility: visible; } }
 .item.checked { border-color: var(--accent); }
 .sel-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--accent); border-radius: 10px; background: var(--panel); }
-.grid-mark.on { opacity: 1; color: var(--accent); border-color: var(--accent); }
+.grid-mark.on { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
 .pick-list { max-height: 55vh; overflow: auto; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
 .pick-item { text-align: left; width: 100%; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
 .pick-item > * { width: 100%; text-align: left; justify-content: flex-start; }
@@ -580,7 +582,7 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
   .btn { min-height: 40px; }
   .btn.small { min-height: 36px; padding: 4px 12px; }
   .btn.icon, .btn.small.icon { min-width: 40px; min-height: 40px; }
-  .grid-mark { padding: 10px; }
+  .grid-mark { width: 44px; height: 44px; }
   .bucket.project .proj-new { width: 36px; height: 36px; }
   .tab { padding: 7px 14px; }
   #gridlink { padding: 8px 12px; }
@@ -714,9 +716,72 @@ input[type=search] { border: 1px solid var(--line); background: var(--panel); bo
 
 /* Desktop: per-row controls appear on hover (the list reads cleaner). */
 @media (hover: hover) and (pointer: fine) {
-  .item .grid-mark:not(.on) { opacity: 0; transition: opacity .12s; }
-  .item:hover .grid-mark, .item .grid-mark:focus-visible { opacity: 1 !important; }
-  .item:hover .grid-mark:not(.on) { opacity: .6 !important; }
   .bucket.project .proj-new:not(:last-child) { opacity: 0; transition: opacity .12s; }
   .bucket.project:hover .proj-new { opacity: 1; }
 }
+
+/* A wide grid tile keeps the conversation at a readable measure, centred,
+   like the chat page — not pinned to the tile's left edge. */
+@container (min-width: 760px) {
+  .tile.compact .chat-log, .tile.compact .chat-dock, .tile.compact .quick-bar, .tile.compact .composer { max-width: 780px; margin-left: auto; margin-right: auto; width: 100%; }
+}
+
+/* Document viewer (previewFile) */
+dialog.viewer { width: min(1100px, 96vw); height: min(92dvh, 1200px); max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); color: var(--text); display: flex; flex-direction: column; overflow: hidden; }
+dialog.viewer:not([open]) { display: none; }
+dialog.viewer::backdrop { background: rgb(0 0 0 / .5); }
+.viewer-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex: none; }
+.viewer-title { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.viewer-title > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-body { flex: 1; min-height: 0; overflow: auto; }
+.viewer-frame { width: 100%; height: 100%; border: 0; background: #fff; display: block; }
+.doc-text { margin: 0; padding: 20px; font-family: var(--mono); font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+@media (max-width: 767px) { dialog.viewer { width: 100vw; height: 100dvh; border-radius: 0; border: 0; } .viewer-bar { padding-top: max(8px, env(safe-area-inset-top)); } }
+.preview-btn { margin-left: auto; flex: none; }
+button.sent-file { width: 100%; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+
+/* Rendered Markdown */
+.doc { max-width: 760px; margin: 0 auto; padding: 28px 24px 48px; font-size: 15px; line-height: 1.75; overflow-wrap: anywhere; }
+.doc > :first-child { margin-top: 0; }
+.doc h1 { font-size: 26px; line-height: 1.3; margin: 0 0 16px; }
+.doc h2 { font-size: 20px; color: var(--text); margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.doc h3 { font-size: 17px; margin: 24px 0 8px; }
+.doc h4 { font-size: 15px; margin: 20px 0 6px; }
+.doc p, .doc ul, .doc ol, .doc blockquote, .doc table, .doc pre { margin: 0 0 14px; }
+.doc ul, .doc ol { padding-left: 1.5em; }
+.doc li + li { margin-top: 4px; }
+.doc a { color: var(--accent); }
+.doc code { font-family: var(--mono); font-size: .88em; background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+.doc pre { background: var(--term-bg); color: #e6e8eb; padding: 12px 14px; border-radius: var(--r-md); overflow-x: auto; font-size: 13px; line-height: 1.55; }
+.doc pre code { background: none; padding: 0; color: inherit; }
+.doc blockquote { padding: 2px 14px; border-left: 3px solid var(--line); color: var(--muted); }
+.doc table { border-collapse: collapse; display: block; overflow-x: auto; font-size: 14px; }
+.doc th, .doc td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+.doc th { background: var(--chip); }
+.doc hr { border: 0; border-top: 1px solid var(--line); margin: 24px 0; }
+.doc img { max-width: 100%; }
+.doc th, .doc td { overflow-wrap: normal; word-break: normal; }
+.doc th { white-space: nowrap; }
+
+/* ---- Chat polish ---- */
+/* Tool calls: a light line each (a run of calls no longer reads as a wall
+   of boxes); opened, the call becomes a panel. */
+.tool, .thinking { border: 0; background: none; border-radius: var(--r-sm); }
+.tool > summary, .thinking > summary { padding: 3px 8px; border-radius: var(--r-sm); color: var(--muted); }
+.tool > summary b { color: var(--text); font-weight: 600; }
+.tool > summary:hover, .thinking > summary:hover { background: var(--chip); }
+.tool[open], .thinking[open] { border: 1px solid var(--line); background: var(--panel); }
+.tool[open] > summary { border-bottom: 1px solid var(--line); border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.tool pre, .tool > div, .thinking > div { border-top: 0; }
+.chat-log .tool + .tool, .chat-log .tool + .thinking, .chat-log .thinking + .tool { margin-top: -6px; }
+.tool .tstate { font-weight: 700; }
+/* The status line stays quiet: muted text, the context bar is the only colour. */
+.chat-status .st-model { color: var(--text); font-weight: 600; }
+.chat-status .st-cost { color: var(--muted); }
+/* Home board: sections, not boxes inside boxes. */
+.board-col { background: none; border: 0; padding: 0; gap: 8px; }
+.board-head { padding: 0 2px 2px; font-size: var(--fs-sm); }
+.card { background: var(--panel); border-radius: var(--r-md); padding: 10px 12px; }
+.board-empty { padding: 10px 12px; border: 1px dashed var(--line); border-radius: var(--r-md); }
+.bubble.assistant .md-callout { margin: 8px 0; padding: 8px 12px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: 0 var(--r-md) var(--r-md) 0; }
+.bubble.assistant .md-callout-h { font-size: var(--fs-xs); font-weight: 700; color: var(--accent); margin-bottom: 2px; }
