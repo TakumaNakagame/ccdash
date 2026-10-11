@@ -274,8 +274,8 @@ pre.bang-cmd { white-space: pre-wrap; word-break: break-all; background: var(--t
 .opts .btn { text-align: left; white-space: normal; }
 
 .typing { display: flex; gap: 4px; padding: 6px 2px; }
-.tile-working { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.tile-working .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.working-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.working-line .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite ease-in-out; }
 .typing span:nth-child(2) { animation-delay: .2s; }
 .typing span:nth-child(3) { animation-delay: .4s; }
@@ -475,22 +475,10 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .tile.working { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .tile.needs { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
 .tile-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); min-width: 0; }
-.tile-title { flex: 1; min-width: 0; font-weight: 700; font-size: 13px; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tile-title { cursor: default; user-select: none; }
 .grid.has-max > .tile:not(.max) { display: none; }
 .tile.max { border-color: var(--accent); }
-.tile.max .tile-log { font-size: 14px; }
+.tile.max .chat-log { font-size: var(--fs-md); }
 .chip.dev { flex: none; }
-.tile-reason { display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 6px 10px; font-size: 12px; background: color-mix(in srgb, var(--warn) 14%, var(--panel)); border-bottom: 1px solid var(--line); }
-.tile-log { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
-.tile-log .bubble { padding: 6px 10px; font-size: 12.5px; }
-.tile-log .bubble.assistant { padding: 0 2px; }
-.tile-log .chat-img { max-width: 50%; }
-.tile-reply { display: flex; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--line); }
-.tile-reply { align-items: flex-end; }
-.tile-reply .col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.tile-thumbs .thumb { width: 44px; height: 44px; }
-.tile-reply textarea { flex: 1; min-width: 0; resize: none; min-height: 32px; max-height: 120px; line-height: 1.4; font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 6px 10px; }
 @media (max-width: 640px) { .grid-page { padding: 8px; } }
 
 /* grid: free placement (draggable, resizable windows) */
@@ -530,7 +518,6 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .proj-chip .n { font-size: 11px; font-weight: 400; opacity: .75; }
 .item.in-project { box-shadow: inset 3px 0 0 var(--proj); }
 .item.in-project.selected { box-shadow: inset 3px 0 0 var(--proj); }
-.tile-head .tile-title::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--sess, transparent); vertical-align: .08em; }
 .sess-title::before { content: ""; display: inline-block; width: 4px; height: 1em; margin-right: 8px; vertical-align: -0.12em; border-radius: 2px; background: var(--sess, transparent); }
 .swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
 .swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; background: var(--c); cursor: pointer; padding: 0; }
@@ -594,4 +581,27 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
   .bucket.project .proj-new { width: 36px; height: 36px; }
   .tab { padding: 7px 14px; }
   #gridlink { padding: 8px 12px; }
+}
+
+/* Grid tile = chatView in compact mode: the same parts, tighter. */
+.tile.compact { flex: initial; }
+.tile.compact .term-bar { padding: 6px 8px; gap: 6px; }
+.tile.compact .term-bar .title { font-size: var(--fs-sm); }
+.tile.compact .chat-log { max-width: none; padding: 8px 10px; gap: 6px; font-size: 12.5px; }
+.tile.compact .bubble { padding: 6px 10px; }
+.tile.compact .bubble.assistant { padding: 0 2px; }
+.tile.compact .chat-dock { max-width: none; padding: 0 8px; }
+.tile.compact .chat-dock:not(:empty) { padding-top: 6px; }
+.tile.compact .quick-bar { max-width: none; padding: 6px 8px 0; }
+.tile.compact .chat-status { display: none; }
+.tile.compact .composer { max-width: none; padding: 6px 8px; gap: 6px; }
+.tile.compact .composer .attach { width: 32px; height: 32px; font-size: 15px; }
+.tile.compact .composer textarea { padding: 6px 10px; max-height: 120px; }
+.tile.compact .composer .btn.primary { padding: 5px 10px; }
+.tile.compact .agent-bar { padding: 4px 10px; font-size: var(--fs-xs); }
+.tile.compact .ask { padding: 8px 10px; gap: 8px; }
+.tile.compact .approval { padding: 8px 10px; }
+.tile.compact { container-type: inline-size; }
+@container (max-width: 380px) {
+  .tile.compact .chip.dev, .tile.compact .mic { display: none; }
 }

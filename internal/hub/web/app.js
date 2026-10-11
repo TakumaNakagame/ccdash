@@ -1814,203 +1814,11 @@ const gridList = {
 // Every running session across devices on one screen: a tile each with its
 // state, why it wants you, the latest exchange (live), and a one-line reply.
 
+// gridTile is a chatView in compact mode (see chatView): the tile and the
+// chat page are one implementation.
 function gridTile(c) {
-  const id = c.device_id, sid = c.session.session_id;
-  const chatHref = `#/d/${id}/s/${encodeURIComponent(sid)}`;
-  const title = h("span", { class: "tile-title", title: "ダブルクリックで全画面 / 元に戻す" });
-  const openBtn = h("a", { class: "btn small icon", href: chatHref, title: "チャット画面で開く", "aria-label": "チャット画面で開く" }, icon("open"));
-  const closeBtn = h("button", { class: "btn small icon tile-close", type: "button", title: "グリッドから外す", "aria-label": "グリッドから外す" }, icon("x"));
-  const resumeBtn = h("button", { class: "btn small primary", type: "button", title: "claude --resume で再開", hidden: true }, icon("play"), "再開");
-  let resumingUntil = 0;
-  resumeBtn.addEventListener("click", async () => {
-    resumeBtn.disabled = true;
-    resumeBtn.textContent = "再開中…";
-    try {
-      const started = await resumeSession(id, sid);
-      toast(started ? "再開しました" : "すでに動いています");
-      resumingUntil = Date.now() + 60000;
-    } catch (err) {
-      toast(err.message);
-      resumeBtn.disabled = false;
-      resumeBtn.replaceChildren(icon("play"), "再開");
-    }
-  });
-  const status = h("span", { class: "chip" });
-  const reason = h("div", { class: "tile-reason" });
-  const log = h("div", { class: "tile-log" }, h("div", { class: "muted small" }, "読み込み中…"));
-  // A textarea like the chat's composer: Enter sends, Shift+Enter breaks
-  // the line (on a phone Enter is a newline; tap 送信). The draft is the
-  // chat view's draft for this session, so it survives leaving the grid and
-  // follows you into the chat.
-  const input = h("textarea", { rows: 1, placeholder: "返信（Enter で送信・Shift+Enter で改行）", enterkeyhint: "send" });
-  // Images: ＋ (camera on phones) or paste into the box, shown as
-  // thumbnails until sent — like the chat's composer.
-  let attachments = []; // { blob, url }
-  const thumbs = h("div", { class: "thumbs tile-thumbs" });
-  const fileInput = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
-  const attachBtn = h("button", { type: "button", class: "btn small icon", title: "画像を添付", "aria-label": "画像を添付", onclick: () => fileInput.click() }, icon("image"));
-  const renderThumbs = () => thumbs.replaceChildren(...attachments.map((a, i) => h("div", { class: "thumb" },
-    h("img", { src: a.url, alt: "" }),
-    h("button", { type: "button", title: "外す", onclick: () => { URL.revokeObjectURL(a.url); attachments.splice(i, 1); renderThumbs(); }, "aria-label": "外す" }, icon("x")))));
-  const addFiles = async (files) => {
-    for (const f of files) {
-      if (!f.type.startsWith("image/")) continue;
-      try { const blob = await prepareImage(f); attachments.push({ blob, url: URL.createObjectURL(blob) }); }
-      catch (e) { toast("画像を読み込めませんでした: " + e.message); }
-    }
-    renderThumbs();
-  };
-  fileInput.addEventListener("change", () => { addFiles([...fileInput.files]); fileInput.value = ""; });
-  input.addEventListener("paste", (e) => {
-    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
-    if (files.length) { e.preventDefault(); addFiles(files); }
-  });
-  const form = h("form", { class: "tile-reply" }, attachBtn, fileInput, h("div", { class: "grow col" }, thumbs, input), h("button", { class: "btn small primary" }, "送信"));
-  const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; };
-  input.value = loadDraft(id, sid);
-  if (input.value) requestAnimationFrame(autosize);
-  input.addEventListener("input", () => { autosize(); saveDraft(id, sid, input.value); });
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !matchMedia("(pointer: coarse)").matches) {
-      e.preventDefault();
-      form.requestSubmit();
-    }
-  });
-  const stopBtn = h("button", { class: "btn small", type: "button", title: "Esc を送って作業を中断", hidden: true }, icon("stop"), "中断");
-  stopBtn.addEventListener("click", async () => {
-    try { await dev(id).post(`/pty/${encodeURIComponent(sid)}/input`, { keys: "\x1b" }); toast("中断を送りました"); }
-    catch (err) { toast(err.status === 404 ? "このセッションは ccdash 上で動いていないため中断できません" : err.message); }
-  });
-  const el = h("div", { class: "tile", style: `--sess:${sessionColorOf(c.session)}` },
-    h("div", { class: "tile-head" }, h("span", { class: "chip dev" }, c.device_name), title, status, stopBtn, resumeBtn, openBtn, closeBtn), reason, log, form,
-    h("div", { class: "tile-resize", title: "ドラッグで大きさを変更" }));
-  title.addEventListener("dblclick", () => el.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
-  closeBtn.addEventListener("click", () => el.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })));
-  let session = c.session, sig = "", shown = null, pending = [], running = null;
-  // Sent text shows as a pending bubble (like the chat view) until it turns
-  // up as a user turn in the transcript — Claude may still be busy and
-  // hold it in its input queue — or after 2 minutes.
-  const paint = () => {
-    if (!shown) return;
-    if (selectingIn(log)) return; // the next refresh repaints
-    pending = pending.filter((p) => Date.now() - p.at < 120000);
-    const nodes = shown.map((it) => renderItem(it)).filter(Boolean);
-    for (const p of pending) nodes.push(h("div", { class: "bubble user pending" }, p.text));
-    // While Claude works, say so — and what it is running right now — like
-    // the chat view's typing dots; the transcript alone looks frozen
-    // during a long tool call.
-    if (session.status === "active") {
-      nodes.push(h("div", { class: "tile-working" }, h("div", { class: "typing" }, h("span"), h("span"), h("span")),
-        running ? h("span", { class: "muted small mono" }, "実行中: " + toolLabel(running)) : null));
-    }
-    const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-    log.replaceChildren(...(nodes.length ? nodes : [h("div", { class: "muted small" }, "まだメッセージがありません")]));
-    if (stick || pending.length) log.scrollTop = log.scrollHeight;
-  };
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const text = input.value.trim();
-    if (!text && !attachments.length) return;
-    if (session.attention === "needs_you") { toast("Claude が回答を待っています。開いて質問カードから答えてください"); location.hash = chatHref; return; }
-    const imgs = attachments;
-    attachments = [];
-    renderThumbs();
-    input.value = "";
-    autosize();
-    saveDraft(id, sid, "");
-    const p = { text: [imgs.length ? `🖼 ×${imgs.length}` : "", text].filter(Boolean).join(" "), match: text || "[Image", at: Date.now() };
-    pending.push(p);
-    if (!shown) shown = [];
-    paint();
-    try {
-      const paths = [];
-      for (const a of imgs) {
-        const r = await fetch(`/api/d/${id}/hub/upload`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": a.blob.type }, body: a.blob });
-        if (!r.ok) throw new Error("画像のアップロードに失敗: " + ((await r.text()).trim() || r.status));
-        paths.push((await r.json()).path);
-      }
-      const d = dev(id);
-      const ptys = paths.length ? ((await d.get("/pty/").catch(() => [])) || []) : [];
-      if (paths.length && ptys.some((x) => x.key === sid && x.alive)) {
-        // Running here: each path as its own paste becomes an [Image #N].
-        for (const path of paths) {
-          await d.post(`/pty/${encodeURIComponent(sid)}/input`, { text: path, paste: true });
-          await new Promise((res) => setTimeout(res, 350));
-        }
-        await d.post(`/pty/${encodeURIComponent(sid)}/input`, { text: text ? " " + text : "", submit: true });
-      } else {
-        await sendToSession(id, sid, [...paths, text].filter(Boolean).join(" "));
-      }
-      imgs.forEach((a) => URL.revokeObjectURL(a.url));
-    } catch (err) {
-      toast(err.message);
-      pending = pending.filter((x) => x !== p);
-      if (!input.value) { input.value = text; saveDraft(id, sid, text); autosize(); }
-      if (!attachments.length) { attachments = imgs; renderThumbs(); }
-      paint();
-    }
-  });
-  return {
-    el,
-    scrollLog() { requestAnimationFrame(() => (log.scrollTop = log.scrollHeight)); },
-    update(c2) {
-      const was = session.status;
-      session = c2.session;
-      if (was !== session.status) paint(); // working dots on / off
-      title.textContent = (session.num ? `#${session.num} ` : "") + sessionTitle(session);
-      title.classList.toggle("titling", session.title_status === "running");
-      const st = gridState(session);
-      status.textContent = st;
-      status.className = "chip " + (session.attention === "needs_you" ? "pend" : session.attention === "done" && session.status !== "active" ? "done" : session.status);
-      el.classList.toggle("needs", session.attention === "needs_you");
-      const working = session.status === "active";
-      if (working && !el.classList.contains("working")) el.append(beamEl());
-      else if (!working) el.querySelector(":scope > .beam")?.remove();
-      el.classList.toggle("working", working);
-      reason.replaceChildren(...(session.attention === "needs_you"
-        ? [h("span", {}, "? " + (session.attention_reason || "要対応")), h("a", { class: "btn small", href: chatHref }, "開いて回答")]
-        : []));
-      reason.hidden = session.attention !== "needs_you";
-      const running = session.status === "active" || session.status === "idle";
-      if (running) resumingUntil = 0;
-      const waiting = Date.now() < resumingUntil;
-      resumeBtn.hidden = running;
-      stopBtn.hidden = session.status !== "active";
-      resumeBtn.disabled = waiting;
-      resumeBtn.replaceChildren(...(waiting ? ["再開中…"] : [icon("play"), "再開"]));
-      input.placeholder = running ? "返信（Enter で送信・Shift+Enter で改行）" : "送信すると再開します";
-    },
-    async refresh() {
-      const d = dev(id);
-      let stat;
-      try {
-        stat = await d.get(`/api/sessions/${encodeURIComponent(sid)}/transcript?mode=stat`);
-      } catch (e) {
-        if (pending.length) { shown = []; sig = ""; paint(); return; }
-        if (sig !== "missing") {
-          sig = "missing";
-          log.replaceChildren(h("div", { class: "muted small" }, e.status === 404 || e.status === 500
-            ? "記録がありません（transcript が削除されているか、まだ作られていません）" : "読み込めませんでした: " + e.message));
-        }
-        return;
-      }
-      const next = `${stat.mtime}/${stat.size}`;
-      if (next === sig) {
-        if (pending.some((p) => Date.now() - p.at >= 120000)) paint(); // expire
-        return;
-      }
-      sig = next;
-      const t = await d.get(`/api/sessions/${encodeURIComponent(sid)}/transcript?mode=tail&bytes=98304`);
-      const all = parseTranscript(decodeEntries(t.data));
-      const users = all.filter((x) => x.kind === "user").map((x) => x.text);
-      pending = pending.filter((p) => !users.some((u) => u.includes(p.match || p.text)));
-      shown = all.filter((x) => x.kind !== "thinking").slice(-8);
-      const last = all.filter((x) => x.kind === "tool").pop();
-      running = last && last.result == null ? last : null;
-      if (selectingIn(log)) { sig = ""; return; } // retry after the copy
-      paint();
-    },
-  };
+  const v = chatView(c.device_id, { sid: c.session.session_id, compact: true, deviceName: c.device_name });
+  return { el: v.el, update() {}, refresh: async () => {}, scrollLog: v.scrollBottom, destroy: v.destroy };
 }
 
 // toolLabel: "Bash npm test" — a tool call in one short line.
@@ -2176,6 +1984,7 @@ function gridPage() {
     store.set(rects);
     if (maxKey === k) maxKey = null;
     tiles.get(k)?.el.remove();
+    tiles.get(k)?.destroy();
     tiles.delete(k);
     render();
   });
@@ -2215,6 +2024,7 @@ function gridPage() {
   const ro = new ResizeObserver(relayout);
   ro.observe(grid);
   cleanup.push(() => ro.disconnect());
+  cleanup.push(() => tiles.forEach((t) => t.destroy()));
   const count = h("span", { class: "muted small" });
   const addBtn = h("button", { class: "btn small primary", title: "セッションをグリッドに置く", onclick: () => pick() }, icon("plus"), "追加");
   const empty = h("div", { class: "empty", hidden: true }, h("p", {}, "グリッドにセッションがありません"),
@@ -2244,7 +2054,7 @@ function gridPage() {
       if (at !== t.el) grid.insertBefore(t.el, at || null);
       shown.push(c);
     }
-    for (const [k, t] of tiles) if (!byKey.has(k) || !items.includes(k)) { t.el.remove(); tiles.delete(k); }
+    for (const [k, t] of tiles) if (!byKey.has(k) || !items.includes(k)) { t.el.remove(); t.destroy(); tiles.delete(k); }
     empty.hidden = tiles.size > 0;
     applyMax();
     const needs = shown.filter((c) => c.session.attention === "needs_you").length;
@@ -2632,18 +2442,43 @@ function openAgent(id, sid, a) {
   });
 }
 
-// ---- the page ----
+// ---- the chat view ----
 
+// chatPage mounts a full-screen chatView for one session (or fresh spawn).
 async function chatPage(id, { sid, key }) {
-  const mount = mainMount;
-  const name = await deviceName(id);
+  const v = chatView(id, { sid, key });
+  mainMount.append(v.el);
+  cleanup.push(v.destroy);
+}
+
+// sharedGet memoizes a device GET for a moment, so several views of one
+// device (the grid's tiles, the chat) polling together cost one request.
+const sharedGets = new Map(); // "id path" → { at, p }
+function sharedGet(id, path, ttl = 1200) {
+  const k = id + " " + path, hit = sharedGets.get(k);
+  if (hit && Date.now() - hit.at < ttl) return hit.p;
+  const p = dev(id).get(path);
+  sharedGets.set(k, { at: Date.now(), p });
+  p.catch(() => sharedGets.delete(k));
+  return p;
+}
+
+// chatView is the one session UI: the chat page shows it full screen, and
+// each grid tile is the same view in compact mode (opts.compact) — so the
+// grid can do everything the chat can (choice / permission cards, questions,
+// approvals, subagents, images, voice, / completion, quick commands, !
+// commands, stop) instead of keeping a second, thinner implementation.
+// Returns { el, destroy, scrollBottom }; destroy stops its polling.
+function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
+  const bucket = [];
   const d = dev(id);
+  let name = devName;
   let session = null, ptyKey = key || null, hosted = false, info = null;
   let lastStat = "", items = [], pendingSends = [];
   // History window: the poll reads only the last TAIL bytes and splices
   // them onto what's loaded (by entry uuid), so "older history" loaded
   // once stays without re-downloading megabytes on every update.
-  const TAIL = 393216;
+  const TAIL = compact ? 98304 : 393216; // a tile shows less; "older history" still loads more
   let entries = [], hasOlder = false, loadedBytes = 0, loadingOlder = false;
   const tailURL = (bytes) => `/api/sessions/${encodeURIComponent(sid)}/transcript?mode=tail&bytes=${bytes}`;
   const splice = (fresh) => {
@@ -2674,8 +2509,18 @@ async function chatPage(id, { sid, key }) {
   const diffBtn = h("a", { class: "btn small", hidden: true, title: "変更の差分を見てコメントする" }, "差分");
   let lastUsage = null;
   const menuBtn = h("button", { class: "btn small", title: "セッションの操作", onclick: () => session ? sessionMenu(id, session, allGroups, poll) : toast("まだセッションが登録されていません"), "aria-label": "セッションの操作" }, icon("more"));
-  const bar = h("div", { class: "term-bar" },
-    h("a", { class: "btn small icon", href: `#/d/${id}`, "aria-label": "戻る", title: "戻る" }, icon("back")), titleEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
+  const chatHref = () => sid ? `#/d/${id}/s/${encodeURIComponent(sid)}` : `#/d/${id}/p/${encodeURIComponent(ptyKey)}`;
+  const stopTop = h("button", { class: "btn small", type: "button", title: "Esc を送って作業を中断", hidden: true, onclick: () => keys("\x1b") }, icon("stop"), "中断");
+  let root;
+  const bar = compact
+    ? h("div", { class: "term-bar tile-head" },
+      h("span", { class: "chip dev" }, devName), titleEl, statusEl, stopTop,
+      h("a", { class: "btn small icon", href: "#", title: "チャット画面で開く", "aria-label": "チャット画面で開く", onclick: (e) => { e.preventDefault(); location.hash = chatHref(); } }, icon("open")),
+      menuBtn,
+      h("button", { class: "btn small icon tile-close", type: "button", title: "グリッドから外す", "aria-label": "グリッドから外す", onclick: () => root.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })) }, icon("x")))
+    : h("div", { class: "term-bar" },
+      h("a", { class: "btn small icon", href: `#/d/${id}`, "aria-label": "戻る", title: "戻る" }, icon("back")), titleEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
+  if (compact) titleEl.addEventListener("dblclick", () => root.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, "読み込み中…"));
   const scroller = h("div", { class: "chat" }, log);
   const approvalsEl = h("div", { class: "chat-dock" });
@@ -2726,11 +2571,11 @@ async function chatPage(id, { sid, key }) {
     const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
     if (files.length) { e.preventDefault(); addFiles(files); }
   });
-  cleanup.push(() => attachments.forEach((a) => URL.revokeObjectURL(a.url)));
+  bucket.push(() => attachments.forEach((a) => URL.revokeObjectURL(a.url)));
   // Voice input (Web Speech API): dictation is appended to the message.
   const micBtn = speechSupported() ? h("button", { type: "button", class: "btn attach mic", title: "音声入力", "aria-label": "音声入力" }, icon("mic")) : null;
   micBtn?.addEventListener("click", () => toggleDictation(micBtn, input, autosize));
-  cleanup.push(() => stopDictation());
+  bucket.push(() => stopDictation());
   // "/" completion: skills and slash commands of this device.
   const slashBox = h("div", { class: "slash-box", hidden: true });
   let slashList = null;
@@ -2778,7 +2623,9 @@ async function chatPage(id, { sid, key }) {
     statusLine.hidden = !sig;
     statusLine.replaceChildren(...(fresh ? liveStatusParts(fresh) : lastUsage ? statusParts(lastUsage) : []));
   };
-  mount.append(h("div", { class: "chat-wrap" }, bar, agentBar, agentList, scroller, h("div", { class: "chat-bottom" }, approvalsEl, promptEl, h("div", { class: "quick-bar" }, quickRow, statusLine), composer)));
+  root = h("div", { class: compact ? "tile chat-wrap compact" : "chat-wrap" }, bar, agentBar, agentList, scroller,
+    h("div", { class: "chat-bottom" }, approvalsEl, promptEl, h("div", { class: "quick-bar" }, quickRow, statusLine), composer),
+    compact ? h("div", { class: "tile-resize", title: "ドラッグで大きさを変更" }) : null);
 
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
   input.addEventListener("input", autosize);
@@ -2793,7 +2640,7 @@ async function chatPage(id, { sid, key }) {
   input.value = loadDraft(id, draftRef);
   if (input.value) requestAnimationFrame(autosize);
   input.addEventListener("input", keepDraft);
-  cleanup.push(keepDraft); // also catches text set by the quick buttons / slash picker
+  bucket.push(keepDraft); // also catches text set by the quick buttons / slash picker
   input.addEventListener("keydown", (e) => {
     const mobile = matchMedia("(pointer: coarse)").matches;
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !mobile) {
@@ -2887,7 +2734,13 @@ async function chatPage(id, { sid, key }) {
     pendingSends = pendingSends.filter((p) => Date.now() - p.at < 120000);
     for (const p of pendingSends) nodes.push(h("div", { class: "bubble user pending" }, p.text));
     if (!nodes.length) nodes.push(h("div", { class: "empty" }, ptyKey && !sid ? "claude を起動しました。メッセージを送って始めましょう。" : "まだメッセージがありません。"));
-    if (session?.status === "active") nodes.push(h("div", { class: "typing" }, h("span"), h("span"), h("span")));
+    if (session?.status === "active") {
+      // Working: the dots, and the tool running right now (a long tool call
+      // otherwise looks like nothing is happening).
+      const last = items.filter((x) => x.kind === "tool").pop();
+      nodes.push(h("div", { class: "working-line" }, h("div", { class: "typing" }, h("span"), h("span"), h("span")),
+        last && last.result == null ? h("span", { class: "muted small mono" }, "実行中: " + toolLabel(last)) : null));
+    }
     log.replaceChildren(...nodes);
     if (stick) scroller.scrollTop = scroller.scrollHeight;
   };
@@ -2953,15 +2806,16 @@ async function chatPage(id, { sid, key }) {
 
   async function poll() {
     const [sessions, ptys, aps] = await Promise.all([
-      d.get("/api/sessions").then((x) => x || []),
-      d.get("/pty/").then((x) => x || []).catch(() => []),
-      d.get("/api/approvals").then((x) => x || []).catch(() => []),
+      sharedGet(id, "/api/sessions").then((x) => x || []),
+      sharedGet(id, "/pty/").then((x) => x || []).catch(() => []),
+      sharedGet(id, "/api/approvals").then((x) => x || []).catch(() => []),
     ]);
+    if (!name) name = await deviceName(id);
     info = info || (await deviceInfo(id));
     allGroups = uniqueGroups(sessions, true).filter(Boolean);
     if (!sid && ptyKey) {
       const a = aliasOf(ptys, ptyKey);
-      if (a) { sid = a; history.replaceState(null, "", `#/d/${id}/s/${encodeURIComponent(sid)}`); }
+      if (a) { sid = a; if (!compact) history.replaceState(null, "", `#/d/${id}/s/${encodeURIComponent(sid)}`); }
     }
     if (sid) {
       if (ptys.some((p) => p.key === sid && p.alive)) ptyKey = sid;
@@ -2981,7 +2835,15 @@ async function chatPage(id, { sid, key }) {
     titleEl.textContent = title;
     titleEl.classList.toggle("titling", session?.title_status === "running");
     titleEl.style.setProperty("--sess", session ? sessionColorOf(session) : sessionColor(sid));
-    crumbs({ text: "端末", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: title });
+    if (!compact) crumbs({ text: "端末", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: title });
+    else {
+      root.style.setProperty("--sess", session ? sessionColorOf(session) : sessionColor(sid || ptyKey || ""));
+      root.classList.toggle("needs", session?.attention === "needs_you");
+      const working = session?.status === "active";
+      if (working && !root.classList.contains("working")) root.append(beamEl());
+      else if (!working) root.querySelector(":scope > .beam")?.remove();
+      root.classList.toggle("working", working);
+    }
     // A ccdash-hosted claude is alive even when discovery still files the
     // session as recent/stopped (no hook fired since it was resumed).
     let st = session?.status || (hosted ? "idle" : "");
@@ -2994,7 +2856,8 @@ async function chatPage(id, { sid, key }) {
     endBtn.hidden = !hosted;
     restartBtn.hidden = !hosted || !sid; // nothing to resume before the first prompt
     stopBtn.hidden = !(hosted && session?.status === "active");
-    input.placeholder = hosted ? "メッセージ" : "送信するとこのセッションを再開します";
+    stopTop.hidden = stopBtn.hidden;
+    input.placeholder = hosted ? "メッセージ" : compact ? "送信で再開" : "送信するとこのセッションを再開します";
 
     // approvals for this session
     renderApprovals(approvalsEl, id, sid ? aps.filter((a) => a.session_id === sid) : [], sessions);
@@ -3076,9 +2939,16 @@ async function chatPage(id, { sid, key }) {
     paintStatus();
   }
 
-  every(1500, poll);
-  autoFocus(input);
+  every(compact ? 3000 : 1500, poll, bucket);
+  if (!compact) autoFocus(input);
+  return {
+    el: root,
+    destroy: () => bucket.splice(0).forEach((fn) => { try { fn(); } catch {} }),
+    scrollBottom: () => requestAnimationFrame(() => (scroller.scrollTop = scroller.scrollHeight)),
+  };
 }
+
+
 
 // ---------- terminal ----------
 
