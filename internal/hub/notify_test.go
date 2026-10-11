@@ -165,6 +165,9 @@ func TestSessionLink(t *testing.T) {
 	if w.Code != http.StatusFound || w.Header().Get("Location") != "/#/d/d2/s/abc-123" {
 		t.Fatalf("link = %d %q", w.Code, w.Header().Get("Location"))
 	}
+	if w := serve(hub.Handler(), "GET", "/api/locate/abc-123", "", nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"device_id":"d2"`) {
+		t.Fatalf("locate = %d %s", w.Code, w.Body)
+	}
 	if w := serve(hub.Handler(), "GET", "/s/nope", "", nil); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown session = %d", w.Code)
 	}

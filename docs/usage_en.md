@@ -682,4 +682,5 @@ carries a `url` (`https://<hub>/s/<session id>`). Opening it in a browser or
 the installed app lets the hub find the device that has the session and open
 its chat (after a login if needed), so a managing Claude can hand you a list
 of "sessions that need you" you can tap straight into. `--hub-url` sets or
-overrides the hub origin.
+overrides the hub origin. Tapped inside the portal's chat, such a link moves
+to that chat in place (in the installed app too) instead of opening a tab.

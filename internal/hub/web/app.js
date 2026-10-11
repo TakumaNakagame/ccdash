@@ -1313,6 +1313,30 @@ function userText(text) {
   return out;
 }
 
+// ---- links to this portal ----
+
+// followPortalLink keeps links to this hub (a session link from ccdash mcp,
+// <hub>/s/<id>, or a /#/… route) in the current tab / installed app,
+// moving to the chat in place instead of opening a new browser tab.
+async function followPortalLink(e) {
+  const a = e.target.closest?.("a[href]");
+  if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  let u;
+  try { u = new URL(a.href, location.href); } catch { return; }
+  if (u.origin !== location.origin) return;
+  const sm = u.pathname.match(/^\/s\/([^/]+)\/?$/);
+  if (!sm && !(u.pathname === "/" && u.hash.startsWith("#/"))) return;
+  e.preventDefault();
+  if (!sm) { location.hash = u.hash; return; }
+  const sid = decodeURIComponent(sm[1]);
+  try {
+    const r = await api(`/api/locate/${encodeURIComponent(sid)}`);
+    location.hash = `#/d/${r.device_id}/s/${encodeURIComponent(sid)}`;
+  } catch {
+    toast("このセッションを持つ端末が見つかりません（オフラインかもしれません）", 4000);
+  }
+}
+
 // ---- "! command" lines in Claude's replies ----
 
 // bangCmd returns the command of a one-line "! command" (Claude Code's
@@ -3008,6 +3032,7 @@ function updateBadge(b) {
   });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
   window.addEventListener("hashchange", () => { noteHash(); route(); });
+  document.addEventListener("click", followPortalLink);
   installSwipeBack();
   wideQuery.addEventListener("change", () => { closeSplit(); route(); });
   route();

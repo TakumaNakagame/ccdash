@@ -360,21 +360,7 @@ func (h *Hub) dropSnapshot(id string) {
 // its chat loads any session by id.
 func (h *Hub) handleSessionLink(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("session")
-	dev := ""
-	h.mu.Lock()
-	for id, snap := range h.snapshots {
-		for _, s := range snap.Sessions {
-			if s.SessionID == sid {
-				dev = id
-			}
-		}
-	}
-	if dev == "" && len(h.conns) == 1 {
-		for id := range h.conns {
-			dev = id
-		}
-	}
-	h.mu.Unlock()
+	dev := h.locateSession(sid)
 	if dev == "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
@@ -383,6 +369,36 @@ func (h *Hub) handleSessionLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/#/d/"+url.PathEscape(dev)+"/s/"+url.PathEscape(sid), http.StatusFound)
+}
+
+// handleLocate is /s/<id> for the SPA: a session link tapped inside the
+// portal moves to the chat in place instead of reloading.
+func (h *Hub) handleLocate(w http.ResponseWriter, r *http.Request) {
+	dev := h.locateSession(r.PathValue("session"))
+	if dev == "" {
+		http.Error(w, "no connected device has this session", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]string{"device_id": dev})
+}
+
+// locateSession names the device that reports sid, or "".
+func (h *Hub) locateSession(sid string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for id, snap := range h.snapshots {
+		for _, s := range snap.Sessions {
+			if s.SessionID == sid {
+				return id
+			}
+		}
+	}
+	if len(h.conns) == 1 {
+		for id := range h.conns {
+			return id
+		}
+	}
+	return ""
 }
 
 type boardCard struct {
