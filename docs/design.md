@@ -60,6 +60,27 @@ Japanese body text gets `line-height: 1.6`; UI chrome (rows, buttons) 1.4.
 - **Copy:** verbs on buttons (送信 / 再開 / 中断), errors say what to do,
   empty states say what to do next. No "Submit", no apologies.
 
+## App shell (phone / tablet, < 1024px)
+
+Platform-neutral "modern app", not iOS- or Material-specific.
+
+- **Nav bar**: top-level pages show the brand; detail pages (chat, terminal,
+  diff) use their own bar as the nav bar — back chevron, title, actions — and
+  hide the header. Bars are translucent (`backdrop-filter`) and sticky.
+- **Bottom tab bar** (`#tabbar`: ホーム / セッション / グリッド) on top-level
+  pages only; hidden in detail views. `paintShell` keeps it in sync.
+- **Navigation** slides: push from the right, pop back (`navigate()`, View
+  Transitions); swipe right from the edge goes back. Never both at once.
+- **Dialogs are bottom sheets** with a grabber: drag down or tap outside to
+  close.
+- **Lists run edge to edge** with inset separators; pressed states instead
+  of hover; a long press enters edit mode (row checkboxes), where taps
+  toggle selection.
+- **Haptics** (`haptic()`): a short tick for actions that change something —
+  send, keys sent to claude, tab switch. Nothing for plain navigation.
+
+Desktop (≥ 1024px) keeps the two-pane layout with breadcrumbs.
+
 ## Checking a change
 
 Run a local hub (README "Hub mode": `ccdash hub serve --no-auth` + a device

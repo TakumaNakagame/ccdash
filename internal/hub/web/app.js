@@ -121,6 +121,8 @@ function deferWhileSelecting(el, fn) {
   return true;
 }
 
+// crumbs sets the header: breadcrumbs on a wide screen; on a phone a
+// native-style bar — a back chevron to the parent crumb and the page title.
 function crumbs(...parts) {
   const nav = $("#crumbs");
   nav.replaceChildren();
@@ -128,6 +130,49 @@ function crumbs(...parts) {
     if (i) nav.append(" / ");
     nav.append(p.href ? h("a", { href: p.href }, p.text) : h("span", {}, p.text));
   });
+  const last = parts[parts.length - 1], parent = parts[parts.length - 2];
+  $("#navtitle").textContent = last?.text || "";
+  const back = $("#navback");
+  back.hidden = !parent?.href;
+  if (parent?.href) back.href = parent.href;
+}
+
+// ---------- app shell (phone) ----------
+
+// haptic: a short tick on Android for actions that change something.
+function haptic(ms = 8) { try { navigator.vibrate?.(ms); } catch {} }
+
+// paintShell marks the current tab in the bottom bar and hides the bar in
+// detail views (a chat, a terminal, a diff), like a native app's push.
+function paintShell(parts) {
+  const detail = parts[0] === "d" && (parts[2] === "s" || parts[2] === "p");
+  document.body.classList.toggle("detail", detail);
+  const tab = parts[0] === "grid" ? "grid" : parts[0] === "d" ? "sessions" : "home";
+  for (const a of document.querySelectorAll("#tabbar a")) a.classList.toggle("on", a.dataset.tab === tab);
+  let lastDev = "";
+  try { lastDev = localStorage.getItem("ccdash.lastDevice") || ""; } catch {}
+  if (parts[0] === "d" && parts[1]) { lastDev = parts[1]; try { localStorage.setItem("ccdash.lastDevice", lastDev); } catch {} }
+  const sess = document.querySelector('#tabbar a[data-tab="sessions"]');
+  if (sess) sess.href = lastDev ? `#/d/${lastDev}` : "#/";
+}
+
+// Page transitions: a push slides the new page in from the right, a pop
+// slides back (View Transitions API; phones only, and not after a swipe
+// back, which already animated).
+let skipTransition = false;
+const hashDepth = (hh) => hh.replace(/^#\/?/, "").split("/").filter(Boolean).length;
+let lastDepth = hashDepth(location.hash || "#/");
+function navigate() {
+  const depth = hashDepth(location.hash || "#/");
+  const dir = depth > lastDepth ? "push" : depth < lastDepth ? "pop" : "swap";
+  lastDepth = depth;
+  const animate = document.startViewTransition && !skipTransition && !wideQuery.matches &&
+    !matchMedia("(prefers-reduced-motion: reduce)").matches && dir !== "swap";
+  skipTransition = false;
+  if (!animate) return route();
+  document.documentElement.dataset.nav = dir;
+  const t = document.startViewTransition(() => route());
+  t.finished.finally(() => delete document.documentElement.dataset.nav);
 }
 
 // autoFocus focuses el only where a keyboard is at hand (a fine pointer
@@ -150,9 +195,36 @@ function saveDraft(id, ref, text) {
 function dialog(build) {
   const dlg = $("#dlg"), body = $("#dlg-body");
   body.replaceChildren();
+  dlg.style.transform = "";
+  // Dialogs build with `cond ? el : null`; DOM append would print "null".
+  const append = Element.prototype.append.bind(body);
+  body.append = (...kids) => append(...kids.flat().filter((k) => k != null && k !== false));
   build(body, () => dlg.close());
   dlg.showModal();
   return dlg;
+}
+
+// On a phone the dialog is a bottom sheet (app.css): tap outside or drag
+// the grabber down to dismiss it.
+function installSheet() {
+  const dlg = $("#dlg"), grab = dlg.querySelector(".sheet-grab");
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+  let y0 = null, dy = 0;
+  grab.addEventListener("pointerdown", (e) => { y0 = e.clientY; dy = 0; grab.setPointerCapture(e.pointerId); dlg.style.transition = "none"; });
+  grab.addEventListener("pointermove", (e) => {
+    if (y0 == null) return;
+    dy = Math.max(0, e.clientY - y0);
+    dlg.style.transform = `translateY(${dy}px)`;
+  });
+  const end = () => {
+    if (y0 == null) return;
+    y0 = null;
+    dlg.style.transition = "";
+    if (dy > 90) dlg.close();
+    dlg.style.transform = "";
+  };
+  grab.addEventListener("pointerup", end);
+  grab.addEventListener("pointercancel", end);
 }
 
 async function copy(text) {
@@ -186,6 +258,9 @@ const ICONS = {
   down: '<path d="m6 9 6 6 6-6"/>',
   back: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
   terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+  home: '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  list: '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
+  chevron: '<path d="m15 18-6-6 6-6"/>',
 };
 function icon(name) {
   const el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -273,6 +348,7 @@ function route() {
   cleanup.forEach((f) => { try { f(); } catch {} });
   cleanup = [];
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  paintShell(parts);
   // The header's グリッド is a toggle: on the grid it leads back to where
   // you were before opening it.
   const gl = $("#gridlink");
@@ -397,7 +473,7 @@ function installSwipeBack() {
     if (dx < innerWidth / 3 && !flick) return reset(true);
     view.style.transition = "transform .15s ease-out";
     view.style.transform = `translateX(${innerWidth}px)`;
-    setTimeout(() => { reset(false); goBack(); }, 150);
+    setTimeout(() => { reset(false); skipTransition = true; goBack(); }, 150);
   };
   addEventListener("touchend", end);
   addEventListener("touchcancel", () => { if (state === "drag") reset(true); state = "idle"; });
@@ -799,6 +875,7 @@ async function devicePage(id, opts = {}) {
   };
   const paintSel = () => {
     selBar.hidden = !selected.size;
+    list.classList.toggle("selecting", selected.size > 0);
     if (!selected.size) return;
     const keys = [...selected].map((sid) => id + ":" + sid);
     selBar.replaceChildren(
@@ -1043,7 +1120,21 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
   return h("div", { class: "item srow" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : "") + (s.status === "active" ? " working" : ""), "data-sid": s.session_id,
     style: `--sess:${sessionColorOf(s)}${proj}`, onclick: (e) => {
     if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
+    if (e.currentTarget.dataset.longpressed) { delete e.currentTarget.dataset.longpressed; return; }
+    // While some rows are selected (edit mode), a tap toggles the row.
+    if (sel && sel.set.size) { sel.toggle(s.session_id, !sel.set.has(s.session_id)); haptic(); return; }
     location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`;
+  }, onpointerdown: (e) => {
+    // Long press selects (how a phone list enters edit mode).
+    if (!sel || e.pointerType !== "touch") return;
+    const row = e.currentTarget;
+    const t = setTimeout(() => { row.dataset.longpressed = "1"; haptic(15); sel.toggle(s.session_id, true); }, 480);
+    const cancel = () => { clearTimeout(t); row.removeEventListener("pointerup", cancel); row.removeEventListener("pointermove", moved); row.removeEventListener("pointercancel", cancel); };
+    const x0 = e.clientX, y0 = e.clientY;
+    const moved = (ev) => { if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) > 10) cancel(); };
+    row.addEventListener("pointerup", cancel);
+    row.addEventListener("pointermove", moved);
+    row.addEventListener("pointercancel", cancel);
   } },
     check || null,
     h("span", { class: "num" }, s.num ? `#${s.num}` : ""),
@@ -2747,6 +2838,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
 
   async function keys(seq) {
     if (!ptyKey || !hosted) return;
+    haptic();
     try { await d.post(`/pty/${encodeURIComponent(ptyKey)}/input`, { keys: seq }); } catch (e) { toast(e.message); }
     setTimeout(poll, 350);
   }
@@ -2763,6 +2855,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
       return;
     }
     sendBtn.disabled = true;
+    haptic();
     try {
       if (attachments.length && !info?.attachEnabled) throw new Error("この端末は attach が OFF のため画像を送れません");
       const paths = [];
@@ -3167,7 +3260,11 @@ function updateBadge(b) {
     if (e.data?.type === "open" && e.data.url) location.href = e.data.url;
   });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
-  window.addEventListener("hashchange", () => { noteHash(); route(); });
+  window.addEventListener("hashchange", () => { noteHash(); navigate(); });
+  for (const sp of document.querySelectorAll("[data-icon]")) sp.replaceWith(icon(sp.dataset.icon));
+  installSheet();
+  $("#navback").append(icon("chevron"));
+  $("#tabbar").addEventListener("click", () => haptic());
   document.addEventListener("click", followPortalLink);
   installSwipeBack();
   wideQuery.addEventListener("change", () => { closeSplit(); route(); });

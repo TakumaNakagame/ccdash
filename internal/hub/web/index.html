@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<meta name="theme-color" content="#111418">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d1013" media="(prefers-color-scheme: dark)">
 <title>ccdash hub</title>
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
@@ -19,15 +20,22 @@
 </head>
 <body>
 <header id="top">
+  <a id="navback" class="btn icon" href="#/" hidden aria-label="戻る" title="戻る"></a>
   <a href="#/" class="brand">ccdash<span>hub</span></a>
   <nav id="crumbs"></nav>
+  <span id="navtitle"></span>
   <a id="gridlink" href="#/grid" title="動いているセッションを一覧（グリッド）">グリッド</a>
   <a id="att" href="#/" hidden></a>
   <div id="me"></div>
 </header>
 <main id="view"></main>
+<nav id="tabbar" aria-label="メイン">
+  <a href="#/" data-tab="home"><span class="ti" data-icon="home"></span><span>ホーム</span></a>
+  <a href="#/" data-tab="sessions"><span class="ti" data-icon="list"></span><span>セッション</span></a>
+  <a href="#/grid" data-tab="grid"><span class="ti" data-icon="grid"></span><span>グリッド</span></a>
+</nav>
 <div id="toast" hidden></div>
-<dialog id="dlg"><form method="dialog" id="dlg-body"></form></dialog>
+<dialog id="dlg"><div class="sheet-grab" aria-hidden="true"></div><form method="dialog" id="dlg-body"></form></dialog>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js"></script>
