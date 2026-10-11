@@ -1094,7 +1094,7 @@ const refreshBeams = () => document.querySelectorAll(".beam").forEach(runBeam);
 
 // statusTag: a session's state as a dot + Japanese word (docs/design.md:
 // status is words, not English pills).
-const STATUS_JA = { active: "作業中", idle: "待機中", stopped: "停止" };
+const STATUS_JA = { active: "作業中", idle: "待機中", recent: "停止", stopped: "停止" };
 function statusTag(st) {
   return h("span", { class: "stat " + st }, h("i"), STATUS_JA[st] || st);
 }

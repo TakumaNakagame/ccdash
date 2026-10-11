@@ -83,6 +83,6 @@ Desktop (≥ 1024px) keeps the two-pane layout with breadcrumbs.
 
 ## Checking a change
 
-Run a local hub (README "Hub mode": `ccdash hub serve --no-auth` + a device
+Run a local hub (docs/hub.md: `ccdash hub serve --no-auth` + a device
 collector in a temp `HOME`) and look at it at 390px and 1280px, light and
 dark, before shipping. Screenshots, not imagination.

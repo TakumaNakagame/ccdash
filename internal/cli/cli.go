@@ -86,7 +86,7 @@ the TUI exits, so events are captured even while you're not watching. Use
 
 Remote mode: configure a collector on another host once with
 'ccdash remote set --url http://host:9123 ...' and then run 'ccdash -r'
-(see README "Remote mode"). In that mode ccdash never opens a local DB or
+(see docs/remote-mode.md). In that mode ccdash never opens a local DB or
 spawns a collector — everything goes over HTTP.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -469,7 +469,7 @@ talk to loopback, remote clients use the --listen address.`,
 	c.Flags().StringVar(&listen, "listen", "",
 		"bind a non-default address for remote mode, e.g. 0.0.0.0:9123 or 192.168.20.132:9123 "+
 			"(opt-in; overrides --addr; non-loopback also keeps a 127.0.0.1 listener for hooks; "+
-			"see README Remote mode / Threat model)")
+			"see docs/remote-mode.md / docs/security.md)")
 	c.AddCommand(serverStopCmd())
 	return c
 }
@@ -517,7 +517,7 @@ func checkBindSafety(addr string) error {
 	log.Printf("ccdash: WARNING binding to non-loopback address %s. Any host that can reach "+
 		"this address AND knows the auth token can read every session's prompts/tool calls and "+
 		"approve/deny tool calls on your behalf. Intended for a trusted LAN or Tailscale/VPN only — "+
-		"there is no TLS in v1. See README Threat model before exposing this further (e.g. on the "+
+		"there is no TLS in v1. See docs/security.md before exposing this further (e.g. on the "+
 		"open internet or a shared/untrusted network).", addr)
 	if _, err := auth.Load(); err != nil {
 		tp := "$XDG_STATE_HOME/ccdash/token"

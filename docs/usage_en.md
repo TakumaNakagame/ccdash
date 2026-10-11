@@ -528,7 +528,7 @@ For anything more specific, the embedded-collector log
 The hub is a web page that lists your machines and lets you use each one's
 ccdash from a browser or phone. It runs on a home server
 (`ccdash hub serve`, normally the `ghcr.io/takumanakagame/ccdash` container
-behind your reverse proxy, with OIDC login — see README "Hub mode").
+behind your reverse proxy, with OIDC login — see [Hub mode](hub.md)).
 
 **Joining a machine**
 
@@ -644,7 +644,7 @@ read the hub without logging in: start the hub with
 these GETs work: `/api/board`, `/api/active`, `/api/devices`,
 `/api/d/{id}/api/sessions`, `/api/d/{id}/api/sessions/{sid}/transcript`
 (`?lines=20` for the last 20 JSONL records; tail only). Everything else is
-403. Response shapes are in README "Hub mode".
+403. Response shapes are in [Hub mode](hub.md).
 
 ```sh
 curl -H "Authorization: Bearer $TOKEN" https://ccdash.example.net/api/board
