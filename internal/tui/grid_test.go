@@ -18,23 +18,45 @@ import (
 )
 
 func TestGridRects(t *testing.T) {
-	for _, tc := range []struct{ n, w, h, cols int }{
-		{1, 120, 30, 1}, {2, 120, 30, 2}, {3, 120, 30, 2}, {4, 90, 30, 1}, {6, 200, 30, 3},
+	for _, tc := range []struct{ n, w, h int }{
+		{1, 120, 30}, {2, 120, 30}, {3, 120, 30}, {4, 90, 30}, {5, 200, 40}, {5, 120, 40}, {7, 240, 50},
 	} {
 		rs := gridRects(tc.n, tc.w, tc.h)
 		if len(rs) != tc.n {
 			t.Fatalf("%+v: %d rects", tc, len(rs))
 		}
-		if cols, _ := gridDims(tc.n, tc.w, tc.h); cols != tc.cols {
-			t.Fatalf("%+v: cols %d", tc, cols)
+		// No gaps, no overlaps: the tiles cover the body exactly.
+		area := 0
+		for _, r := range rs {
+			area += r.w * r.h
+			if r.x < 0 || r.y < 0 || r.x+r.w > tc.w || r.y+r.h > tc.h {
+				t.Fatalf("%+v: %+v outside the body", tc, r)
+			}
 		}
-		// Rows fill the width; the last row reaches the bottom.
-		last := rs[len(rs)-1]
-		if last.y+last.h != tc.h {
-			t.Fatalf("%+v: bottom at %d", tc, last.y+last.h)
+		if area != tc.w*tc.h {
+			t.Fatalf("%+v: tiles cover %d of %d cells", tc, area, tc.w*tc.h)
 		}
-		if r := rs[min(tc.cols, tc.n)-1]; r.x+r.w != tc.w {
-			t.Fatalf("%+v: right edge at %d", tc, r.x+r.w)
+	}
+	// 5 in 2 columns: the last row is one wide tile.
+	if cols, _ := gridDims(5, 120, 40); cols == 2 {
+		rs := gridRects(5, 120, 40)
+		if last := rs[4]; last.w != 120 {
+			t.Fatalf("last tile %+v, want the full width", last)
+		}
+	}
+}
+
+func TestGridBelow(t *testing.T) {
+	// 5 tiles: 3 on top, 2 stretched below.
+	rs := gridRects(5, 120, 30)
+	if cols, rows := gridDims(5, 120, 30); cols != 3 || rows != 2 || rs[3].w != 60 {
+		t.Fatalf("layout %dx%d, %+v", cols, rows, rs)
+	}
+	for _, tc := range []struct{ i, dir, want int }{
+		{0, 1, 3}, {2, 1, 4}, {4, -1, 2}, {3, -1, 0}, {0, -1, -1}, {3, 1, -1},
+	} {
+		if got := gridBelow(rs, tc.i, tc.dir); got != tc.want {
+			t.Errorf("gridBelow(%d, %d) = %d, want %d", tc.i, tc.dir, got, tc.want)
 		}
 	}
 }

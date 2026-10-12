@@ -3061,9 +3061,9 @@ var (
 	// gridBadgeStyle marks a session chosen for the grid (space), in the
 	// working light's sky blue.
 	gridBadgeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("#38bdf8"))
-	paneTitle          = lipgloss.NewStyle().Bold(true).Padding(0, 1).Background(lipgloss.Color("237")).Foreground(lipgloss.Color("15"))
-	paneTitleDim       = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("8"))
-	errStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	paneTitle      = lipgloss.NewStyle().Bold(true).Padding(0, 1).Background(lipgloss.Color("237")).Foreground(lipgloss.Color("15"))
+	paneTitleDim   = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("8"))
+	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 )
 
 func (m *model) renderHeader() string {

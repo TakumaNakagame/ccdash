@@ -11,6 +11,7 @@ package tui
 
 import (
 	"context"
+	"math"
 	"strings"
 	"time"
 
@@ -45,33 +46,44 @@ type gridTailMsg struct {
 
 type rect struct{ x, y, w, h int }
 
-// gridDims picks columns × rows for n tiles in a w × h body.
+// Tile size floors: a tile narrower than gridMinTileW can't show a
+// useful screen, and gridMinTileH is border + header + 2 lines.
+const gridMinTileW = 34
+
+// gridDims picks columns × rows for n tiles in a w × h body the way the
+// portal's layoutGrid does: the column count giving each tile the most
+// usable area (a sliver narrower than 0.6:1 or wider than 2.5:1 counts
+// only up to that shape — a cell is about twice as tall as it is wide),
+// discounted for empty cells.
 func gridDims(n, w, h int) (cols, rows int) {
 	if n <= 0 {
 		return 0, 0
 	}
-	cols = 1
-	switch {
-	case w >= 180 && n >= 5:
-		cols = 3
-	case w >= 100 && n >= 2:
-		cols = 2
+	best, bestArea := 1, -1.0
+	for c := 1; c <= n; c++ {
+		r := (n + c - 1) / c
+		tw, th := float64(w)/float64(c), float64(h)/float64(r)
+		if tw < gridMinTileW && c > 1 {
+			break
+		}
+		tv := th * 2 // height in width units
+		area := math.Min(tw, tv*2.5) * math.Min(tv, tw/0.6) * math.Sqrt(float64(n)/float64(c*r))
+		if area > bestArea {
+			best, bestArea = c, area
+		}
 	}
-	if cols > n {
-		cols = n
-	}
-	rows = (n + cols - 1) / cols
-	return cols, rows
+	return best, (n + best - 1) / best
 }
 
 // gridCapacity is how many tiles fit a w × h body.
 func gridCapacity(w, h int) int {
-	cols, _ := gridDims(9, w, h)
-	return cols * max(1, h/gridMinTileH)
+	return max(1, w/gridMinTileW) * max(1, h/gridMinTileH)
 }
 
 // gridRects lays n tiles out over a w × h body (body-relative cells).
-// Leftover columns / rows go to the first tiles so the grid fills the body.
+// Rows and columns share the body evenly (leftover cells go to the first
+// ones) and a part-filled last row stretches across, like the portal's —
+// 5 tiles in 2 columns end with one wide tile, not a gap.
 func gridRects(n, w, h int) []rect {
 	cols, rows := gridDims(n, w, h)
 	if cols == 0 {
@@ -84,10 +96,11 @@ func gridRects(n, w, h int) []rect {
 		if r < h%rows {
 			th++
 		}
+		inRow := min(cols, n-len(out))
 		x := 0
-		for c := 0; c < cols && len(out) < n; c++ {
-			tw := w / cols
-			if c < w%cols {
+		for c := 0; c < inRow; c++ {
+			tw := w / inRow
+			if c < w%inRow {
 				tw++
 			}
 			out = append(out, rect{x, y, tw, th})
@@ -96,6 +109,37 @@ func gridRects(n, w, h int) []rect {
 		y += th
 	}
 	return out
+}
+
+// gridBelow finds the tile under (dir = 1) or over (dir = -1) tile i: in
+// the nearest row that way, the tile whose middle is closest to i's.
+// -1 when there is none.
+func gridBelow(rects []rect, i, dir int) int {
+	cur := rects[i]
+	rowY := -1
+	for _, r := range rects {
+		if (r.y-cur.y)*dir > 0 && (rowY < 0 || (r.y-rowY)*dir < 0) {
+			rowY = r.y
+		}
+	}
+	if rowY < 0 {
+		return -1
+	}
+	mid := 2*cur.x + cur.w // doubled to stay in integers
+	best, bestD := -1, 0
+	for j, r := range rects {
+		if r.y != rowY {
+			continue
+		}
+		d := 2*r.x + r.w - mid
+		if d < 0 {
+			d = -d
+		}
+		if best < 0 || d < bestD {
+			best, bestD = j, d
+		}
+	}
+	return best
 }
 
 // gridSessions returns the indices into m.sessions the grid shows: the
@@ -178,7 +222,7 @@ func (m *model) handleKeyGrid(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		return nil, false
 	}
 	_, bodyH := m.bodyLayout()
-	cols, _ := gridDims(len(tiles), m.width, bodyH)
+	rects := gridRects(len(tiles), m.width, bodyH)
 	cur := max(0, indexOf(tiles, m.selSess))
 	next := cur
 	switch msg.String() {
@@ -205,12 +249,12 @@ func (m *model) handleKeyGrid(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 	case "shift+tab", "left", "h":
 		next = (cur - 1 + len(tiles)) % len(tiles)
 	case "down", "j":
-		if cur+cols < len(tiles) {
-			next = cur + cols
+		if j := gridBelow(rects, cur, 1); j >= 0 {
+			next = j
 		}
 	case "up", "k":
-		if cur-cols >= 0 {
-			next = cur - cols
+		if j := gridBelow(rects, cur, -1); j >= 0 {
+			next = j
 		}
 	default:
 		return nil, false

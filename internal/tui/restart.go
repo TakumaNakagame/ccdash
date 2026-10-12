@@ -16,8 +16,8 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"github.com/takumanakagame/ccmanage/internal/buildinfo"
-	"github.com/takumanakagame/ccmanage/internal/selfupdate"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/takumanakagame/ccmanage/internal/selfupdate"
 )
 
 // ErrRestart is returned by Run when the operator confirmed a restart.
