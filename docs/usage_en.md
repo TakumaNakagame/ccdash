@@ -732,6 +732,7 @@ Tools:
 | `set_color` | a session's color: `#rrggbb`, `random` (apart from the running sessions' colors) or `""` (automatic) |
 | `mark_seen` | mark sessions seen (clears NEW and the finished-unseen mark; approvals, questions and 回答待ち / 作業待ち declarations stay) |
 | `set_archived` | archive / unarchive sessions |
+| `archive_finished` | archive the sessions whose claude has exited (running ones are skipped, never stopped); keeps pinned, watch-later and unread / needs-you ones (`include_unread` takes unread too); narrow with `sessions` / `project` / `idle_hours`, preview with `dry_run` |
 | `start_session` | start a new claude session in a directory (absolute path), like the TUI's `n`; optional `project`, first `prompt`, `permission_mode`. Refused while the Attach setting is OFF |
 
 It never stops claude and never answers approvals. Add

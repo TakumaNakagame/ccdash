@@ -514,6 +514,7 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | `set_color` | セッションの色。`#rrggbb`、`random` (動いている他のセッションと離れた色)、`""` で自動に戻す |
 | `mark_seen` | 既読にする (NEW と未確認の完了印を消す。承認待ち・質問・回答待ち／作業待ちの申告は残る) |
 | `set_archived` | アーカイブ／解除 |
+| `archive_finished` | 終了したセッションをまとめてアーカイブ (動いているものは止めずに飛ばす)。ピン留め・あとで見る・未確認／要対応のものは残す (`include_unread` で未確認も対象)。`sessions` / `project` / `idle_hours` で絞り込み、`dry_run` で対象だけ確認 |
 | `start_session` | 指定ディレクトリ (絶対パス) で新しい claude セッションを起動 (TUI の `n` と同じ)。`project` / 最初の `prompt` / `permission_mode` を指定可。設定の Attach が OFF なら使えない |
 
 claude の停止や承認の判断はできません。`ccdash mcp --read-only` にすると上の 4 つ (参照系) と `set_status` だけになります。

@@ -43,7 +43,7 @@ Use the read tools to see the operator's projects, which sessions are running, w
 need the operator (approvals, questions), and what a session has been doing recently.
 Sessions are referred to as "#N" (their short number) or by session id.
 The organizing tools (set_project, rename_project, order_projects, set_project_color, set_title, set_later,
-set_grid, set_pinned, set_color, mark_seen, set_archived) change what the operator sees in ccdash;
+set_grid, set_pinned, set_color, mark_seen, set_archived, archive_finished) change what the operator sees in ccdash;
 projects are just names, created on first use.
 start_session opens a new claude session in a directory (optionally in a project, with a
 first prompt); the operator sees and drives it in ccdash.
@@ -330,6 +330,20 @@ var writeTools = []map[string]any{
 		}, "sessions", "archived"),
 		"annotations": writeHint,
 	},
+	{
+		"name": "archive_finished",
+		"description": "Tidy up: archive the sessions whose claude has exited (never a running one — it never stops claude). " +
+			"Skips pinned and watch-later sessions and ones the operator hasn't looked at yet (NEW / finished unseen / needs you) unless include_unread. " +
+			"Narrow it with sessions, project or idle_hours; dry_run lists what it would archive.",
+		"inputSchema": schema(map[string]any{
+			"sessions":       sessionList,
+			"project":        map[string]any{"type": "string", "description": "only sessions in this project"},
+			"idle_hours":     map[string]any{"type": "number", "description": "only sessions with no activity for this many hours (default 0 = any)"},
+			"include_unread": map[string]any{"type": "boolean", "description": "also archive finished sessions the operator hasn't looked at"},
+			"dry_run":        map[string]any{"type": "boolean", "description": "list the sessions, archive nothing"},
+		}),
+		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true},
+	},
 }
 
 var readTools = []map[string]any{
@@ -396,6 +410,9 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		Later           *bool    `json:"later"`
 		Grid            *bool    `json:"grid"`
 		Pinned          *bool    `json:"pinned"`
+		IdleHours       float64  `json:"idle_hours"`
+		IncludeUnread   bool     `json:"include_unread"`
+		DryRun          bool     `json:"dry_run"`
 		Cwd             string   `json:"cwd"`
 		Prompt          string   `json:"prompt"`
 		PermissionMode  string   `json:"permission_mode"`
@@ -462,6 +479,8 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 			return "", fmt.Errorf("archived is required")
 		}
 		v, err = s.setArchived(ctx, args.Sessions, *args.Archived)
+	case "archive_finished":
+		v, err = s.archiveFinished(ctx, args.Sessions, args.Project, args.IdleHours, args.IncludeUnread, args.DryRun)
 	case "overview":
 		v, err = s.overview(ctx)
 	case "list_projects":
@@ -953,6 +972,63 @@ func (s *Server) setArchived(ctx context.Context, refs []string, archived bool) 
 		}
 	}
 	return map[string]any{"archived": archived, "sessions": refsOf(ss)}, nil
+}
+
+// archiveFinished archives exited sessions (see the tool description);
+// running ones are reported as skipped, never stopped.
+func (s *Server) archiveFinished(ctx context.Context, refs []string, project string, idleHours float64, unread, dryRun bool) (any, error) {
+	var ss []model.Session
+	var err error
+	if len(refs) > 0 {
+		ss, err = s.resolveAll(ctx, refs)
+	} else {
+		ss, err = s.st.ListSessions(ctx, false)
+	}
+	if err != nil {
+		return nil, err
+	}
+	project = strings.TrimSpace(project)
+	cutoff := s.now().Add(-time.Duration(idleHours * float64(time.Hour)))
+	var picked []model.Session
+	skipped := map[string][]string{}
+	skip := func(why string, x model.Session) { skipped[why] = append(skipped[why], refsOf([]model.Session{x})[0]) }
+	for _, x := range ss {
+		switch {
+		case x.Archived, project != "" && x.Project != project:
+			continue
+		case running(x):
+			skip("running", x)
+		case x.Favorite:
+			skip("pinned", x)
+		case x.Later:
+			skip("watch_later", x)
+		case !unread && (x.Unseen || x.Attention != "" || x.PendingCount > 0):
+			skip("unread_or_needs_you", x)
+		case idleHours > 0 && x.LastSeen.After(cutoff):
+			skip("recent_activity", x)
+		default:
+			picked = append(picked, x)
+		}
+	}
+	if !dryRun {
+		for _, x := range picked {
+			if err := s.st.SetArchived(ctx, x.SessionID, true); err != nil {
+				return nil, err
+			}
+		}
+	}
+	rows := make([]sessionRow, len(picked))
+	for i, x := range picked {
+		rows[i] = s.row(x)
+	}
+	out := map[string]any{"dry_run": dryRun, "archived": len(picked), "sessions": rows}
+	if dryRun {
+		out["archived_note"] = "nothing archived (dry_run); these would be"
+	}
+	if len(skipped) > 0 {
+		out["skipped"] = skipped
+	}
+	return out, nil
 }
 
 // spawnWait is how long start_session watches a new spawn for a dialog.

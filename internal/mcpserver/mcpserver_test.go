@@ -78,7 +78,7 @@ func TestServe(t *testing.T) {
 	if r[0].Result.ProtocolVersion != "2025-03-26" {
 		t.Errorf("initialize: %s", lines[0])
 	}
-	if len(r[1].Result.Tools) != 17 {
+	if len(r[1].Result.Tools) != 18 {
 		t.Errorf("tools/list: %s", lines[1])
 	}
 	body := func(i int) string { return r[i].Result.Content[0].Text }
@@ -228,6 +228,56 @@ func TestGridPinColorSeen(t *testing.T) {
 		if _, err := ro.call(ctx, name, json.RawMessage(`{"sessions":["#1"],"grid":true,"pinned":true,"color":"random"}`)); err == nil {
 			t.Errorf("read-only server accepted %s", name)
 		}
+	}
+}
+
+func TestArchiveFinished(t *testing.T) {
+	ctx := context.Background()
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	old := time.Now().Add(-48 * time.Hour)
+	for _, s := range []model.Session{
+		{SessionID: "run", Cwd: "/w", Status: model.StatusIdle},
+		{SessionID: "old", Cwd: "/w", Status: model.StatusStopped, LastSeen: old},
+		{SessionID: "fresh", Cwd: "/w", Status: model.StatusRecent, LastSeen: time.Now()},
+		{SessionID: "pin", Cwd: "/w", Status: model.StatusStopped, LastSeen: old},
+		{SessionID: "unread", Cwd: "/w", Status: model.StatusStopped, LastSeen: old},
+	} {
+		if err := d.UpsertSession(ctx, &s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = d.SetFavorite(ctx, "pin", true)
+	_ = d.SetAttention(ctx, "unread", model.AttentionDone, "")
+	srv := New(store.NewLocal(d), "test", false)
+	call := func(args string) string {
+		out, err := srv.call(ctx, "archive_finished", json.RawMessage(args))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	out := call(`{"idle_hours":24,"dry_run":true}`)
+	if !strings.Contains(out, `"archived": 1`) || !strings.Contains(out, `"session_id": "old"`) {
+		t.Fatalf("dry run: %s", out)
+	}
+	if x, _, _ := d.GetSession(ctx, "old"); x.Archived {
+		t.Fatal("dry run archived")
+	}
+	out = call(`{}`)
+	if !strings.Contains(out, `"archived": 2`) || !strings.Contains(out, `"running"`) || !strings.Contains(out, `"pinned"`) {
+		t.Fatalf("archive: %s", out)
+	}
+	for id, want := range map[string]bool{"run": false, "old": true, "fresh": true, "pin": false, "unread": false} {
+		if x, _, _ := d.GetSession(ctx, id); x.Archived != want {
+			t.Errorf("%s archived = %v", id, x.Archived)
+		}
+	}
+	if _, err := New(store.NewLocal(d), "test", true).call(ctx, "archive_finished", nil); err == nil {
+		t.Error("read-only: want error")
 	}
 }
 
