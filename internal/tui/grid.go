@@ -131,6 +131,7 @@ func (m *model) gridSessions() []int {
 func (m *model) toggleGrid() tea.Cmd {
 	if m.gridOpen {
 		m.gridOpen = false
+		m.closeAllGridLive()
 		return m.loadTailCmd()
 	}
 	tiles := m.gridSessions()
@@ -184,9 +185,14 @@ func (m *model) handleKeyGrid(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 	case "esc", "V":
 		return m.toggleGrid(), true
 	case "enter":
-		// Back to the dashboard on this session — its live pane when it
-		// runs in ccdash.
+		// A live tile: type into it in place.
+		if l := m.focusedGridLive(); l != nil && l.client != nil && !l.exited {
+			m.gridTyping = true
+			return nil, true
+		}
+		// Else back to the dashboard on this session.
 		m.gridOpen = false
+		m.closeAllGridLive()
 		if m.liveWantKey() != "" {
 			m.liveFocus = true
 		}
@@ -216,18 +222,21 @@ func (m *model) handleKeyGrid(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 	return nil, true
 }
 
-// clickGrid focuses the tile under a left click.
+// clickGrid focuses the tile under a left click; a click on the focused
+// live tile starts typing into it.
 func (m *model) clickGrid(mm tea.Mouse) tea.Cmd {
-	bodyTop, bodyH := m.bodyLayout()
+	i, _, ok := m.gridTileAt(mm)
+	if !ok {
+		return nil
+	}
 	tiles := m.gridSessions()
-	for i, r := range gridRects(len(tiles), m.width, bodyH) {
-		if mm.X >= r.x && mm.X < r.x+r.w && mm.Y >= bodyTop+r.y && mm.Y < bodyTop+r.y+r.h {
-			if m.selSess != tiles[i] {
-				m.selSess = tiles[i]
-				return m.markSelectedSeen()
-			}
-			return nil
-		}
+	if m.selSess != tiles[i] {
+		m.selSess = tiles[i]
+		m.gridTyping = false
+		return m.markSelectedSeen()
+	}
+	if l := m.focusedGridLive(); l != nil && l.client != nil && !l.exited {
+		m.gridTyping = true
 	}
 	return nil
 }
@@ -242,7 +251,7 @@ func (m *model) gridLoadCmd() tea.Cmd {
 	for _, i := range m.gridSessions() {
 		s := m.sessions[i]
 		keep[s.SessionID] = true
-		if s.TranscriptPath == "" {
+		if s.TranscriptPath == "" || m.gridLiveKey(s) != "" {
 			continue
 		}
 		prev := m.gridTails[s.SessionID]
@@ -304,11 +313,12 @@ func (m *model) renderGridBody(height int) string {
 	return strings.Join(canvas, "\n")
 }
 
-// renderGridTile is one tile: a border (the session's color when
-// focused), the row's header (status, #N, sweeping title), the work line
-// or where it runs, then the newest transcript lines.
+// renderGridTile is one tile, exactly w × h cells: a frame (the
+// session's color when focused) whose top edge carries the working light,
+// a header (status, #N, title, then what it's doing), and either the live
+// screen of a session hosted here or the newest transcript lines.
 func (m *model) renderGridTile(s mdl.Session, focused bool, w, h int) string {
-	innerW, innerH := max(4, w-4), max(1, h-2)
+	innerW := max(1, w-2)
 
 	dot := renderStatusDot(s.Status, m.animTick)
 	switch {
@@ -317,7 +327,7 @@ func (m *model) renderGridTile(s mdl.Session, focused bool, w, h int) string {
 	case s.Attention == mdl.AttentionDone:
 		dot = statusIdle.Bold(true).Render("✓")
 	}
-	head := dot + " "
+	head := " " + dot + " "
 	if ref := s.Ref(); ref != "" {
 		head += refStyle.Render(ref) + " "
 	}
@@ -328,15 +338,9 @@ func (m *model) renderGridTile(s mdl.Session, focused bool, w, h int) string {
 	if title == "" {
 		title = "(no prompt yet)"
 	}
-	title = shorten(title, max(4, innerW-ansi.StringWidth(head)))
 	titleStyle := lipgloss.NewStyle()
 	if focused {
 		titleStyle = titleStyle.Bold(true).Foreground(lipgloss.Color("15"))
-	}
-	if s.Status == mdl.StatusActive && m.settings.WorkAnim {
-		head += sweep(title, m.animTick, titleStyle)
-	} else {
-		head += titleStyle.Render(title)
 	}
 
 	var sub string
@@ -346,52 +350,134 @@ func (m *model) renderGridTile(s mdl.Session, focused bool, w, h int) string {
 		if s.PendingCount > 0 {
 			reason = "approval pending — a allow · d deny"
 		}
-		sub = pendingStyle.Render(shorten("? "+reason, innerW))
+		sub = pendingStyle.Render("? " + reason)
 	case workLine(s, time.Now()) != "":
-		sub = statusActive.Render(shorten(workLine(s, time.Now()), innerW))
+		sub = statusActive.Render(workLine(s, time.Now()))
 	default:
 		where := baseLast(s.Cwd)
 		if s.Branch != "" && s.Branch != "HEAD" {
 			where += ":" + s.Branch
 		}
-		sub = subtitleStyle.Render(shorten(where+" · "+m.sessionTime(s.LastSeen), innerW))
+		sub = subtitleStyle.Render(where + " · " + m.sessionTime(s.LastSeen))
 	}
 
-	lines := []string{head, sub}
-	if room := innerH - len(lines); room > 0 {
-		var body []string
+	live := m.gridLive[m.gridLiveKey(s)]
+	if live == nil && m.gridLiveKey(s) != "" {
+		if _, ok := tileScreen(rect{0, 0, w, h}); ok {
+			live = m.livePlaceholder(m.gridLiveKey(s))
+		}
+	}
+	typing := focused && m.gridTyping && live != nil
+
+	var body []string
+	if live != nil {
+		// One header line: title, then the state, then the hint.
+		hint := ""
+		switch {
+		case typing:
+			hint = statusActive.Render("typing → claude · ctrl+] back")
+		case live.exited:
+			hint = statusStop.Render("ended")
+		case focused:
+			hint = subtitleStyle.Render("enter to type")
+		}
+		right := sub
+		if hint != "" {
+			right += subtitleStyle.Render(" · ") + hint
+		}
+		tw := max(4, innerW-ansi.StringWidth(head)-ansi.StringWidth(right)-2)
+		body = append(body, head+titleStyle.Render(shorten(title, tw))+"  "+right)
+		for y := 0; y < h-3; y++ {
+			row := ""
+			if y < len(live.rows) {
+				row = live.rows[y]
+			}
+			body = append(body, row)
+		}
+	} else {
+		body = append(body, head+titleStyle.Render(shorten(title, max(4, innerW-ansi.StringWidth(head)))), " "+sub)
+		var tail []string
 		if t := m.gridTails[s.SessionID]; t != nil {
-			body = tailLines(t.msgs, innerW)
+			tail = tailLines(t.msgs, max(4, innerW-2))
 		}
-		if len(body) == 0 {
-			body = []string{subtitleStyle.Render("(no messages yet)")}
+		if len(tail) == 0 {
+			tail = []string{subtitleStyle.Render("(no messages yet)")}
 		}
-		if len(body) > room {
-			body = body[len(body)-room:]
+		if room := h - 2 - len(body); len(tail) > room {
+			tail = tail[len(tail)-max(0, room):]
 		}
-		lines = append(lines, body...)
-	}
-	for i, l := range lines {
-		if wd := ansi.StringWidth(l); wd > innerW {
-			lines[i] = ansi.Truncate(l, innerW, "")
+		for _, l := range tail {
+			body = append(body, " "+l)
 		}
 	}
 
-	border := lipgloss.Color("240")
+	border := "240"
 	if focused {
-		border = lipgloss.Color("15")
+		border = "15"
 		if c := s.Color(); c != "" {
-			border = lipgloss.Color(c)
+			border = c
 		}
 	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border).
-		Padding(0, 1).
-		Width(w - 2).
-		Height(h - 2).
-		MaxHeight(h).
-		Render(strings.Join(lines, "\n"))
+	if typing {
+		border = "42"
+	}
+	glow := s.Status == mdl.StatusActive && m.settings.WorkAnim
+	return tileFrame(body, w, h, lipgloss.Color(border), glow, m.animTick)
+}
+
+// edgeColors is the light on a working tile's top edge, tail → head: the
+// beam's colors, each over a couple of cells.
+var edgeColors = []string{"#38bdf8", "#38bdf8", "#a78bfa", "#a78bfa", "#f472b6", "#f472b6", "#fbbf24", "#fbbf24"}
+
+// tileFrame draws body inside a rounded frame of exactly w × h cells.
+// Rows are padded / cut to the inner width, so live emulator rows go in
+// as they are. With glow the top edge carries a light that runs left to
+// right (the portal beam's TUI cousin), two cells a tick.
+func tileFrame(body []string, w, h int, border lipgloss.Color, glow bool, tick int) string {
+	inner := max(0, w-2)
+	bs := lipgloss.NewStyle().Foreground(border)
+	top := bs.Render("╭" + strings.Repeat("─", inner) + "╮")
+	if glow && inner > 0 {
+		period := inner + len(edgeColors) + 2*sweepGap
+		head := ((tick*2)%period + period) % period
+		var b strings.Builder
+		b.WriteString(bs.Render("╭"))
+		run := 0
+		flush := func() {
+			if run > 0 {
+				b.WriteString(bs.Render(strings.Repeat("─", run)))
+				run = 0
+			}
+		}
+		for x := 0; x < inner; x++ {
+			d := head - x
+			if d < 0 || d >= len(edgeColors) {
+				run++
+				continue
+			}
+			flush()
+			c := edgeColors[len(edgeColors)-1-d]
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Bold(true).Render("━"))
+		}
+		flush()
+		b.WriteString(bs.Render("╮"))
+		top = b.String()
+	}
+	side := bs.Render("│")
+	lines := make([]string, 0, h)
+	lines = append(lines, top)
+	for i := 0; i < h-2; i++ {
+		row := ""
+		if i < len(body) {
+			row = body[i]
+		}
+		lines = append(lines, side+fitWidth(row, inner)+side)
+	}
+	lines = append(lines, bs.Render("╰"+strings.Repeat("─", inner)+"╯"))
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func indexOf(xs []int, v int) int {

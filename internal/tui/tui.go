@@ -292,6 +292,11 @@ type model struct {
 	gridOpen  bool
 	gridMarks map[string]bool
 	gridTails map[string]*gridTail
+	// gridLive are the live tiles' screen streams by ptyKey (gridlive.go);
+	// gridTyping sends the keyboard to the focused live tile.
+	gridLive       map[string]*liveScreen
+	gridConnecting map[string]bool
+	gridTyping     bool
 	// bangConfirm asks before typing one of bangCmds (bangSel) into the
 	// hosted PTY bangKey (see bang.go).
 	bangConfirm bool
@@ -706,6 +711,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if sync := m.syncLive(); sync != nil {
 		cmd = tea.Batch(cmd, sync)
 	}
+	if sync := m.syncGrid(); sync != nil {
+		cmd = tea.Batch(cmd, sync)
+	}
 	return mm, cmd
 }
 
@@ -894,6 +902,10 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleLiveConnected(msg)
 	case liveFramesMsg:
 		return m, m.handleLiveFrames(msg)
+	case gridConnectedMsg:
+		return m, m.handleGridConnected(msg)
+	case gridFramesMsg:
+		return m, m.handleGridFrames(msg)
 	case tea.MouseWheelMsg:
 		return m.handleMouse(msg)
 	case tea.MouseClickMsg:
@@ -1034,6 +1046,14 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // or into whichever inline editor is open. Newlines are flattened for the
 // single-line editors.
 func (m *model) handlePaste(content string) (tea.Model, tea.Cmd) {
+	if m.pane == paneSessions && m.gridOpen && m.gridTyping {
+		if l := m.focusedGridLive(); l != nil && l.client != nil && !l.exited {
+			if err := l.client.Paste(content); err != nil {
+				m.err = err
+			}
+		}
+		return m, nil
+	}
 	if m.pane == paneSessions && m.liveFocus {
 		if live := m.liveForCurrent(); live != nil {
 			m.handleLivePaste(content, live)
@@ -1075,6 +1095,10 @@ func (m *model) handleMouse(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	mm := msg.Mouse()
+	if m.pane == paneSessions && m.gridOpen {
+		m.gridWheel(mm)
+		return m, nil
+	}
 	if m.forwardLiveWheel(mm) {
 		return m, nil
 	}
@@ -1116,6 +1140,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.bangConfirm {
 		return m.handleKeyBang(msg)
+	}
+	if m.pane == paneSessions && m.gridOpen && m.gridTyping {
+		return m, m.handleGridTypingKey(msg)
 	}
 	if m.pane == paneSessions && m.liveFocus {
 		if live := m.liveForCurrent(); live != nil {
@@ -2906,6 +2933,9 @@ func (m *model) View() tea.View {
 	// Place the terminal's real cursor inside the live pane while it has
 	// focus — that's what lets an OS-level IME anchor its pre-edit text.
 	v.Cursor = m.liveCursor()
+	if m.gridOpen {
+		v.Cursor = m.gridCursor()
+	}
 	if m.editingNewSession {
 		box, cx, cy := m.dirPickerBox()
 		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
@@ -3180,8 +3210,10 @@ func (m *model) renderFooter() string {
 			}
 		}
 	}
-	if m.pane == paneSessions && m.gridOpen {
-		keys = "hjkl/tab move  enter open  space choose  V/esc close  e ! cmd  a/A/d allow/keep/deny  o transcript  ? help  q quit"
+	if m.pane == paneSessions && m.gridOpen && m.gridTyping {
+		keys = "keys → claude  ctrl+] / ctrl+d back to the grid  (mouse wheel scrolls the tile)"
+	} else if m.pane == paneSessions && m.gridOpen {
+		keys = "hjkl/tab move  enter type / open  space choose  V/esc close  e ! cmd  a/A/d allow/keep/deny  o transcript  ? help  q quit"
 	}
 	if m.showArchived {
 		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  ? help  q quit"

@@ -22,6 +22,7 @@ import (
 	"github.com/charmbracelet/x/vt"
 
 	"github.com/takumanakagame/ccmanage/internal/auth"
+	mdl "github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/screen"
 )
@@ -187,7 +188,11 @@ func (m *model) desiredLiveKey() string {
 	if len(m.sessions) == 0 || m.selSess < 0 || m.selSess >= len(m.sessions) {
 		return ""
 	}
-	s := m.sessions[m.selSess]
+	return m.liveKeyFor(m.sessions[m.selSess])
+}
+
+// liveKeyFor is the ptyKey hosting s, or "" when s doesn't run here.
+func (m *model) liveKeyFor(s mdl.Session) string {
 	if s.SessionID != "" && m.ptyAlive[s.SessionID] {
 		return s.SessionID
 	}
@@ -290,21 +295,27 @@ func (m *model) connectLiveCmd(key string, cols, rows int) tea.Cmd {
 // Update instead of one render per frame.
 func waitLiveCmd(c *screen.Client) tea.Cmd {
 	return func() tea.Msg {
-		f, ok := <-c.Frames
-		if !ok {
-			return liveFramesMsg{key: c.Key, frames: []screen.Frame{{Type: screen.FrameTypeClosed}}}
-		}
-		frames := []screen.Frame{f}
-		for {
-			select {
-			case f2, ok := <-c.Frames:
-				if !ok {
-					return liveFramesMsg{key: c.Key, frames: frames}
-				}
-				frames = append(frames, f2)
-			default:
-				return liveFramesMsg{key: c.Key, frames: frames}
+		return liveFramesMsg{key: c.Key, frames: drainFrames(c)}
+	}
+}
+
+// drainFrames waits for the next frame and takes whatever else has piled
+// up behind it; a closed stream ends in a FrameTypeClosed.
+func drainFrames(c *screen.Client) []screen.Frame {
+	f, ok := <-c.Frames
+	if !ok {
+		return []screen.Frame{{Type: screen.FrameTypeClosed}}
+	}
+	frames := []screen.Frame{f}
+	for {
+		select {
+		case f2, ok := <-c.Frames:
+			if !ok {
+				return frames
 			}
+			frames = append(frames, f2)
+		default:
+			return frames
 		}
 	}
 }
