@@ -47,6 +47,52 @@ func TestBeamRowKeepsText(t *testing.T) {
 	}
 }
 
+func TestBeamRowPingPong(t *testing.T) {
+	const w = 40
+	head := beamStops[len(beamStops)-1]
+	headAt := func(tick int) int {
+		x := -1
+		for i, c := range rowBeam(w, tick) {
+			if c == head && i > x {
+				x = i
+			}
+		}
+		return x
+	}
+	// Out to the right in the first half of the loop, back in the second.
+	if a, b := headAt(2), headAt(10); a < 0 || b <= a {
+		t.Fatalf("not moving right: %d then %d", a, b)
+	}
+	if a, b := headAt(16), headAt(24); a < 0 || b >= a {
+		t.Fatalf("not coming back: %d then %d", a, b)
+	}
+	// The turn is stable: the same tick always lights the same cells.
+	for tick := 0; tick < beamLoopTicks; tick++ {
+		a := rowBeam(w, tick)
+		for i := 0; i < 5; i++ {
+			if !reflect.DeepEqual(a, rowBeam(w, tick)) {
+				t.Fatalf("tick %d flickers", tick)
+			}
+		}
+	}
+}
+
+func TestBeamShade(t *testing.T) {
+	if got := beamShade(0, 20); got != beamStops[0] {
+		t.Fatalf("tail %s", got)
+	}
+	if got := beamShade(19, 20); got != beamStops[len(beamStops)-1] {
+		t.Fatalf("head %s", got)
+	}
+	seen := map[string]bool{}
+	for r := 0; r < 20; r++ {
+		seen[beamShade(r, 20)] = true
+	}
+	if len(seen) < 16 {
+		t.Fatalf("only %d shades over 20 cells", len(seen))
+	}
+}
+
 func TestWorkLine(t *testing.T) {
 	now := time.Now()
 	s := mdl.Session{Status: mdl.StatusActive, TurnStartedAt: now.Add(-83 * time.Second), Tool: "Bash", ToolSummary: "go test ./..."}

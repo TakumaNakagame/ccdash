@@ -3058,6 +3058,9 @@ var (
 	footerStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	laterHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("214"))
 	newStyle           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11"))
+	// gridBadgeStyle marks a session chosen for the grid (space), in the
+	// working light's sky blue.
+	gridBadgeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("#38bdf8"))
 	paneTitle          = lipgloss.NewStyle().Bold(true).Padding(0, 1).Background(lipgloss.Color("237")).Foreground(lipgloss.Color("15"))
 	paneTitleDim       = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("8"))
 	errStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
@@ -4149,6 +4152,10 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if s.Unseen && !selected {
 		titleBudget -= 4 // "NEW "
 	}
+	gridMarked := m.gridMarks[s.SessionID]
+	if gridMarked {
+		titleBudget -= 7 // " GRID " + space
+	}
 	// Title generation in flight: a spinner in front of the title, so it
 	// shows even when line 2 is cut short.
 	titling := ""
@@ -4180,6 +4187,9 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		// Progress since the operator last looked (Session.Unseen).
 		titleStyled = newStyle.Render("NEW") + " " + titleStyled
 	}
+	if gridMarked {
+		titleStyled = gridBadgeStyle.Render(" GRID ") + " " + titleStyled
+	}
 	line1 := fmt.Sprintf("%s %s %s %s", marker, statusDot, subtitleStyle.Render(age), titleStyled)
 
 	// Line 2: repo:branch · session-id · pending
@@ -4192,9 +4202,6 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		parts = append(parts, "tmux:"+s.Pane)
 	} else if s.ProcPID != 0 {
 		parts = append(parts, fmt.Sprintf("pid:%d", s.ProcPID))
-	}
-	if m.gridMarks[s.SessionID] {
-		parts = append(parts, "grid")
 	}
 	if s.PendingCount > 0 {
 		parts = append(parts, pendingStyle.Render(fmt.Sprintf("⚠%d pending", s.PendingCount)))

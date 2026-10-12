@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -13,11 +14,11 @@ import (
 )
 
 // The TUI twin of the portal's working beam (runBeam in web/app.js): a
-// comet in the beam's colors runs round the outer edge of a working
-// session — a grid tile's frame, or the two lines of a list row — once
-// every beamLoopTicks, whatever the size, like the portal's constant-time
-// loop. Colors are tail → head.
-var beamColors = []string{"#38bdf8", "#a78bfa", "#f472b6", "#fbbf24"}
+// comet of color runs round a grid tile's frame, or back and forth across
+// a list row, once every loop whatever the size, like the portal's
+// constant-time loop. Its cells shade through beamStops, tail → head, one
+// shade per cell.
+var beamStops = []string{"#2dd4bf", "#38bdf8", "#60a5fa", "#a78bfa", "#e879f9", "#f472b6", "#fb923c", "#fbbf24"}
 
 // beamLoopTicks is one lap of a list row in animTicks (28 × 75 ms ≈
 // 2.1 s); a grid tile's frame is far longer, so its lap takes twice that
@@ -27,41 +28,87 @@ const (
 	gridLoopTicks = 2 * beamLoopTicks
 )
 
-// beamCells returns the lit cells of a perimeter of n cells at tick, one
-// lap per loop ticks:
-// perimeter index → color. Every lit row moves in step, and the phase
-// follows the shared tick so a redraw carries on where it was.
-func beamCells(tick, n, loop int) map[int]string {
+// beamRanks returns the lit cells of a perimeter of n cells at tick, one
+// lap per loop ticks: perimeter index → rank (0 = the tail end, length-1
+// = the head). Every lit row moves in step, and the phase follows the
+// shared tick so a redraw carries on where it was.
+func beamRanks(tick, n, loop int) (ranks map[int]int, length int) {
 	if n <= 0 {
-		return nil
+		return nil, 0
 	}
-	length := min(max(n/6, 6), 24, n)
+	length = min(max(n/4, 8), 32, n)
 	t := ((tick % loop) + loop) % loop
 	head := t * n / loop
-	out := make(map[int]string, length)
+	ranks = make(map[int]int, length)
 	for d := 0; d < length; d++ {
-		out[((head-d)%n+n)%n] = beamColors[(length-1-d)*len(beamColors)/length]
+		ranks[((head-d)%n+n)%n] = length - 1 - d
+	}
+	return ranks, length
+}
+
+// beamCells is beamRanks with each cell's shade.
+func beamCells(tick, n, loop int) map[int]string {
+	ranks, length := beamRanks(tick, n, loop)
+	out := make(map[int]string, len(ranks))
+	for p, r := range ranks {
+		out[p] = beamShade(r, length)
 	}
 	return out
 }
 
-// beamRow lights a list row's outer edge: its two lines (each exactly
-// width cells) are the top and bottom of a 2-line box, so the comet runs
-// left to right along line 1 and back along line 2. Lit cells take the
-// beam color as background; the text on them stays readable in black.
+// beamShade is the color of rank r in a comet of length cells: beamStops
+// blended evenly from the tail (r = 0) to the head (r = length-1).
+func beamShade(r, length int) string {
+	if length <= 1 {
+		return beamStops[len(beamStops)-1]
+	}
+	f := float64(r) / float64(length-1) * float64(len(beamStops)-1)
+	i := min(int(f), len(beamStops)-2)
+	return blendHex(beamStops[i], beamStops[i+1], f-float64(i))
+}
+
+// blendHex mixes two "#rrggbb" colors, t = 0 → a, 1 → b.
+func blendHex(a, b string, t float64) string {
+	var ar, ag, ab, br, bg, bb int
+	fmt.Sscanf(a, "#%02x%02x%02x", &ar, &ag, &ab)
+	fmt.Sscanf(b, "#%02x%02x%02x", &br, &bg, &bb)
+	mix := func(x, y int) int { return x + int(math.Round(float64(y-x)*t)) }
+	return fmt.Sprintf("#%02x%02x%02x", mix(ar, br), mix(ag, bg), mix(ab, bb))
+}
+
+// beamRow lights a list row: a band across both of its lines runs left
+// to right and back, one round trip per beamLoopTicks, its tail trailing
+// the way it came. Lit cells take the beam color as background; the text
+// on them stays readable in black. Both lines are exactly width cells.
 func beamRow(line1, line2 string, width, tick int) (string, string) {
 	if width <= 0 {
 		return line1, line2
 	}
-	top, bottom := map[int]string{}, map[int]string{}
-	for p, c := range beamCells(tick, 2*width, beamLoopTicks) {
-		if p < width {
-			top[p] = c
-		} else {
-			bottom[2*width-1-p] = c
+	lit := rowBeam(width, tick)
+	return paintCells(line1, lit), paintCells(line2, lit)
+}
+
+// rowBeam is beamRow's lit columns → color.
+func rowBeam(width, tick int) map[int]string {
+	ranks, length := beamRanks(tick, 2*width, beamLoopTicks)
+	best := map[int]int{}
+	for p, r := range ranks {
+		// Position p on a 2·width "track": out along the row, then back.
+		x := p
+		if p >= width {
+			x = 2*width - 1 - p
+		}
+		// At the turn the tail folds back over the head: the cell nearer
+		// the head wins, so it never flickers.
+		if old, ok := best[x]; !ok || r > old {
+			best[x] = r
 		}
 	}
-	return paintCells(line1, top), paintCells(line2, bottom)
+	lit := make(map[int]string, len(best))
+	for x, r := range best {
+		lit[x] = beamShade(r, length)
+	}
+	return lit
 }
 
 // paintCells gives the cells of row in lit (column → color) a background
