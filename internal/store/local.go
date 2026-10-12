@@ -8,6 +8,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/usage"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -142,6 +143,10 @@ func (l *Local) StartSession(ctx context.Context, req StartRequest) (string, err
 		return "", err
 	}
 	return out.PtyKey, nil
+}
+
+func (l *Local) SendInput(ctx context.Context, ptyKey string, in Input) error {
+	return l.postCollector(ctx, "/pty/"+url.PathEscape(ptyKey)+"/input", in, nil)
 }
 
 // WaitingSpawns reads the collector's GET /pty.

@@ -286,6 +286,12 @@ type model struct {
 	// dupSessionID (see dupconfirm.go).
 	dupConfirm   bool
 	dupSessionID string
+	// bangConfirm asks before typing one of bangCmds (bangSel) into the
+	// hosted PTY bangKey (see bang.go).
+	bangConfirm bool
+	bangKey     string
+	bangCmds    []string
+	bangSel     int
 	// modalBtns are the on-screen buttons of the open confirmation,
 	// recorded by View (see modalbtn.go).
 	modalBtns []modalButton
@@ -709,6 +715,10 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case usageMsg:
 		t := msg.today
 		m.usageToday = &t
+	case bangSentMsg:
+		if msg.err != nil {
+			m.flash = "! command failed: " + msg.err.Error()
+		}
 	case animTickMsg:
 		m.animTick++
 		return m, animTickCmd()
@@ -1090,6 +1100,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.dupConfirm {
 		return m.handleKeyDupConfirm(msg)
 	}
+	if m.bangConfirm {
+		return m.handleKeyBang(msg)
+	}
 	if m.pane == paneSessions && m.liveFocus {
 		if live := m.liveForCurrent(); live != nil {
 			return m.handleLiveKey(msg, live)
@@ -1210,6 +1223,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.attachFullscreen()
 	case "o":
 		return m, m.openTranscript()
+	case "e":
+		return m, m.openBang()
 	case "a":
 		if !m.settings.ApproveEnabled {
 			m.flash = "approval blocking is OFF (settings ',')"
@@ -2888,6 +2903,9 @@ func (m *model) View() tea.View {
 	if m.dupConfirm {
 		confirmBox(m.dupConfirmBox())
 	}
+	if m.bangConfirm {
+		confirmBox(m.bangBox())
+	}
 	if m.restartConfirm {
 		confirmBox(m.restartBox())
 	}
@@ -4057,14 +4075,18 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		titleBudget = 10
 	}
 	titleText := shorten(title, titleBudget)
-	titleStyled := titleText
+	titleStyle := lipgloss.NewStyle()
 	switch {
 	case selected:
-		titleStyled = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(titleText)
+		titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
 	case s.PendingCount > 0:
-		titleStyled = pendingRowStyle.Render(titleText)
+		titleStyle = pendingRowStyle
 	case s.DisplayTitle() == "":
-		titleStyled = subtitleStyle.Render(titleText)
+		titleStyle = subtitleStyle
+	}
+	titleStyled := titleStyle.Render(titleText)
+	if s.Status == mdl.StatusActive && m.settings.WorkAnim {
+		titleStyled = sweep(titleText, m.animTick, titleStyle)
 	}
 	if titling != "" {
 		titleStyled = pendingStyle.Render(titling) + titleStyled
@@ -4110,6 +4132,16 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		metaBudget = 10
 	}
 	line2 := indent + subtitleStyle.Render(shorten(meta, metaBudget))
+	if w := workLine(s, time.Now()); w != "" {
+		// While it works, what it's doing beats where it is: it leads,
+		// and the rest gets what's left of the line.
+		w = shorten(w, metaBudget)
+		rest := metaBudget - runewidth.StringWidth(w) - 3
+		line2 = indent + statusActive.Render(w)
+		if rest >= 10 {
+			line2 += subtitleStyle.Render(" · " + shorten(meta, rest))
+		}
+	}
 
 	if selected {
 		line1 = selectedRow.Render(padRight(line1, width))

@@ -4,6 +4,8 @@ Every key is also listed in the app: press `?`.
 
 ## Sessions view (default)
 
+A working session's spinner is joined by a light sweeping across its title (setting "Working animation") and, on line 2, what it is doing: the tool in flight and how long the turn has run (`Bash: go test ./... · 1m23s`, or `thinking · 12s` between tools). Both come from ccdash's hooks, so sessions on a machine without them only spin.
+
 | Key | Action |
 | --- | --- |
 | `↑` `↓` / `j` `k` | move selection |
@@ -24,6 +26,7 @@ Every key is also listed in the app: press `?`.
 | `x` | archive / unarchive |
 | `X` | toggle archive view (operator-archived sessions) |
 | `o` | full-screen transcript viewer |
+| `e` | run a `! command` from the latest reply (the way Claude asks you to run something): pick one (`j` `k` / `1`-`9`) and `y` types `!` + the command into the ccdash-hosted claude. Needs `attach_enabled` |
 | `ctrl+t` | generate short titles with `claude -p` — `y` for the selected session, `a` for the recent batch in one call |
 | `n` | start a new claude session (directory picker) |
 | `S` | run a skill / slash command in a new session |

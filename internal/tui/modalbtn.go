@@ -97,7 +97,7 @@ func (m *model) resolveModalKey(msg tea.KeyPressMsg) string {
 // any. ok reports whether a modal with buttons is showing (so the click
 // shouldn't fall through to the dashboard even when it misses).
 func (m *model) clickModalButton(mm tea.Mouse) (cmd tea.Cmd, ok bool) {
-	if !m.dupConfirm && !m.restartConfirm {
+	if !m.dupConfirm && !m.restartConfirm && !m.bangConfirm {
 		return nil, false
 	}
 	for _, b := range m.modalBtns {

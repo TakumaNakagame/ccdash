@@ -67,6 +67,13 @@ type Session struct {
 	// Later marks "watch later" (LaterAt = when, most recent first).
 	Later   bool      `json:"later,omitempty"`
 	LaterAt time.Time `json:"later_at,omitzero"`
+	// What an active session is doing, from its hook events (read time,
+	// db.fillWork): when the current turn started, and the tool in flight
+	// (empty between tools — Claude is thinking or writing).
+	TurnStartedAt time.Time `json:"turn_started_at,omitzero"`
+	Tool          string    `json:"tool,omitempty"`
+	ToolSummary   string    `json:"tool_summary,omitempty"`
+	ToolAt        time.Time `json:"tool_at,omitzero"`
 }
 
 // Project is an operator-named set of sessions (projects table).

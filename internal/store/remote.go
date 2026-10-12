@@ -220,6 +220,10 @@ func (r *Remote) StartSession(ctx context.Context, req StartRequest) (string, er
 	return out.PtyKey, nil
 }
 
+func (r *Remote) SendInput(ctx context.Context, ptyKey string, in Input) error {
+	return r.doJSON(ctx, 10*time.Second, http.MethodPost, "/pty/"+url.PathEscape(ptyKey)+"/input", nil, in, nil)
+}
+
 // WaitingSpawns reads the collector's GET /pty.
 func (r *Remote) WaitingSpawns(ctx context.Context) ([]WaitingSpawn, error) {
 	var rows []ptyRow

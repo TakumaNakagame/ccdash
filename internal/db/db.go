@@ -473,7 +473,53 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		}
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for i := range out {
+		if err := d.fillWork(ctx, &out[i]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// fillWork sets TurnStartedAt / Tool / ToolSummary / ToolAt on an active
+// session from its hook events: when the current turn's prompt came in,
+// and the tool in flight (a pre_tool with no post_tool after it). Rows
+// that aren't active, or machines without ccdash hooks, get nothing.
+func (d *DB) fillWork(ctx context.Context, s *model.Session) error {
+	if s.Status != model.StatusActive {
+		return nil
+	}
+	var turn sql.NullInt64
+	if err := d.sql.QueryRowContext(ctx, `
+		SELECT MAX(ts) FROM events WHERE session_id = ? AND event_type = ?
+	`, s.SessionID, string(model.EventUserPrompt)).Scan(&turn); err != nil {
+		return err
+	}
+	if turn.Valid {
+		s.TurnStartedAt = time.Unix(turn.Int64, 0).UTC()
+	}
+	var typ, tool, summary string
+	var ts int64
+	err := d.sql.QueryRowContext(ctx, `
+		SELECT event_type, COALESCE(tool,''), COALESCE(summary,''), ts FROM events
+		WHERE session_id = ? AND ts >= ? AND event_type IN (?, ?, ?, ?)
+		ORDER BY ts DESC, id DESC LIMIT 1
+	`, s.SessionID, turn.Int64, string(model.EventPreTool), string(model.EventPostTool),
+		string(model.EventPostToolFailure), string(model.EventStop)).Scan(&typ, &tool, &summary, &ts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if model.EventType(typ) == model.EventPreTool {
+		s.Tool, s.ToolSummary, s.ToolAt = tool, summary, time.Unix(ts, 0).UTC()
+	}
+	return nil
 }
 
 // GetSession fetches a single session row by id. ok is false when no row
@@ -530,6 +576,9 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 	finishSeen(&s, model.SessionStatus(status), actAt, seenAt)
 	if laterAt > 0 {
 		s.Later, s.LaterAt = true, time.UnixMilli(laterAt).UTC()
+	}
+	if err := d.fillWork(ctx, &s); err != nil {
+		return model.Session{}, false, err
 	}
 	return s, true, nil
 }

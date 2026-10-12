@@ -41,6 +41,16 @@ type StartRequest struct {
 	PermissionMode string `json:"permissionMode,omitempty"`
 }
 
+// Input is what POST /pty/{key}/input types into a hosted claude: Keys
+// raw, then Text (bracketed paste when multi-line or Paste), then Enter
+// when Submit.
+type Input struct {
+	Keys   string `json:"keys,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Submit bool   `json:"submit,omitempty"`
+	Paste  bool   `json:"paste,omitempty"`
+}
+
 // Store is implemented by Local (internal/store/local.go) and Remote
 // (internal/store/remote.go). See the package doc for the split.
 type Store interface {
@@ -89,6 +99,9 @@ type Store interface {
 	// DecideApproval this always goes over HTTP: the PTY lives in the
 	// collector process.
 	StartSession(ctx context.Context, req StartRequest) (string, error)
+	// SendInput types into the hosted PTY ptyKey (POST /pty/{key}/input),
+	// over HTTP for the same reason as StartSession.
+	SendInput(ctx context.Context, ptyKey string, in Input) error
 	// WaitingSpawns lists hosted claudes that have no session yet and wait
 	// on a dialog (the folder-trust question in a new folder) — from the
 	// collector's GET /pty, so also over HTTP.

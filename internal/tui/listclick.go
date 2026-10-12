@@ -18,7 +18,7 @@ const doubleClickWindow = 400 * time.Millisecond
 func (m *model) modalOpen() bool {
 	return m.pane != paneSessions ||
 		m.editingTitle || m.editingGroup || m.editingSearch ||
-		m.editingNewSession || m.editingSkill || m.restartConfirm || m.dupConfirm || m.helpOpen ||
+		m.editingNewSession || m.editingSkill || m.restartConfirm || m.dupConfirm || m.bangConfirm || m.helpOpen ||
 		m.awaitGroupArchiveConfirm || m.awaitMkdirConfirm || m.awaitRestartSessionConfirm
 }
 

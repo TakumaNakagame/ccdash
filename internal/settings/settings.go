@@ -32,6 +32,7 @@ type Settings struct {
 	AutoRepoTabs   bool
 	BellOnPending  bool
 	NewestAtBottom bool // session list with newest sessions at the bottom
+	WorkAnim       bool // a light sweeping across the titles of working sessions
 
 	// LayoutMode is one of "auto" / "vertical" / "horizontal". "auto" picks
 	// vertical on narrow terminals so 4K-half windows do the right thing
@@ -89,6 +90,7 @@ const (
 	keyAutoRepoTabs   = "auto_repo_tabs"
 	keyBellOnPending  = "bell_on_pending"
 	keyNewestAtBottom = "newest_at_bottom"
+	keyWorkAnim       = "work_anim"
 	keyLayoutMode     = "layout_mode"
 	// KeyVerticalAutoCols is exported so the TUI can annotate this row
 	// with the live terminal width.
@@ -135,6 +137,7 @@ func Defaults() Settings {
 		AutoRepoTabs:     true,
 		BellOnPending:    true,
 		NewestAtBottom:   false,
+		WorkAnim:         true,
 		LayoutMode:       "auto",
 		VerticalAutoCols: 100,
 		ApproveEnabled:   true,
@@ -171,6 +174,7 @@ func loadPairs(out *Settings) []loadPair {
 		{keyAutoRepoTabs, func(v string) { out.AutoRepoTabs = parseBool(v, out.AutoRepoTabs) }},
 		{keyBellOnPending, func(v string) { out.BellOnPending = parseBool(v, out.BellOnPending) }},
 		{keyNewestAtBottom, func(v string) { out.NewestAtBottom = parseBool(v, out.NewestAtBottom) }},
+		{keyWorkAnim, func(v string) { out.WorkAnim = parseBool(v, out.WorkAnim) }},
 		{keyLayoutMode, func(v string) {
 			switch v {
 			case "auto", "vertical", "horizontal":
@@ -340,6 +344,7 @@ func AllSpecs() []Spec {
 		{Key: keyAutoRepoTabs, Label: "Auto repo tabs", Help: "Include repo names in the Tab cycle alongside user-named tabs", Kind: KindBool},
 		{Key: keyBellOnPending, Label: "Bell on pending", Help: "Ring the terminal bell when the pending count goes from 0 to >0", Kind: KindBool},
 		{Key: keyNewestAtBottom, Label: "Newest at bottom", Help: "Show the newest session at the bottom of the list (matches the transcript tail orientation)", Kind: KindBool},
+		{Key: keyWorkAnim, Label: "Working animation", Help: "Sweep a light across the titles of sessions that are working (the spinner stays either way)", Kind: KindBool},
 		{Key: keyLayoutMode, Label: "Vertical layout", Help: "Auto = pick from terminal width (vertical when narrow). On = always vertical. Off = always horizontal (side-by-side).", Kind: KindEnum, Options: []string{"auto", "on", "off"}},
 		{Key: keyPaneListPct, Label: "Session list size (%)", Help: "Share of the screen the session list takes (width side-by-side, height when vertical); the work pane gets the rest. 30 = compact list, wide work pane. Also adjustable with < / > on the dashboard.", Kind: KindInt, Min: MinPaneListPct, Max: MaxPaneListPct},
 		{Key: keyInvertListScroll, Label: "Invert list scroll", Help: "Reverse the mouse wheel over the session list (wheel down moves the selection up). The right pane is unaffected.", Kind: KindBool},
@@ -392,6 +397,8 @@ func Get(s Settings, key string) any {
 		return s.BellOnPending
 	case keyNewestAtBottom:
 		return s.NewestAtBottom
+	case keyWorkAnim:
+		return s.WorkAnim
 	case keyLayoutMode:
 		// Surface the field as the user-facing label ("on"/"off") even
 		// though we store "vertical"/"horizontal" internally. The Set
@@ -450,6 +457,8 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.BellOnPending = value.(bool)
 	case keyNewestAtBottom:
 		s.NewestAtBottom = value.(bool)
+	case keyWorkAnim:
+		s.WorkAnim = value.(bool)
 	case keyLayoutMode:
 		mode := value.(string)
 		// Translate the user-facing labels to the canonical storage form.

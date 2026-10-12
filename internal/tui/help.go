@@ -39,6 +39,7 @@ var helpSections = []helpSection{
 		{"S", "run a skill in a new session"},
 		{"ctrl+r", "restart the hosted claude"},
 		{"o", "open the transcript"},
+		{"e", "run a \"! command\" from the latest reply"},
 		{"r", "refresh"},
 	}},
 	{"Approvals", []helpEntry{
