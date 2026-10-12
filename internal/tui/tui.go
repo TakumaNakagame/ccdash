@@ -774,7 +774,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil || msg.tag == "" {
 			return m, nil
 		}
-		if msg.tag == buildinfo.Version {
+		if !selfupdate.Newer(buildinfo.Version, msg.tag) {
 			return m, nil
 		}
 		m.updateAvailable = msg.tag
@@ -3618,6 +3618,12 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					m.settings = updated
 				} else {
 					m.err = err
+				}
+				if err == nil && cur.Key == "update_channel" {
+					// What's "available" depends on the channel: forget
+					// the old answer and ask again.
+					m.updateAvailable = ""
+					return m, m.checkUpdateCmd()
 				}
 			}
 		}

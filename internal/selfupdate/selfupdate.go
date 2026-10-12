@@ -106,6 +106,19 @@ func ReleaseInfo(ctx context.Context, tag string) (notes string, err error) {
 	return rel.Body, nil
 }
 
+// Newer reports whether tag is a newer release than current. Semver-aware,
+// so an rc on disk plus an older stable tag (after switching the channel
+// back) is not an update; dev / unparseable versions fall back to "differs".
+func Newer(current, tag string) bool {
+	if tag == "" || tag == current {
+		return false
+	}
+	if semver.IsValid(current) && semver.IsValid(tag) {
+		return semver.Compare(tag, current) > 0
+	}
+	return true
+}
+
 // Run resolves the latest release in the given channel and replaces the
 // running binary when its tag is newer than currentVersion. Channel
 // "stable" excludes prereleases; channel "dev" includes them. Comparison

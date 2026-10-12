@@ -16,6 +16,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"github.com/takumanakagame/ccmanage/internal/buildinfo"
+	"github.com/takumanakagame/ccmanage/internal/selfupdate"
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 )
 
@@ -182,7 +183,7 @@ func (m *model) manualUpdateChecked(msg updateCheckMsg) tea.Cmd {
 	case msg.err != nil:
 		m.flash = "update check failed: " + msg.err.Error()
 		return nil
-	case msg.tag == "" || msg.tag == buildinfo.Version:
+	case !selfupdate.Newer(buildinfo.Version, msg.tag):
 		m.flash = "ccdash " + buildinfo.Version + " is up to date"
 		return nil
 	}
