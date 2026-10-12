@@ -352,6 +352,15 @@ ccdash update
 
 GitHub に最新リリースを問い合わせ、該当アセットをダウンロード、sha256 sidecar 検証後 `os.Rename` で実行中バイナリを差し替え。最新で no-op。
 
+「最新」はそのマシンのデフォルトチャネルで決まります: `stable`（正式リリースのみ、初期値）か `dev`（rc などのプレリリースも含む）。TUI の更新チェックと設定 → Update ccdash も同じデフォルトに従います。
+
+```sh
+ccdash update channel           # デフォルトチャネルを表示
+ccdash update channel dev       # 以後 rc も追う（戻すときは stable）
+ccdash update --channel=dev     # 今回だけ
+CCDASH_CHANNEL=dev sh install.sh   # dev チャネルから新規インストール
+```
+
 GitHub の匿名 API レート制限 (60/hr) に当たるとエラーメッセージにヒントが出ます。install スクリプトはバージョン明示で逃げられます。
 
 ```sh

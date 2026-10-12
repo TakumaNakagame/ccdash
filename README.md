@@ -111,7 +111,7 @@ ccdash sessions | approvals # plain-text listings
 ccdash trust <dir>          # folders where new sessions skip the folder-trust question
 ccdash hub serve | join     # web portal / connect this machine to it
 ccdash mcp                  # MCP server on stdio
-ccdash update               # self-update from the latest release
+ccdash update               # self-update (ccdash update channel dev: follow rc builds)
 ```
 
 ## More

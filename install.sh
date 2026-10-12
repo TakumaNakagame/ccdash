@@ -60,6 +60,12 @@ INSTALL_DIR="$(detect_install_dir)"
 TAG="${CCDASH_VERSION:-}"
 if [ -z "$TAG" ]; then
   API="https://api.github.com/repos/${REPO}/releases/latest"
+  # CCDASH_CHANNEL=dev takes the newest release, pre-releases (rc) included
+  # (the API lists releases newest first). Afterwards set the installed
+  # binary's default with `ccdash update channel dev`.
+  case "${CCDASH_CHANNEL:-stable}" in
+    dev|beta|pre|prerelease) API="https://api.github.com/repos/${REPO}/releases?per_page=1" ;;
+  esac
   # NB: use `*` instead of `\+` for the captured group — BSD sed (macOS)
   # doesn't accept the GNU `\+` ERE-style quantifier in BRE mode and
   # silently produces no match, which is what was making this script

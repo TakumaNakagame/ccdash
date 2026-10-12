@@ -474,6 +474,17 @@ Reaches GitHub, finds the latest release, downloads the matching
 asset, verifies the sha256 sidecar, and replaces the running binary
 with `os.Rename`. No-ops when already on the latest tag.
 
+"Latest" depends on the machine's default channel: `stable` (tagged
+releases, the default) or `dev` (pre-releases / rc builds too). The TUI's
+update check and settings → Update ccdash follow the same default.
+
+```sh
+ccdash update channel           # print the default channel
+ccdash update channel dev       # follow rc builds from now on (stable to go back)
+ccdash update --channel=dev     # just this once
+CCDASH_CHANNEL=dev sh install.sh   # a fresh install from the dev channel
+```
+
 If the GitHub API rate-limits the lookup (60/hr anonymous), the error
 includes the hint and the install script accepts an explicit version
 override:

@@ -394,19 +394,25 @@ func updateCmd(currentVersion string) *cobra.Command {
 		Short: "Replace this binary with the latest GitHub release",
 		Long: `Update ccdash from a GitHub release.
 
---channel=stable picks the latest tagged release that is not flagged as
-a pre-release. --channel=dev (alias: beta / pre / prerelease) includes
-pre-release tags (rc builds) before they're promoted to stable. Without
-the flag it follows the "Update channel" setting (stable by default).`,
+stable picks the latest tagged release that is not flagged as a
+pre-release; dev (alias: beta / pre / prerelease) includes pre-release
+tags (rc builds) before they're promoted to stable.
+
+Without --channel it follows this machine's default channel (stable unless
+changed), which the TUI's update check and settings → Update ccdash use
+too. Set it with:
+
+  ccdash update channel dev     # or: stable; no argument prints it`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			source := "--channel"
 			if !cmd.Flags().Changed("channel") {
-				channelFlag = savedUpdateChannel(cmd.Context())
+				channelFlag, source = savedUpdateChannel(cmd.Context()), "default"
 			}
 			channel, err := selfupdate.ParseChannel(channelFlag)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("ccdash: current version %s (channel %s)\n", currentVersion, channel)
+			fmt.Printf("ccdash: current version %s (channel %s, %s)\n", currentVersion, channel, source)
 			res, err := selfupdate.Run(cmd.Context(), currentVersion, channel)
 			if err != nil {
 				return err
@@ -429,8 +435,41 @@ the flag it follows the "Update channel" setting (stable by default).`,
 		},
 	}
 	c.Flags().StringVar(&channelFlag, "channel", "stable",
-		"release channel: 'stable' for tagged releases, 'dev' to include pre-releases")
+		"release channel for this run: 'stable' for tagged releases, 'dev' to include pre-releases (default: the saved default channel)")
+	c.AddCommand(updateChannelCmd())
 	return c
+}
+
+// updateChannelCmd shows or sets the default update channel (the
+// update_channel setting).
+func updateChannelCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "channel [stable|dev]",
+		Short: "Show or set the default update channel (stable / dev)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				fmt.Println(savedUpdateChannel(cmd.Context()))
+				return nil
+			}
+			ch, err := selfupdate.ParseChannel(args[0])
+			if err != nil {
+				return err
+			}
+			d, err := openDB()
+			if err != nil {
+				return err
+			}
+			defer d.Close()
+			st := store.NewLocal(d)
+			cur, _ := settings.Load(cmd.Context(), st)
+			if _, err := settings.Set(cmd.Context(), st, cur, "update_channel", string(ch)); err != nil {
+				return err
+			}
+			fmt.Printf("ccdash: default update channel is now %s (ccdash update, the TUI's update check and settings → Update ccdash follow it)\n", ch)
+			return nil
+		},
+	}
 }
 
 func serverCmd() *cobra.Command {

@@ -21,7 +21,8 @@ ccdash                       # opens the TUI; embeds the collector for the sessi
 ccdash -k                    # spawns a detached collector, then opens the TUI
 ccdash --group home-lab        # locks the TUI to a single project / user-named group
 ccdash --version             # prints the build-time main.Version
-ccdash update                # self-update from the latest GitHub release
+ccdash update                # self-update from the latest release in the default channel
+ccdash update channel dev    # default channel (update_channel setting): stable / dev (rc too)
 ccdash trust ~/DevWorks/x    # add a trusted folder (trusted_dirs): claude started under it skips the folder-trust question
 ccdash server --listen 0.0.0.0:9123   # opt-in: bind beyond loopback for remote mode
 ccdash remote set --url http://host:9123 --token-file ~/.ccdash-token   # one-time client config (~/.config/ccdash/config.json)
