@@ -40,6 +40,8 @@ var helpSections = []helpSection{
 		{"ctrl+r", "restart the hosted claude"},
 		{"o", "open the transcript"},
 		{"e", "run a \"! command\" from the latest reply"},
+		{"V", "grid: several sessions side by side (hjkl / tab move, enter open)"},
+		{"space", "choose the session for the grid (none = the busy ones)"},
 		{"r", "refresh"},
 	}},
 	{"Approvals", []helpEntry{

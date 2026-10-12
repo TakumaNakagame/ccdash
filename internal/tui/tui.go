@@ -286,6 +286,12 @@ type model struct {
 	// dupSessionID (see dupconfirm.go).
 	dupConfirm   bool
 	dupSessionID string
+	// gridOpen shows the grid view (grid.go) in place of the list and
+	// right pane; gridMarks are the sessions chosen for it (space);
+	// gridTails the tiles' transcript tails.
+	gridOpen  bool
+	gridMarks map[string]bool
+	gridTails map[string]*gridTail
 	// bangConfirm asks before typing one of bangCmds (bangSel) into the
 	// hosted PTY bangKey (see bang.go).
 	bangConfirm bool
@@ -625,6 +631,9 @@ func (m *model) refresh() tea.Cmd {
 	if cmd := m.loadTailCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
+	if cmd := m.gridLoadCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if !m.remote.Enabled {
 		cmds = append(cmds, fetchPTYListCmd())
 	}
@@ -715,6 +724,8 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case usageMsg:
 		t := msg.today
 		m.usageToday = &t
+	case gridTailMsg:
+		m.applyGridTail(msg)
 	case bangSentMsg:
 		if msg.err != nil {
 			m.flash = "! command failed: " + msg.err.Error()
@@ -898,6 +909,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.modalOpen() && m.pane == paneSessions {
 			return m, nil // a picker / confirmation owns input
+		}
+		if msg.Button == tea.MouseLeft && m.gridOpen && m.pane == paneSessions {
+			return m, m.clickGrid(msg.Mouse())
 		}
 		if msg.Button == tea.MouseLeft {
 			mm := msg.Mouse()
@@ -1167,6 +1181,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if m.gridOpen {
+		if cmd, ok := m.handleKeyGrid(msg); ok {
+			return m, cmd
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, m.quit()
@@ -1225,6 +1244,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.openTranscript()
 	case "e":
 		return m, m.openBang()
+	case "V":
+		return m, m.toggleGrid()
+	case "space":
+		m.toggleGridMark()
+		return m, nil
 	case "a":
 		if !m.settings.ApproveEnabled {
 			m.flash = "approval blocking is OFF (settings ',')"
@@ -3156,6 +3180,9 @@ func (m *model) renderFooter() string {
 			}
 		}
 	}
+	if m.pane == paneSessions && m.gridOpen {
+		keys = "hjkl/tab move  enter open  space choose  V/esc close  e ! cmd  a/A/d allow/keep/deny  o transcript  ? help  q quit"
+	}
 	if m.showArchived {
 		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  ? help  q quit"
 	}
@@ -3326,6 +3353,9 @@ func (m *model) renderBody(height int) string {
 	case paneReleaseNotes:
 		return m.renderReleaseNotesBody(height)
 	default:
+		if m.gridOpen {
+			return m.renderGridBody(height)
+		}
 		return m.renderSessionsBody(height)
 	}
 }
@@ -4111,6 +4141,9 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	} else if s.ProcPID != 0 {
 		parts = append(parts, fmt.Sprintf("pid:%d", s.ProcPID))
 	}
+	if m.gridMarks[s.SessionID] {
+		parts = append(parts, "grid")
+	}
 	if s.PendingCount > 0 {
 		parts = append(parts, pendingStyle.Render(fmt.Sprintf("⚠%d pending", s.PendingCount)))
 	} else if s.Attention == mdl.AttentionNeedsYou {
@@ -4230,25 +4263,7 @@ func (m *model) renderTranscriptTail(width, height int) string {
 	if bodyWidth < 20 {
 		bodyWidth = 20
 	}
-
-	var lines []string
-	addBlock := func(block []string, leadBlank bool) {
-		if len(block) == 0 {
-			return
-		}
-		if leadBlank && len(lines) > 0 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, block...)
-	}
-
-	for i, msg := range m.tailMessages {
-		// Tool calls and their results render as one line each; keep a
-		// run of them together as a single block.
-		leadBlank := i > 0 && msg.Kind != transcript.KindToolResult &&
-			!(msg.Kind == transcript.KindToolUse && isToolKind(m.tailMessages[i-1].Kind))
-		addBlock(renderPreviewMessage(msg, bodyWidth), leadBlank)
-	}
+	lines := tailLines(m.tailMessages, bodyWidth)
 	if height < 1 {
 		height = 1
 	}
@@ -4272,6 +4287,26 @@ func (m *model) renderTranscriptTail(width, height int) string {
 		start = 0
 	}
 	return strings.Join(lines[start:end], "\n")
+}
+
+// tailLines renders transcript messages as preview lines, oldest first:
+// a blank line between blocks, a run of tool calls / results kept
+// together. Shared by the right pane and the grid tiles.
+func tailLines(msgs []transcript.Message, width int) []string {
+	var lines []string
+	for i, msg := range msgs {
+		block := renderPreviewMessage(msg, width)
+		if len(block) == 0 {
+			continue
+		}
+		leadBlank := i > 0 && msg.Kind != transcript.KindToolResult &&
+			!(msg.Kind == transcript.KindToolUse && isToolKind(msgs[i-1].Kind))
+		if leadBlank && len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, block...)
+	}
+	return lines
 }
 
 // approvalsForSelected returns pending approvals for the currently selected

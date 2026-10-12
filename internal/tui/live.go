@@ -210,7 +210,7 @@ func (m *model) liveWantKey() string {
 	// Remote mode talks to a collector on another host; its PTYs (if any)
 	// would need the remote address + token plumbed through the Store,
 	// which isn't wired yet. Keep the pane on the transcript there.
-	if m.pane == paneSessions && m.settings.AttachEnabled && !m.remote.Enabled {
+	if m.pane == paneSessions && !m.gridOpen && m.settings.AttachEnabled && !m.remote.Enabled {
 		return m.desiredLiveKey()
 	}
 	return ""

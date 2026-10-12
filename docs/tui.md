@@ -26,6 +26,8 @@ A working session's spinner is joined by a light sweeping across its title (sett
 | `x` | archive / unarchive |
 | `X` | toggle archive view (operator-archived sessions) |
 | `o` | full-screen transcript viewer |
+| `V` | grid: the chosen sessions side by side, each tile its working state and the newest transcript lines (read-only; nothing resizes a PTY). `h` `j` `k` `l` / `tab` move between tiles, `enter` returns to the dashboard on that session, `V` / `esc` closes. The focused tile is the selection, so `e`, `a` / `d`, `o`, `t`, `f`, `x` … act on it |
+| `space` | choose the session for the grid (marked "grid" on line 2); with none chosen the grid shows the busy ones — needs you, working, finished unseen |
 | `e` | run a `! command` from the latest reply (the way Claude asks you to run something): pick one (`j` `k` / `1`-`9`) and `y` types `!` + the command into the ccdash-hosted claude. Needs `attach_enabled` |
 | `ctrl+t` | generate short titles with `claude -p` — `y` for the selected session, `a` for the recent batch in one call |
 | `n` | start a new claude session (directory picker) |
