@@ -219,6 +219,9 @@ func (h *Hub) Handler() http.Handler {
 		w.Header().Set("Referrer-Policy", "same-origin")
 		files.ServeHTTP(w, r)
 	}), true))
+	if h.cfg.Auth.NoAuth || h.cfg.Auth.TailscaleServe {
+		return hostGuard(h.cfg.PublicURL, mux)
+	}
 	return mux
 }
 

@@ -33,7 +33,14 @@ func newTestHub(t *testing.T, noAuth bool) *Hub {
 
 func serve(h http.Handler, method, path string, body string, hdr map[string]string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	// The test hubs' public URL; --no-auth / --tailscale-auth hubs refuse
+	// other hosts (hostGuard).
+	r.Host = "hub.example"
 	for k, v := range hdr {
+		if k == "Host" {
+			r.Host = v
+			continue
+		}
 		r.Header.Set(k, v)
 	}
 	w := httptest.NewRecorder()
@@ -175,15 +182,19 @@ func TestTailscaleServeAuth(t *testing.T) {
 	}
 	defer h.Close()
 	handler := h.Handler()
-	if w := serve(handler, "GET", "/api/me", "", map[string]string{"Tailscale-User-Login": "Me@Example.com"}); w.Code != http.StatusOK {
+	if w := serve(handler, "GET", "/api/me", "", map[string]string{"Host": "box.example.ts.net", "Tailscale-User-Login": "Me@Example.com"}); w.Code != http.StatusOK {
 		t.Errorf("allowed login = %d", w.Code)
 	}
-	w := serve(handler, "GET", "/", "", map[string]string{"Tailscale-User-Login": "colleague@example.com"})
+	w := serve(handler, "GET", "/", "", map[string]string{"Host": "box.example.ts.net", "Tailscale-User-Login": "colleague@example.com"})
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "colleague@example.com") {
 		t.Errorf("other login = %d %s, want 403 naming the login", w.Code, w.Body)
 	}
-	if w := serve(handler, "GET", "/api/devices", "", nil); w.Code != http.StatusForbidden {
+	if w := serve(handler, "GET", "/api/devices", "", map[string]string{"Host": "127.0.0.1:8080"}); w.Code != http.StatusForbidden {
 		t.Errorf("no header = %d, want 403", w.Code)
+	}
+	// A rebinding page can set the login header itself; its Host gives it away.
+	if w := serve(handler, "GET", "/api/me", "", map[string]string{"Host": "evil.example", "Tailscale-User-Login": "me@example.com"}); w.Code != http.StatusMisdirectedRequest {
+		t.Errorf("rebinding host = %d, want 421", w.Code)
 	}
 }
 
@@ -218,5 +229,44 @@ func TestPrefs(t *testing.T) {
 		if w := serve(h, "PUT", "/api/prefs", bad, nil); w.Code != http.StatusBadRequest {
 			t.Errorf("%s = %d", bad, w.Code)
 		}
+	}
+}
+
+// TestHostGuard: a DNS-rebinding page arrives with its own name in Host.
+// Hubs whose login such a page could satisfy (--no-auth, --tailscale-auth)
+// accept only loopback names and the public host.
+func TestHostGuard(t *testing.T) {
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"127.0.0.1:8080", true},
+		{"localhost:8080", true},
+		{"LOCALHOST", true},
+		{"[::1]:8080", true},
+		{"hub.example", true},
+		{"hub.example:443", true},
+		{"evil.example:8080", false},
+		{"127.0.0.1.evil.example", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := allowedHost(c.host, "hub.example"); got != c.want {
+			t.Errorf("allowedHost(%q) = %v, want %v", c.host, got, c.want)
+		}
+	}
+
+	h := newTestHub(t, true)
+	if w := serve(h.Handler(), "GET", "/api/me", "", map[string]string{"Host": "evil.example:8080"}); w.Code != http.StatusMisdirectedRequest {
+		t.Errorf("no-auth hub, rebinding host = %d, want 421", w.Code)
+	}
+	if w := serve(h.Handler(), "GET", "/api/me", "", map[string]string{"Host": "127.0.0.1:8080"}); w.Code != http.StatusOK {
+		t.Errorf("no-auth hub, loopback host = %d, want 200", w.Code)
+	}
+	// An OIDC hub sits behind its proxy, which decides the Host; a
+	// rebinding page has no session cookie for it anyway.
+	oidc := newTestHub(t, false)
+	if w := serve(oidc.Handler(), "GET", "/healthz", "", map[string]string{"Host": "anything.example"}); w.Code != http.StatusOK {
+		t.Errorf("oidc hub healthz = %d, want 200", w.Code)
 	}
 }

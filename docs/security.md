@@ -108,3 +108,8 @@ mode) managing their own Claude Code sessions.
   (bearer, GET-only on five read routes) can read session lists and
   transcript tails — the raw transcript, unredacted — but can't write,
   drive a PTY or decide approvals; treat one like a portal login.
+- DNS rebinding: a hub whose login a rebinding page could satisfy —
+  `--no-auth`, `--tailscale-auth` (the page can set the login header
+  itself) — answers 421 to any `Host` but `127.0.0.1` / `localhost` /
+  `[::1]` and the public URL's host. The OIDC hub is behind its proxy and
+  a rebinding page has no session cookie for it.
