@@ -501,13 +501,18 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 |---|---|
 | `overview` | 要対応のセッション、終わったが未確認のもの、プロジェクト別の稼働中セッション、今日の利用額の目安 |
 | `list_projects` | プロジェクトとそのセッション数・稼働数・要対応数・最終活動 |
-| `list_sessions` | 新しい順のセッション。絞り込み: `project` / `query` / `running_only` / `attention_only` / `include_archived` / `limit` |
+| `list_sessions` | 新しい順のセッション。絞り込み: `project` / `query` / `running_only` / `attention_only` / `grid_only` (グリッドに載っているものをタイル順で) / `include_archived` / `limit` |
 | `get_session` | 1 セッション (`#N` か ID) の詳細、承認待ち、最近のプロンプト・返答・ツール呼び出し |
 | `set_project` | セッションをプロジェクトに入れる (新しい名前なら作成)、`""` で外す |
 | `rename_project` | プロジェクト名の変更。既存のプロジェクト名にすると統合 |
 | `order_projects` | プロジェクトの並び順を指定 (指定したものが先頭) |
 | `set_project_color` | `#rrggbb` か `random` |
 | `set_title` | セッションのタイトル変更 (`""` で自動のタイトルに戻す) |
+| `set_later` | 「あとで見る」の印を付ける／外す (一覧の先頭にまとまる) |
+| `set_grid` | グリッド (TUI の `V` とポータルのグリッドで共通の一覧) に載せる／外す。タイルは載せた順 |
+| `set_pinned` | ピン留め／解除 |
+| `set_color` | セッションの色。`#rrggbb`、`random` (動いている他のセッションと離れた色)、`""` で自動に戻す |
+| `mark_seen` | 既読にする (NEW と未確認の完了印を消す。承認待ち・質問・回答待ち／作業待ちの申告は残る) |
 | `set_archived` | アーカイブ／解除 |
 | `start_session` | 指定ディレクトリ (絶対パス) で新しい claude セッションを起動 (TUI の `n` と同じ)。`project` / 最初の `prompt` / `permission_mode` を指定可。設定の Attach が OFF なら使えない |
 

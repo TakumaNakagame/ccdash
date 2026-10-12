@@ -2,7 +2,8 @@
 // stdio that lets Claude see what ccdash sees — projects, sessions, what
 // needs the operator, a session's recent conversation — and organize it:
 // put sessions into projects, create / rename / merge projects, recolor
-// them, retitle and archive sessions — and start a new claude session in a
+// them, retitle, pin, recolor and archive sessions, put them on the grid,
+// mark them seen — and start a new claude session in a
 // directory (start_session, like the TUI's `n`). It goes through
 // store.Store, so it works against the local DB or a remote collector (-r)
 // alike. It never stops claude and never answers approvals; --read-only
@@ -41,8 +42,9 @@ const instructions = `ccdash watches the Claude Code sessions of one machine (it
 Use the read tools to see the operator's projects, which sessions are running, which
 need the operator (approvals, questions), and what a session has been doing recently.
 Sessions are referred to as "#N" (their short number) or by session id.
-The organizing tools (set_project, rename_project, order_projects, set_project_color, set_title, set_later, set_archived)
-change what the operator sees in ccdash; projects are just names, created on first use.
+The organizing tools (set_project, rename_project, order_projects, set_project_color, set_title, set_later,
+set_grid, set_pinned, set_color, mark_seen, set_archived) change what the operator sees in ccdash;
+projects are just names, created on first use.
 start_session opens a new claude session in a directory (optionally in a project, with a
 first prompt); the operator sees and drives it in ccdash.
 When this machine is joined to a ccdash hub, each session carries "url": a link that opens
@@ -285,6 +287,41 @@ var writeTools = []map[string]any{
 		"annotations": writeHint,
 	},
 	{
+		"name":        "set_grid",
+		"description": "Put sessions on the grid (the tiled view shared by the TUI's V and the portal's grid; tiles go in the order they were put there) or take them off.",
+		"inputSchema": required(map[string]any{
+			"sessions": sessionList,
+			"grid":     map[string]any{"type": "boolean"},
+		}, "sessions", "grid"),
+		"annotations": writeHint,
+	},
+	{
+		"name":        "set_pinned",
+		"description": "Pin sessions (kept at the top of their list / project block, most recently pinned first; never auto-archived) or unpin them.",
+		"inputSchema": required(map[string]any{
+			"sessions": sessionList,
+			"pinned":   map[string]any{"type": "boolean"},
+		}, "sessions", "pinned"),
+		"annotations": writeHint,
+	},
+	{
+		"name":        "set_color",
+		"description": `Set sessions' color bar: "#rrggbb", "random" for one that keeps apart from the running sessions' colors, or "" for the automatic one.`,
+		"inputSchema": required(map[string]any{
+			"sessions": sessionList,
+			"color":    map[string]any{"type": "string"},
+		}, "sessions", "color"),
+		"annotations": writeHint,
+	},
+	{
+		"name":        "mark_seen",
+		"description": "Mark sessions as seen by the operator: clears NEW and the finished-unseen (done) mark, as opening them in ccdash does. Approvals, questions and declared answer / action waits stay.",
+		"inputSchema": required(map[string]any{
+			"sessions": sessionList,
+		}, "sessions"),
+		"annotations": writeHint,
+	},
+	{
 		"name":        "set_archived",
 		"description": "Archive sessions (hide them from the working list) or bring them back.",
 		"inputSchema": required(map[string]any{
@@ -310,12 +347,13 @@ var readTools = []map[string]any{
 	},
 	{
 		"name":        "list_sessions",
-		"description": "Sessions, newest first. Filter by project, by text (title, path, repo, #N), to running ones, or to ones that need attention.",
+		"description": "Sessions, newest first. Filter by project, by text (title, path, repo, #N), to running ones, to ones that need attention, or to the grid (in tile order).",
 		"inputSchema": schema(map[string]any{
 			"project":          map[string]any{"type": "string", "description": "only sessions in this project"},
 			"query":            map[string]any{"type": "string", "description": "case-insensitive text to match in title / cwd / repo / branch / group / #N"},
 			"running_only":     map[string]any{"type": "boolean", "description": "only sessions whose claude is running (active or idle)"},
 			"attention_only":   map[string]any{"type": "boolean", "description": "only sessions that need the operator or finished unseen"},
+			"grid_only":        map[string]any{"type": "boolean", "description": "only sessions on the grid, in tile order"},
 			"include_archived": map[string]any{"type": "boolean", "description": "also search archived sessions"},
 			"limit":            map[string]any{"type": "integer", "description": "max rows (default 30, max 200)"},
 		}),
@@ -343,6 +381,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		Query           string   `json:"query"`
 		RunningOnly     bool     `json:"running_only"`
 		AttentionOnly   bool     `json:"attention_only"`
+		GridOnly        bool     `json:"grid_only"`
 		IncludeArchived bool     `json:"include_archived"`
 		Limit           int      `json:"limit"`
 		Session         string   `json:"session"`
@@ -355,6 +394,8 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		Projects        []string `json:"projects"`
 		Archived        *bool    `json:"archived"`
 		Later           *bool    `json:"later"`
+		Grid            *bool    `json:"grid"`
+		Pinned          *bool    `json:"pinned"`
 		Cwd             string   `json:"cwd"`
 		Prompt          string   `json:"prompt"`
 		PermissionMode  string   `json:"permission_mode"`
@@ -399,17 +440,22 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		}
 		v, err = s.setTitle(ctx, args.Session, *args.Title)
 	case "set_later":
-		if args.Later == nil {
-			return "", fmt.Errorf("later is required")
-		}
+		v, err = s.setFlag(ctx, args.Sessions, "later", "watch_later", args.Later, s.st.SetLater)
+	case "set_grid":
+		v, err = s.setFlag(ctx, args.Sessions, "grid", "on_grid", args.Grid, s.st.SetGrid)
+	case "set_pinned":
+		v, err = s.setFlag(ctx, args.Sessions, "pinned", "pinned", args.Pinned, s.st.SetFavorite)
+	case "set_color":
+		v, err = s.setColor(ctx, args.Sessions, args.Color)
+	case "mark_seen":
 		var ss []model.Session
 		if ss, err = s.resolveAll(ctx, args.Sessions); err == nil {
 			for _, x := range ss {
-				if err = s.st.SetLater(ctx, x.SessionID, *args.Later); err != nil {
+				if err = s.st.MarkSeen(ctx, x.SessionID); err != nil {
 					break
 				}
 			}
-			v = map[string]any{"watch_later": *args.Later, "sessions": refsOf(ss)}
+			v = map[string]any{"seen": refsOf(ss)}
 		}
 	case "set_archived":
 		if args.Archived == nil {
@@ -421,7 +467,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 	case "list_projects":
 		v, err = s.listProjects(ctx)
 	case "list_sessions":
-		v, err = s.listSessions(ctx, args.Project, args.Query, args.RunningOnly, args.AttentionOnly, args.IncludeArchived, args.Limit)
+		v, err = s.listSessions(ctx, args.Project, args.Query, args.RunningOnly, args.AttentionOnly, args.GridOnly, args.IncludeArchived, args.Limit)
 	case "get_session":
 		v, err = s.getSession(ctx, args.Session, args.Messages)
 	default:
@@ -452,6 +498,7 @@ type sessionRow struct {
 	Pinned    bool   `json:"pinned,omitempty"`
 	New       bool   `json:"new_since_seen,omitempty"` // progress since the operator last looked
 	Later     bool   `json:"watch_later,omitempty"`
+	Grid      bool   `json:"on_grid,omitempty"`         // on the grid shared by the TUI (V) and the portal
 	Wait      string `json:"declared_status,omitempty"` // what the session said it hands back (set_status)
 	WaitNote  string `json:"declared_note,omitempty"`
 	Archived  bool   `json:"archived,omitempty"`
@@ -463,7 +510,7 @@ func (s *Server) row(x model.Session) sessionRow {
 	r := sessionRow{
 		Ref: x.Ref(), Title: x.DisplayTitle(), Project: x.Project, Group: groupOf(x),
 		Status: string(x.Status), Attention: x.Attention, Reason: x.AttentionReason, Pending: x.PendingCount,
-		Cwd: x.Cwd, Branch: x.Branch, Pinned: x.Favorite, New: x.Unseen, Later: x.Later, Wait: x.Wait, WaitNote: x.WaitNote, Archived: x.Archived, SessionID: x.SessionID,
+		Cwd: x.Cwd, Branch: x.Branch, Pinned: x.Favorite, New: x.Unseen, Later: x.Later, Grid: x.Grid, Wait: x.Wait, WaitNote: x.WaitNote, Archived: x.Archived, SessionID: x.SessionID,
 	}
 	if s.hubURL != "" {
 		r.URL = s.hubURL + "/s/" + url.PathEscape(x.SessionID)
@@ -612,7 +659,7 @@ func (s *Server) listProjects(ctx context.Context) (any, error) {
 	return map[string]any{"projects": out}, nil
 }
 
-func (s *Server) listSessions(ctx context.Context, project, query string, runningOnly, attentionOnly, archived bool, limit int) (any, error) {
+func (s *Server) listSessions(ctx context.Context, project, query string, runningOnly, attentionOnly, gridOnly, archived bool, limit int) (any, error) {
 	ss, err := s.st.ListSessions(ctx, false)
 	if err != nil {
 		return nil, err
@@ -625,6 +672,9 @@ func (s *Server) listSessions(ctx context.Context, project, query string, runnin
 		ss = append(ss, more...)
 	}
 	sort.SliceStable(ss, func(i, j int) bool { return ss[i].LastSeen.After(ss[j].LastSeen) })
+	if gridOnly { // tile order, as the TUI and the portal lay them out
+		sort.SliceStable(ss, func(i, j int) bool { return ss[i].GridAt.Before(ss[j].GridAt) })
+	}
 	if limit <= 0 {
 		limit = 30
 	}
@@ -636,6 +686,7 @@ func (s *Server) listSessions(ctx context.Context, project, query string, runnin
 		if project != "" && x.Project != project ||
 			runningOnly && !running(x) ||
 			attentionOnly && x.Attention == "" ||
+			gridOnly && !x.Grid ||
 			q != "" && !matches(x, q) {
 			continue
 		}
@@ -851,6 +902,44 @@ func (s *Server) setTitle(ctx context.Context, ref, title string) (any, error) {
 		return nil, err
 	}
 	return map[string]any{"session": refsOf([]model.Session{x})[0], "title": title}, nil
+}
+
+// setFlag applies one boolean store setter to every session in refs; arg
+// is the tool argument's name, key the result's.
+func (s *Server) setFlag(ctx context.Context, refs []string, arg, key string, v *bool, set func(context.Context, string, bool) error) (any, error) {
+	if v == nil {
+		return nil, fmt.Errorf("%s is required", arg)
+	}
+	ss, err := s.resolveAll(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	for _, x := range ss {
+		if err := set(ctx, x.SessionID, *v); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{key: *v, "sessions": refsOf(ss)}, nil
+}
+
+func (s *Server) setColor(ctx context.Context, refs []string, color string) (any, error) {
+	color = strings.TrimSpace(color)
+	if color != "" && color != "random" && !model.ValidColor(color) {
+		return nil, fmt.Errorf(`color must be "#rrggbb", "random" or ""`)
+	}
+	ss, err := s.resolveAll(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	for _, x := range ss {
+		if err := s.st.SetColor(ctx, x.SessionID, color); err != nil {
+			return nil, err
+		}
+	}
+	if color == "" {
+		color = "automatic"
+	}
+	return map[string]any{"color": color, "sessions": refsOf(ss)}, nil
 }
 
 func (s *Server) setArchived(ctx context.Context, refs []string, archived bool) (any, error) {

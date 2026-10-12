@@ -78,7 +78,7 @@ func TestServe(t *testing.T) {
 	if r[0].Result.ProtocolVersion != "2025-03-26" {
 		t.Errorf("initialize: %s", lines[0])
 	}
-	if len(r[1].Result.Tools) != 13 {
+	if len(r[1].Result.Tools) != 17 {
 		t.Errorf("tools/list: %s", lines[1])
 	}
 	body := func(i int) string { return r[i].Result.Content[0].Text }
@@ -149,6 +149,85 @@ func TestOrganize(t *testing.T) {
 	}
 	if len(ro.tools()) != 5 {
 		t.Fatalf("read-only tools: %d", len(ro.tools()))
+	}
+}
+
+// TestGridPinColorSeen: set_grid / set_pinned / set_color / mark_seen reach
+// the DB, list_sessions grid_only follows tile order, and --read-only
+// refuses them.
+func TestGridPinColorSeen(t *testing.T) {
+	ctx := context.Background()
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for _, id := range []string{"a", "b", "c"} {
+		if err := d.UpsertSession(ctx, &model.Session{SessionID: id, Cwd: "/w", Status: model.StatusStopped}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = d.SetAttention(ctx, "a", model.AttentionDone, "")
+	srv := New(store.NewLocal(d), "test", false)
+	call := func(name, args string) (string, error) { return srv.call(ctx, name, json.RawMessage(args)) }
+
+	if _, err := call("set_grid", `{"sessions":["#3"],"grid":true}`); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond) // grid_at is Unix ms: keep the tile order apart
+	if _, err := call("set_grid", `{"sessions":["#1","#3"],"grid":true}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call("set_grid", `{"sessions":["#1"]}`); err == nil {
+		t.Fatal("set_grid without grid accepted")
+	}
+	out, err := call("list_sessions", `{"grid_only":true}`)
+	if err != nil || !strings.Contains(out, `"matched": 2`) || !strings.Contains(out, `"on_grid": true`) ||
+		strings.Index(out, `"ref": "#3"`) > strings.Index(out, `"ref": "#1"`) {
+		t.Fatalf("grid_only = %s, %v", out, err) // #3 went on first, so it is the first tile
+	}
+	if _, err := call("set_grid", `{"sessions":["#3"],"grid":false}`); err != nil {
+		t.Fatal(err)
+	}
+	if c, _, _ := d.GetSession(ctx, "c"); c.Grid {
+		t.Fatal("c still on the grid")
+	}
+
+	if _, err := call("set_pinned", `{"sessions":["#2"],"pinned":true}`); err != nil {
+		t.Fatal(err)
+	}
+	if b, _, _ := d.GetSession(ctx, "b"); !b.Favorite {
+		t.Fatal("b not pinned")
+	}
+
+	if _, err := call("set_color", `{"sessions":["#2"],"color":"#123456"}`); err != nil {
+		t.Fatal(err)
+	}
+	if b, _, _ := d.GetSession(ctx, "b"); b.Color() != "#123456" {
+		t.Fatalf("color %q", b.Color())
+	}
+	if _, err := call("set_color", `{"sessions":["#2"],"color":"red"}`); err == nil {
+		t.Fatal("bad color accepted")
+	}
+	if _, err := call("set_color", `{"sessions":["#2"],"color":"random"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call("set_color", `{"sessions":["#2"],"color":""}`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := call("mark_seen", `{"sessions":["#1"]}`); err != nil {
+		t.Fatal(err)
+	}
+	if a, _, _ := d.GetSession(ctx, "a"); a.Attention == model.AttentionDone {
+		t.Fatal("done mark not cleared")
+	}
+
+	ro := New(store.NewLocal(d), "test", true)
+	for _, name := range []string{"set_grid", "set_pinned", "set_color", "mark_seen"} {
+		if _, err := ro.call(ctx, name, json.RawMessage(`{"sessions":["#1"],"grid":true,"pinned":true,"color":"random"}`)); err == nil {
+			t.Errorf("read-only server accepted %s", name)
+		}
 	}
 }
 

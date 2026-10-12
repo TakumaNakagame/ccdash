@@ -719,13 +719,18 @@ Tools:
 |---|---|
 | `overview` | sessions that need you, finished-but-unseen ones, running sessions grouped by project, today's usage estimate |
 | `list_projects` | projects in list order with session / running / needs-you counts and latest activity |
-| `list_sessions` | sessions newest first; filters: `project`, `query`, `running_only`, `attention_only`, `include_archived`, `limit` |
+| `list_sessions` | sessions newest first; filters: `project`, `query`, `running_only`, `attention_only`, `grid_only` (sessions on the grid, in tile order), `include_archived`, `limit` |
 | `get_session` | one session (`#N` or id) with pending approvals and its recent prompts, replies and tool calls |
 | `set_project` | put sessions into a project (a new name creates it) or take them out (`""`) |
 | `rename_project` | rename a project; renaming onto an existing one merges them |
 | `order_projects` | set the project order (listed ones first) |
 | `set_project_color` | `#rrggbb` or `random` |
 | `set_title` | rename a session (`""` = back to the automatic title) |
+| `set_later` | mark / clear "watch later" (gathered at the top of the list) |
+| `set_grid` | put sessions on / take them off the grid shared by the TUI's `V` and the portal's grid; tiles go in the order they were put there |
+| `set_pinned` | pin / unpin sessions |
+| `set_color` | a session's color: `#rrggbb`, `random` (apart from the running sessions' colors) or `""` (automatic) |
+| `mark_seen` | mark sessions seen (clears NEW and the finished-unseen mark; approvals, questions and 回答待ち / 作業待ち declarations stay) |
 | `set_archived` | archive / unarchive sessions |
 | `start_session` | start a new claude session in a directory (absolute path), like the TUI's `n`; optional `project`, first `prompt`, `permission_mode`. Refused while the Attach setting is OFF |
 
