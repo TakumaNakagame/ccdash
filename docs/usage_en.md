@@ -598,6 +598,12 @@ machine never accepts inbound connections — its collector dials out.
 - **New session** takes an optional first message; typing `/` lists the
   device's skills and slash commands (project ones move the directory to
   their project), like the TUI's `S`.
+- **Run skill** on a device page is the TUI's `S` picker: the device's
+  skills and slash commands (project skills of recent session directories
+  first), filtered as you type; ↑↓ + Enter or a tap picks one, `Tab`
+  completes the name so arguments can follow, and input with no match is
+  sent as `/<input>`. It opens the new-session dialog with `/<skill>` as
+  the first message (a project skill starts in its project).
 - The device's settings are shown read-only at the bottom of its page —
   the hub can't change them.
 - **🔔** in the header turns on push notifications for this browser (the

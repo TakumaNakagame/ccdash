@@ -912,6 +912,8 @@ async function devicePage(id, opts = {}) {
     h("div", { class: "row" },
       h("h1", { class: "grow" }, name),
       h("button", { class: "btn icon", title: "この端末の ccdash collector を再起動（ホスト中のセッションは自動で再開）", onclick: () => restartCollector(id, last), "aria-label": "collector を再起動" }, icon("restart")),
+      h("button", { class: "btn", title: "スキル・コマンドを新しいセッションで実行（TUI の S）",
+        onclick: () => skillPicker(id, recentCwds(last?.sessions)) }, "スキル実行"),
       h("button", { class: "btn primary", onclick: () => newSession(id) }, icon("plus"), "新規セッション")),
     status, usageCard, approvals, spawns,
     tabs,
@@ -1216,7 +1218,8 @@ function newSession(id, preset = {}) {
     }
     const path = h("input", { class: "grow mono", value: preset.cwd || info?.newSessionDir || "" });
     const dirs = h("div", { class: "dirlist" });
-    const prompt = h("textarea", { rows: 2, class: "grow", placeholder: "最初の指示（任意）。/ でスキル・コマンドを選べます", value: preset.prompt || "" });
+    const prompt = h("textarea", { rows: 2, class: "grow", placeholder: "最初の指示（任意）。/ でスキル・コマンドを選べます" });
+    prompt.value = preset.prompt || ""; // a textarea's value attribute isn't its content
     const mode = h("select", { class: "mode" },
       h("option", { value: "" }, "権限モード: 既定"),
       h("option", { value: "manual" }, "manual（毎回確認）"),
@@ -1275,6 +1278,100 @@ function newSession(id, preset = {}) {
         h("button", { class: "btn primary", onclick: start }, "ここで claude を起動")));
     load(path.value);
     if (preset.prompt) showSkills();
+  });
+}
+
+// recentCwds: distinct session directories, most recently seen first.
+function recentCwds(sessions) {
+  const out = [];
+  for (const s of [...(sessions || [])].sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen))) {
+    if (s.cwd && !out.includes(s.cwd)) out.push(s.cwd);
+    if (out.length >= 40) break;
+  }
+  return out;
+}
+
+// filterSkills mirrors the TUI's (internal/tui/skillpicker.go): name
+// prefix (also the part after "plugin:") first, then name substring, then
+// description / project directory. Once arguments follow, nothing matches.
+function filterSkills(list, input) {
+  if (/\S\s/.test(input.trim())) return [];
+  const q = input.trim().replace(/^\//, "").toLowerCase();
+  if (!q) return list;
+  const prefix = [], name = [], desc = [];
+  for (const k of list) {
+    const ln = k.name.toLowerCase(), short = ln.includes(":") ? ln.slice(ln.indexOf(":") + 1) : "";
+    if (ln.startsWith(q) || (short && short.startsWith(q))) prefix.push(k);
+    else if (ln.includes(q)) name.push(k);
+    else if ((k.description || "").toLowerCase().includes(q) || (k.dir || "").toLowerCase().includes(q)) desc.push(k);
+  }
+  return [...prefix, ...name, ...desc];
+}
+
+// skillPicker is the TUI's `S`: the device's skills and slash commands
+// (project skills of the recent session directories first), filtered as
+// you type. Picking one opens the new-session dialog with "/<skill> " as the
+// first message — in the skill's project for a project skill, since it only
+// loads there. Free text with no match (built-ins, arguments) goes as-is.
+function skillPicker(id, dirs) {
+  dialog(async (body, close) => {
+    const input = h("input", { class: "grow mono", placeholder: "スキル名で絞り込み（引数は スペースのあとに）", autocomplete: "off" });
+    const list = h("div", { class: "dirlist skills" }, h("div", { class: "muted" }, "読み込み中…"));
+    let all = null, sel = 0, hits = [], tabbed = null;
+    const go = (k) => {
+      let first = input.value.trim();
+      if (k) {
+        // Keep arguments typed after a completed name.
+        if (!first.startsWith("/" + k.name + " ")) first = "/" + k.name;
+      } else if (first && !first.startsWith("/")) first = "/" + first;
+      if (!first) return;
+      close();
+      // A bare "/name" gets a trailing space so arguments can follow.
+      newSession(id, { cwd: k?.dir, prompt: /\s/.test(first) ? first : first + " " });
+    };
+    const paint = () => {
+      if (!all) return;
+      hits = filterSkills(all, input.value);
+      sel = Math.min(sel, Math.max(hits.length - 1, 0));
+      const rows = hits.slice(0, 80).map((k, i) => h("div", { class: i === sel ? "on" : null, onclick: () => go(k) },
+        h("b", {}, "/" + k.name), k.source === "project" ? h("span", { class: "chip" }, "project") : null,
+        k.dir ? h("span", { class: "muted small" }, " " + k.dir) : null,
+        k.description ? h("div", { class: "muted small" }, k.description) : null));
+      const typed = input.value.trim();
+      if (!rows.length) rows.push(h("div", { class: "muted", onclick: () => go(null) },
+        typed ? `Enter で ${typed.startsWith("/") ? typed : "/" + typed} を実行` : "スキルが見つかりません"));
+      list.replaceChildren(...rows);
+      list.querySelector(".on")?.scrollIntoView({ block: "nearest" });
+    };
+    input.addEventListener("input", () => { sel = 0; paint(); });
+    input.addEventListener("keydown", (e) => {
+      if (e.isComposing) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (hits.length) sel = (sel + (e.key === "ArrowDown" ? 1 : -1) + hits.length) % hits.length;
+        paint();
+      } else if (e.key === "Tab" && hits.length) {
+        // Complete the name and drop into argument mode, as in the TUI.
+        e.preventDefault();
+        input.value = "/" + hits[sel].name + " ";
+        tabbed = hits[sel];
+        paint();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const t = input.value.trim();
+        go(hits[sel] || (tabbed && (t + " ").startsWith("/" + tabbed.name + " ") ? tabbed : null));
+      }
+    });
+    body.append(h("h1", {}, "スキル実行"),
+      h("p", { class: "muted small" }, "選んだスキルを最初の指示にして新しいセッションを起動します。"),
+      h("div", { class: "row" }, input),
+      list,
+      h("div", { class: "actions" }, h("button", { class: "btn", value: "cancel" }, "キャンセル")));
+    input.focus();
+    const q = new URLSearchParams();
+    for (const d of dirs || []) q.append("dir", d);
+    try { all = (await dev(id).get(`/hub/skills?${q}`)) || []; } catch (e) { all = []; toast(e.message); }
+    paint();
   });
 }
 

@@ -336,6 +336,7 @@ pre.bang-cmd { white-space: pre-wrap; word-break: break-all; background: var(--t
 #dlg-body .col { display: flex; flex-direction: column; gap: 6px; }
 .dirlist.skills div { font-family: inherit; }
 .dirlist.skills .chip { margin-left: 6px; }
+.dirlist.skills div.on { background: var(--chip); }
 .summary-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font-size: 13px; }
 .summary-card summary { padding: 6px 12px; cursor: pointer; font-weight: 600; color: var(--muted); }
 .summary-card > div { padding: 8px 12px; border-top: 1px solid var(--line); white-space: pre-wrap; }

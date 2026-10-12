@@ -321,14 +321,24 @@ func handleHubSettings(w http.ResponseWriter, cfg settings.Settings) {
 	writeOK(w, out)
 }
 
+// maxSkillDirs caps the ?dir= values /hub/skills walks up from.
+const maxSkillDirs = 40
+
 // handleHubSkills lists the skills / slash commands a new session could
 // start with, like the TUI's skill picker (S): project skills found from
-// ?dir= (and the new-session directory) first, then the user-level ones.
+// ?dir= (repeatable: the portal's skill picker sends recent session
+// directories, like the TUI's) and the new-session directory first, then
+// the user-level ones.
 func handleHubSkills(w http.ResponseWriter, r *http.Request, cfg settings.Settings) {
 	home, _ := os.UserHomeDir()
 	var dirs []string
-	if d := r.URL.Query().Get("dir"); d != "" {
-		dirs = append(dirs, expandHome(d, home))
+	for i, d := range r.URL.Query()["dir"] {
+		if i >= maxSkillDirs {
+			break
+		}
+		if d != "" {
+			dirs = append(dirs, expandHome(d, home))
+		}
 	}
 	if cfg.NewSessionDir != "" {
 		dirs = append(dirs, expandHome(cfg.NewSessionDir, home))
