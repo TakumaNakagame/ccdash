@@ -210,6 +210,12 @@ func (h *Hub) Handler() http.Handler {
 			files.ServeHTTP(w, r)
 		}))
 	}
+	// Vendored libraries (web/vendor, ADR 0005): the version is in the
+	// path, so a browser may keep them. Still behind login like the SPA.
+	mux.Handle("GET /vendor/", h.requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		files.ServeHTTP(w, r)
+	}), true))
 	// /s/<session id> is a shareable link to one session's chat (ccdash mcp
 	// hands these out); the hub finds the device.
 	mux.Handle("GET /s/{session}", h.requireUser(http.HandlerFunc(h.handleSessionLink), true))

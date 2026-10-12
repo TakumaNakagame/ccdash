@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -270,3 +271,44 @@ func TestHostGuard(t *testing.T) {
 		t.Errorf("oidc hub healthz = %d, want 200", w.Code)
 	}
 }
+
+// TestVendoredAssets: the portal loads nothing from a CDN (ADR 0005), and
+// every vendor/ file the page or app.js names is embedded.
+func TestVendoredAssets(t *testing.T) {
+	var refs []string
+	for _, f := range []string{"web/index.html", "web/app.js", "web/app.css"} {
+		b, err := webFS.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(b)
+		for _, cdn := range []string{"cdn.jsdelivr.net", "unpkg.com", "fonts.googleapis.com", "fonts.gstatic.com"} {
+			if strings.Contains(s, cdn) {
+				t.Errorf("%s still references %s", f, cdn)
+			}
+		}
+		for _, m := range vendorRef.FindAllString(s, -1) {
+			refs = append(refs, m)
+		}
+	}
+	if len(refs) < 6 {
+		t.Fatalf("found only %d vendor references: %v", len(refs), refs)
+	}
+	h := newTestHub(t, true).Handler()
+	for _, ref := range refs {
+		if _, err := webFS.ReadFile("web/" + ref); err != nil {
+			t.Errorf("%s is referenced but not embedded", ref)
+			continue
+		}
+		w := serve(h, "GET", "/"+ref, "", nil)
+		if w.Code != http.StatusOK || !strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
+			t.Errorf("GET /%s = %d, Cache-Control %q", ref, w.Code, w.Header().Get("Cache-Control"))
+		}
+	}
+	// Behind login like the page itself.
+	if w := serve(newTestHub(t, false).Handler(), "GET", "/"+refs[0], "", nil); w.Code != http.StatusFound {
+		t.Errorf("vendor file without login = %d, want a redirect to login", w.Code)
+	}
+}
+
+var vendorRef = regexp.MustCompile(`vendor/[A-Za-z0-9._@-]+/[A-Za-z0-9._-]+\.(?:js|css)`)

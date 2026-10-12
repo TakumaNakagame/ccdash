@@ -14,10 +14,11 @@
   --bad: #dc2626;
   --term-bg: #121418;
   /* Japanese faces first: a generic system-ui / sans-serif lets Linux and
-     Windows pick a Chinese CJK face for kanji. Noto Sans JP (webfont) is
-     the guaranteed fallback. */
+     Windows pick a Chinese CJK face for kanji. No webfont: the portal
+     loads nothing from outside (ADR 0005), so these are installed faces —
+     Hiragino on macOS, Yu Gothic / Meiryo on Windows, Noto on Linux. */
   --sans: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN",
-    "Noto Sans JP", "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", "Segoe UI", sans-serif;
+    "Noto Sans JP", "Noto Sans CJK JP", "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", "Segoe UI", sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "BIZ UDGothic", "Noto Sans Mono CJK JP",
     "Osaka-Mono", "MS Gothic", "Noto Sans JP", monospace;
   /* docs/design.md: type scale and radii — use these, not raw values. */

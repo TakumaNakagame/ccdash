@@ -1753,7 +1753,7 @@ function previewKind(path) {
   return { md: "md", markdown: "md", html: "html", htm: "html", txt: "txt" }[ext] || "";
 }
 
-// loadScript adds a pinned CDN script once (marked / DOMPurify load only
+// loadScript adds a vendored script once (marked / DOMPurify load only
 // when a preview is opened).
 const scriptLoads = new Map();
 function loadScript(src) {
@@ -1805,7 +1805,7 @@ async function previewFile(url, path, mode = previewMode()) {
     if (kind === "html") {
       content.replaceChildren(h("iframe", { class: "viewer-frame", sandbox: "allow-scripts allow-popups", srcdoc: text, title: name }));
     } else if (kind === "md") {
-      await Promise.all([loadScript("https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"), loadScript("https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js")]);
+      await Promise.all([loadScript("vendor/marked@12.0.2/marked.min.js"), loadScript("vendor/dompurify@3.4.16/purify.min.js")]);
       const doc = h("article", { class: "doc" });
       doc.innerHTML = DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: false }));
       for (const a of doc.querySelectorAll("a[href]")) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
