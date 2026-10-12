@@ -222,12 +222,22 @@ func (h *Hub) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 // portal's diagnostic) it goes to that browser only and the answer says
 // what the push service did, so the operator can tell a hub → push service
 // problem (proxy, firewall, rejected VAPID) from a browser / OS one.
+//
+// {"dummy": true} sends one shaped like a real "needs you" notification
+// with a tag of its own (so it never silently replaces an earlier one),
+// and {"delay": N} (≤ 120 s) sends it later, so the operator can switch
+// to another app — or lock the screen — and see what a real one does.
 func (h *Hub) handlePushTest(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Endpoint string `json:"endpoint"`
+		Dummy    bool   `json:"dummy"`
+		Delay    int    `json:"delay"`
 	}
 	_ = json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&req)
 	n := notification{Title: "ccdash", Body: "通知のテストです", URL: "/", Tag: "test"}
+	if req.Dummy {
+		n = notification{Title: "ccdash · 要対応（ダミー）", Body: "通知のテストです。実際の通知と同じ経路・同じ形で送っています", URL: "/", Tag: "dummy-" + randHex(4)}
+	}
 	if req.Endpoint == "" {
 		h.push(r.Context(), n)
 		w.WriteHeader(http.StatusNoContent)
@@ -245,6 +255,20 @@ func (h *Hub) handlePushTest(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"service": ""}
 	if u, err := url.Parse(sub.Endpoint); err == nil {
 		out["service"] = u.Host
+	}
+	if req.Delay > 0 {
+		delay := time.Duration(min(req.Delay, 120)) * time.Second
+		go func() {
+			time.Sleep(delay)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := h.sendPush(ctx, sub, n); err == nil {
+				log.Printf("hub: sent the delayed test notification")
+			}
+		}()
+		out["scheduled"] = int(delay.Seconds())
+		writeJSON(w, out)
+		return
 	}
 	status, err := h.sendPush(r.Context(), sub, n)
 	out["status"] = status

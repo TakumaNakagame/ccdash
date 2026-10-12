@@ -3626,7 +3626,35 @@ function pushDiagnose() {
       };
       return { ok: (t) => set("ok", t), bad: (t) => set("bad", t), wait: (t) => set("wait", t) };
     };
-    body.append(h("h1", {}, "通知のテスト"), rows,
+    // Dummy notifications: a real-looking one through the real path, now
+    // or later (switch to another app meanwhile). Each has its own tag, so
+    // none silently replaces an earlier one in the notification center.
+    const dummyNote = h("div", { class: "muted small" });
+    const dummy = (delay) => async () => {
+      try {
+        const sub = await pushSubscription();
+        if (!sub) { dummyNote.textContent = "このブラウザはまだ購読していません（上のテストを先に）"; return; }
+        const res = await api("/api/push/test", { method: "POST", json: { endpoint: sub.endpoint, dummy: true, delay } });
+        if (delay) dummyNote.textContent = `${delay} 秒後に送ります。Chrome 以外のアプリに切り替えて待ってください。`;
+        else dummyNote.textContent = res.ok ? `${res.service} が受け付けました。画面右上に出るはずです。` : "送れませんでした: " + res.error;
+      } catch (e) { dummyNote.textContent = "送れませんでした: " + e.message; }
+    };
+    const dummyBox = h("div", { class: "diag-dummy" },
+      h("h2", {}, "ダミー通知を送る"),
+      h("p", { class: "muted small" }, "本物の「要対応」通知と同じ経路・同じ形で送ります。"),
+      h("div", { class: "row" },
+        h("button", { type: "button", class: "btn", onclick: dummy(0) }, "今すぐ"),
+        h("button", { type: "button", class: "btn", onclick: dummy(10) }, "10 秒後"),
+        h("button", { type: "button", class: "btn", onclick: dummy(30) }, "30 秒後")),
+      dummyNote,
+      h("details", { class: "small" },
+        h("summary", {}, "テストは通るのに画面に出ないとき（macOS）"),
+        h("ul", {},
+          h("li", {}, "システム設定 → 通知 → Google Chrome:「通知を許可」を ON、通知のスタイルを「バナー」か「通知パネル」に（「なし」だと通知センターにしか入りません）"),
+          h("li", {}, "集中モード（おやすみモード）が ON だと出ません。コントロールセンターで確認"),
+          h("li", {}, "画面右上の時計をクリックして通知センターを開き、ccdash の通知が溜まっていないか確認"),
+          h("li", {}, "Chrome の設定 → プライバシーとセキュリティ → サイトの設定 → 通知 で、このサイト（127.0.0.1）が「許可」か"))));
+    body.append(h("h1", {}, "通知のテスト"), rows, dummyBox,
       h("div", { class: "actions" }, h("button", { class: "btn primary" }, "閉じる")));
     run().catch((e) => toast(e.message, 5000));
 
@@ -3644,7 +3672,7 @@ function pushDiagnose() {
       const local = step("ブラウザだけで通知を表示");
       try {
         await reg.showNotification("ccdash（ブラウザ内テスト）", { body: "ハブを通さずに表示しています", tag: "test-local", icon: "icon-192.png" });
-        local.ok("表示を依頼しました。画面に出ていなければ OS 側の設定です（macOS: システム設定 → 通知 → ブラウザ名、集中モード）");
+        local.ok("ブラウザが OS に表示を頼みました（画面に出たかはブラウザには分かりません。出ていなければ下の「画面に出ないとき」を）");
       } catch (e) { local.bad("表示できませんでした: " + e.message); }
 
       const subStep = step("このブラウザの購読");
@@ -3691,7 +3719,7 @@ function pushDiagnose() {
       const r = await got;
       if (!r) recv.bad("20 秒待っても届きません。ブラウザがプッシュサービスに接続できていない可能性があります（ネットワークで遮断されている、ブラウザが省電力で止まっている など）");
       else if (!r.shown) recv.bad("届きましたが表示できませんでした: " + r.error);
-      else recv.ok("届いて、通知を表示しました。画面に出ていなければ OS の通知設定です");
+      else recv.ok("届きました。ブラウザは OS に表示を頼んでいます（画面に出ていなければ OS 側の設定です）");
     }
   });
 }

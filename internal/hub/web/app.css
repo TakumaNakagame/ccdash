@@ -821,3 +821,9 @@ aside.viewer.side .doc { padding: 22px 22px 40px; }
 .diag-row[data-state="ok"] .diag-mark { color: var(--ok); }
 .diag-row[data-state="bad"] .diag-mark { color: var(--bad); }
 .diag-row[data-state="bad"] .muted { color: var(--text); }
+.diag-dummy { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.diag-dummy h2 { font-size: var(--fs-md); margin: 0 0 2px; }
+.diag-dummy .row { gap: 8px; margin: 8px 0 6px; flex-wrap: wrap; }
+.diag-dummy details { margin-top: 8px; }
+.diag-dummy summary { cursor: pointer; color: var(--muted); }
+.diag-dummy ul { margin: 6px 0 0; padding-left: 1.2em; line-height: 1.6; }

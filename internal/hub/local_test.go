@@ -346,3 +346,47 @@ func TestPushTestDiagnosis(t *testing.T) {
 		t.Errorf("after gone = %d, want 404", w.Code)
 	}
 }
+
+// TestPushDummy: dummy notifications look like real ones, carry a tag of
+// their own each time, and can be sent later.
+func TestPushDummy(t *testing.T) {
+	h, loginFile := newLocalHub(t)
+	handler := h.Handler()
+	w := serve(handler, "GET", "/auth/local?token="+loginToken(t, loginFile), "", local(nil))
+	hdr := local(map[string]string{"Cookie": localCookie + "=" + w.Result().Cookies()[0].Value, "Content-Type": "application/json"})
+	priv, _ := ecdh.P256().GenerateKey(rand.Reader)
+	auth := make([]byte, 16)
+	_, _ = rand.Read(auth)
+	b64 := base64.RawURLEncoding.EncodeToString
+	const ep = "https://fcm.googleapis.com/fcm/send/abc"
+	if err := h.st.addSub(context.Background(), "takuma", pushSub{Endpoint: ep, P256dh: b64(priv.PublicKey().Bytes()), Auth: b64(auth)}); err != nil {
+		t.Fatal(err)
+	}
+	sent := make(chan struct{}, 4)
+	h.pushClient = pushFunc(func(*http.Request) (*http.Response, error) {
+		sent <- struct{}{}
+		return &http.Response{StatusCode: http.StatusCreated, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})
+	if w := serve(handler, "POST", "/api/push/test", `{"endpoint":"`+ep+`","dummy":true}`, hdr); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Fatalf("dummy now = %d %s", w.Code, w.Body)
+	}
+	<-sent
+	w = serve(handler, "POST", "/api/push/test", `{"endpoint":"`+ep+`","dummy":true,"delay":1}`, hdr)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"scheduled":1`) {
+		t.Fatalf("dummy later = %d %s", w.Code, w.Body)
+	}
+	select {
+	case <-sent:
+		t.Fatal("delayed dummy sent at once")
+	case <-time.After(300 * time.Millisecond):
+	}
+	select {
+	case <-sent:
+	case <-time.After(3 * time.Second):
+		t.Fatal("delayed dummy never sent")
+	}
+}
+
+type pushFunc func(*http.Request) (*http.Response, error)
+
+func (f pushFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
