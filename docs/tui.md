@@ -4,7 +4,7 @@ Every key is also listed in the app: press `?`.
 
 ## Sessions view (default)
 
-A working session's spinner is joined by a band of light running across the row and back (setting "Working animation") and, on line 2, what it is doing: the tool in flight and how long the turn has run (`Bash: go test ./... · 1m23s`, or `thinking · 12s` between tools). Both come from ccdash's hooks, so sessions on a machine without them only spin.
+A working session's spinner is joined by a band of light running across the row, left to right, over and over (setting "Working animation") and, on line 2, what it is doing: the tool in flight and how long the turn has run (`Bash: go test ./... · 1m23s`, or `thinking · 12s` between tools). Both come from ccdash's hooks, so sessions on a machine without them only spin.
 
 | Key | Action |
 | --- | --- |

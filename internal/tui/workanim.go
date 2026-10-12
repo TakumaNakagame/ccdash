@@ -14,7 +14,7 @@ import (
 )
 
 // The TUI twin of the portal's working beam (runBeam in web/app.js): a
-// comet of color runs round a grid tile's frame, or back and forth across
+// comet of color runs round a grid tile's frame, or left to right across
 // a list row, once every loop whatever the size, like the portal's
 // constant-time loop. Its cells shade through beamStops, tail → head, one
 // shade per cell.
@@ -77,9 +77,10 @@ func blendHex(a, b string, t float64) string {
 }
 
 // beamRow lights a list row: a band across both of its lines runs left
-// to right and back, one round trip per beamLoopTicks, its tail trailing
-// the way it came. Lit cells take the beam color as background; the text
-// on them stays readable in black. Both lines are exactly width cells.
+// to right, leaves past the right edge and comes in again from the left,
+// its tail trailing behind. Lit cells take the beam color as background;
+// the text on them stays readable in black. Both lines are exactly width
+// cells.
 func beamRow(line1, line2 string, width, tick int) (string, string) {
 	if width <= 0 {
 		return line1, line2
@@ -88,25 +89,20 @@ func beamRow(line1, line2 string, width, tick int) (string, string) {
 	return paintCells(line1, lit), paintCells(line2, lit)
 }
 
-// rowBeam is beamRow's lit columns → color.
+// rowBeam is beamRow's lit columns → color. The head runs a track of
+// width + length cells (so the whole band leaves before it comes back)
+// at a beamLoopTicks-per-two-widths pace, whatever the width.
 func rowBeam(width, tick int) map[int]string {
-	ranks, length := beamRanks(tick, 2*width, beamLoopTicks)
-	best := map[int]int{}
-	for p, r := range ranks {
-		// Position p on a 2·width "track": out along the row, then back.
-		x := p
-		if p >= width {
-			x = 2*width - 1 - p
+	length := min(max(width/2, 8), 32, width)
+	n := width + length
+	loop := max(1, beamLoopTicks*n/(2*width))
+	t := ((tick % loop) + loop) % loop
+	head := t * n / loop
+	lit := make(map[int]string, length)
+	for d := 0; d < length; d++ {
+		if x := head - d; x >= 0 && x < width {
+			lit[x] = beamShade(length-1-d, length)
 		}
-		// At the turn the tail folds back over the head: the cell nearer
-		// the head wins, so it never flickers.
-		if old, ok := best[x]; !ok || r > old {
-			best[x] = r
-		}
-	}
-	lit := make(map[int]string, len(best))
-	for x, r := range best {
-		lit[x] = beamShade(r, length)
 	}
 	return lit
 }

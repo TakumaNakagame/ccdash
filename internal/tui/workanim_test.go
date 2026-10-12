@@ -47,33 +47,34 @@ func TestBeamRowKeepsText(t *testing.T) {
 	}
 }
 
-func TestBeamRowPingPong(t *testing.T) {
+func TestBeamRowWraps(t *testing.T) {
 	const w = 40
 	head := beamStops[len(beamStops)-1]
 	headAt := func(tick int) int {
-		x := -1
 		for i, c := range rowBeam(w, tick) {
-			if c == head && i > x {
-				x = i
+			if c == head {
+				return i
 			}
 		}
-		return x
+		return -1 // off the row (between passes)
 	}
-	// Out to the right in the first half of the loop, back in the second.
-	if a, b := headAt(2), headAt(10); a < 0 || b <= a {
-		t.Fatalf("not moving right: %d then %d", a, b)
-	}
-	if a, b := headAt(16), headAt(24); a < 0 || b >= a {
-		t.Fatalf("not coming back: %d then %d", a, b)
-	}
-	// The turn is stable: the same tick always lights the same cells.
-	for tick := 0; tick < beamLoopTicks; tick++ {
-		a := rowBeam(w, tick)
-		for i := 0; i < 5; i++ {
-			if !reflect.DeepEqual(a, rowBeam(w, tick)) {
-				t.Fatalf("tick %d flickers", tick)
+	// Always left to right: wherever the head shows, the next tick has it
+	// further right — or gone / back near the left after the right edge.
+	sawWrap := false
+	for tick := 0; tick < 3*beamLoopTicks; tick++ {
+		a, b := headAt(tick), headAt(tick+1)
+		switch {
+		case a >= 0 && b >= 0 && b < a:
+			if b > w/4 {
+				t.Fatalf("tick %d: head went back from %d to %d", tick, a, b)
 			}
+			sawWrap = true
+		case a >= 0 && b < 0:
+			sawWrap = true // left past the right edge
 		}
+	}
+	if !sawWrap {
+		t.Fatal("the band never left the right edge")
 	}
 }
 
