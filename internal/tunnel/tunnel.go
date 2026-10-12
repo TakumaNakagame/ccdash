@@ -36,7 +36,9 @@ const HeaderDeviceHost = "X-Ccdash-Hostname"
 // receive window (256 KiB by default) plus a header, so 1 MiB is ample.
 const maxMessage = 1 << 20
 
-func yamuxConfig() *yamux.Config {
+// YamuxConfig is the yamux setup both tunnel ends use (also the local
+// portal's link, internal/server/localportal.go).
+func YamuxConfig() *yamux.Config {
 	c := yamux.DefaultConfig()
 	// The keepalive doubles as the idle traffic that stops the proxies on
 	// the path (Caddy, ingress-nginx: 3600 s read timeout) from reaping a
@@ -69,7 +71,7 @@ func Dial(ctx context.Context, hubURL, token string, hdr http.Header) (*yamux.Se
 	}
 	ws.SetReadLimit(maxMessage)
 	nc := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
-	sess, err := yamux.Server(nc, yamuxConfig())
+	sess, err := yamux.Server(nc, YamuxConfig())
 	if err != nil {
 		_ = nc.Close()
 		return nil, err
@@ -107,7 +109,7 @@ func Accept(w http.ResponseWriter, r *http.Request) (*yamux.Session, error) {
 	}
 	ws.SetReadLimit(maxMessage)
 	nc := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
-	sess, err := yamux.Client(nc, yamuxConfig())
+	sess, err := yamux.Client(nc, YamuxConfig())
 	if err != nil {
 		_ = nc.Close()
 		return nil, err

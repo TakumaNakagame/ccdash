@@ -126,6 +126,8 @@ function deferWhileSelecting(el, fn) {
 function crumbs(...parts) {
   const nav = $("#crumbs");
   nav.replaceChildren();
+  // The local portal (ccdash web) has no device list to go back to.
+  if (me?.local && parts[0]?.text === "端末") parts[0] = { ...parts[0], text: "ホーム" };
   parts.forEach((p, i) => {
     if (i) nav.append(" / ");
     nav.append(p.href ? h("a", { href: p.href }, p.text) : h("span", {}, p.text));
@@ -523,14 +525,15 @@ function devicesPage() {
   crumbs({ text: "端末" });
   const list = h("div", { class: "list" }, h("div", { class: "empty" }, "読み込み中…"));
   const board = h("div", { class: "board" });
+  const local = !!me?.local;
   view.append(h("div", { class: "page" },
     board,
     h("div", { class: "row" },
-      h("h1", { class: "grow" }, "端末"),
-      h("button", { class: "btn primary", onclick: addDevice }, icon("plus"), "端末を追加")),
-    h("h2", {}, "登録済み"),
+      h("h1", { class: "grow" }, local ? "このマシン" : "端末"),
+      local ? null : h("button", { class: "btn primary", onclick: addDevice }, icon("plus"), "端末を追加")),
+    local ? null : h("h2", {}, "登録済み"),
     list,
-    h("p", { class: "muted small" },
+    local ? null : h("p", { class: "muted small" },
       "端末側で ", h("span", { class: "mono" }, "ccdash hub join"), " を実行すると、その端末の collector がこのハブへ接続します。端末にポートを開ける必要はありません。")));
 
   // Empty columns say what that means (docs/design.md: empty states guide).
@@ -549,18 +552,19 @@ function devicesPage() {
   every(5000, async () => {
     const ds = await api("/api/devices");
     ds.forEach((d) => deviceCache.set(d.id, d));
-    list.replaceChildren(...(ds.length ? ds.map(deviceRow) : [h("div", { class: "empty" }, "まだ端末がありません。「端末を追加」から登録してください。")]));
+    list.replaceChildren(...(ds.length ? ds.map(deviceRow) : [h("div", { class: "empty" }, local ? "collector に接続しています…" : "まだ端末がありません。「端末を追加」から登録してください。")]));
   });
 }
 
 function deviceRow(d) {
+  const local = !!me?.local;
   const sub = d.online
-    ? `${d.hostname || ""} · ccdash ${d.version || "?"} · ${rel(d.since)}から接続`
-    : `オフライン${d.last_seen ? " · 最終接続 " + rel(d.last_seen) : " · 未接続"}`;
+    ? (local ? `collector に接続中${d.version ? " · ccdash " + d.version : ""}` : `${d.hostname || ""} · ccdash ${d.version || "?"} · ${rel(d.since)}から接続`)
+    : local ? "collector に接続していません（再接続を待っています）" : `オフライン${d.last_seen ? " · 最終接続 " + rel(d.last_seen) : " · 未接続"}`;
   return h("div", { class: "item", onclick: () => d.online ? (location.hash = `#/d/${d.id}`) : toast("この端末はオフラインです") },
     h("span", { class: "dot" + (d.online ? " on" : "") }),
     h("div", { class: "grow" }, h("div", { class: "title" }, d.name), h("div", { class: "sub" }, sub)),
-    h("button", { class: "btn small", onclick: (e) => { e.stopPropagation(); deviceMenu(d); } }, "管理"));
+    local ? null : h("button", { class: "btn small", onclick: (e) => { e.stopPropagation(); deviceMenu(d); } }, "管理"));
 }
 
 function showToken(body, close, title, res) {
@@ -3605,7 +3609,7 @@ function notifyButton() {
 // tab title ("(3) ccdash hub") and a header chip: how many sessions need
 // the operator (+ unread finishes). The hub's push carries the same count
 // for the service worker (notify.go badgeCount).
-const BASE_TITLE = document.title;
+let BASE_TITLE = document.title;
 function updateBadge(b) {
   const needs = (b?.needs_you || []).length, done = (b?.done || []).length;
   try {
@@ -3629,6 +3633,14 @@ function updateBadge(b) {
   } catch {}
   try {
     me = await api("/api/me");
+    if (me.local) {
+      // The local portal (ccdash web): this machine only — no devices to
+      // add, no logout (ADR 0005).
+      document.body.classList.add("local");
+      BASE_TITLE = document.title = "ccdash web";
+      const b = document.querySelector(".brand span");
+      if (b) b.textContent = "web";
+    }
     loadLook();
     $("#me").replaceChildren(h("span", {}, lookButton(), notifyButton(), h("span", { class: "email" }, me.email), me.noAuth ? null : h("a", { href: "/auth/logout" }, "ログアウト")));
   } catch {}

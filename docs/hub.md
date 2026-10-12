@@ -123,3 +123,83 @@ A card is `{device_id, device_name, session}`; a session has `session_id`,
 writes, PTYs, approvals, push, settings — answers 403 to a read token; a
 wrong token gets 401. The bearer header is never forwarded to devices. See
 `docs/decisions/0004-hub-read-tokens.md`.
+
+## Local portal (`ccdash web`)
+
+The same portal for **this machine only**, with no hub server: one
+process serves it on `127.0.0.1` and talks to this machine's collector
+in-process. Meant for a machine nobody may reach from outside (a work
+laptop) where you still want the web UI — chat view, approval cards,
+grid, diff review, notifications. See
+`docs/decisions/0005-local-portal.md`.
+
+```sh
+ccdash web              # serves http://127.0.0.1:9124 and opens a one-time login link
+ccdash web open         # log in again later (another browser, expired cookie, launchd)
+ccdash web --port 9200 --no-open
+```
+
+- **Collector:** if one is already running (`ccdash server`, `ccdash -k`,
+  a TUI's), `ccdash web` links to it; otherwise it runs the collector
+  itself, exactly as `ccdash server` would (hooks keep working). If a
+  linked collector stops, `ccdash web` starts its own. The portal's
+  **↻ 再起動** re-execs `ccdash web` (with the embedded collector) and
+  resumes the hosted sessions.
+- **Loopback only.** It binds `127.0.0.1` (no `--listen`), answers 421 to
+  any `Host` header but `127.0.0.1` / `localhost` / `[::1]` (DNS
+  rebinding), and keeps the hub's cross-origin checks.
+- **Login:** the link in `$XDG_STATE_HOME/ccdash/web-login` (0600) carries
+  a one-time token; opening it sets an HttpOnly, SameSite=Strict cookie
+  for 30 days (renewed while you use the portal). The token is replaced
+  after every use; `ccdash web open` opens the current one. No OIDC, no
+  logout, no device management — the only device is this machine.
+- **What the portal may do** is the hub allowlist above, with the same
+  **Attach** / **Approval blocking** gates. The **Hub connection** toggle
+  doesn't apply: it governs the tunnel to an external hub, and the local
+  link never leaves the process. A machine can be joined to a hub and run
+  `ccdash web` at the same time.
+- **No outbound traffic** from the portal: xterm.js, marked and DOMPurify
+  are embedded in the binary (`internal/hub/web/vendor/`), and fonts are
+  the system's. The one exception is notifications: turning on 🔔
+  subscribes the browser to its push service (FCM for Chrome), and the
+  portal sends encrypted Web Push messages there. Chrome shows them with
+  the tab closed as long as Chrome itself runs; a click opens the session.
+- **State:** prefs, quick commands, VAPID keys and push subscriptions live
+  in `$XDG_STATE_HOME/ccdash/web/hub.sqlite`, separate from a hub's.
+
+**Keeping it running on macOS (launchd).** Save as
+`~/Library/LaunchAgents/dev.ccdash.web.plist`, adjust the paths, then
+`launchctl load ~/Library/LaunchAgents/dev.ccdash.web.plist` and
+`ccdash web open` once:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.ccdash.web</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/you/.local/bin/ccdash</string>
+    <string>web</string>
+    <string>--no-open</string>
+  </array>
+  <!-- launchd starts with an empty environment: SHELL lets hosted
+       claude sessions start through your login shell (and its PATH);
+       PATH must reach claude, curl and git. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SHELL</key><string>/bin/zsh</string>
+    <key>PATH</key><string>/Users/you/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/you/Library/Logs/ccdash-web.log</string>
+  <key>StandardErrorPath</key><string>/Users/you/Library/Logs/ccdash-web.log</string>
+</dict>
+</plist>
+```
+
+With `--no-open` the login link is never written to the log; use
+`ccdash web open`. Stop it with `launchctl unload` on the same file.
+Running the TUI as well is fine: it finds this collector and uses it.

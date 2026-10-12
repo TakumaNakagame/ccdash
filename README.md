@@ -87,6 +87,10 @@ Hands-on guides: [English](docs/usage_en.md) · [日本語](docs/usage_jp.md)
   home server behind OIDC (or `tailscale serve`), then `ccdash hub join` on
   each machine. Machines dial out to the hub; nothing on them is exposed.
   What the hub may do on a machine is limited by an allowlist on that machine.
+- **[Local portal](docs/hub.md#local-portal-ccdash-web).** `ccdash web`
+  serves the same portal for this machine only on 127.0.0.1 — no hub, no
+  inbound or outbound connections (bar Web Push if you enable it). For a
+  work laptop nobody may reach from outside.
 - **[Remote mode](docs/remote-mode.md).** Point a TUI at a collector on
   another machine over your LAN / VPN: `ccdash remote set …`, then `ccdash -r`.
 - **Status declarations.** Every session ends its turn with `set_status`:
@@ -114,6 +118,7 @@ ccdash -r                   # TUI against a remote collector (see Remote mode)
 ccdash sessions | approvals # plain-text listings
 ccdash trust <dir>          # folders where new sessions skip the folder-trust question
 ccdash hub serve | join     # web portal / connect this machine to it
+ccdash web                  # the portal for this machine only, on 127.0.0.1
 ccdash mcp                  # MCP server on stdio
 ccdash update               # self-update (ccdash update channel dev: follow rc builds)
 ```

@@ -126,7 +126,8 @@ func (h *Hub) push(ctx context.Context, n notification) {
 			Endpoint: s.Endpoint,
 			Keys:     webpush.Keys{P256dh: s.P256dh, Auth: s.Auth},
 		}, &webpush.Options{
-			Subscriber:      h.cfg.PublicURL,
+			HTTPClient:      h.pushClient,
+			Subscriber:      h.pushSubject(),
 			VAPIDPublicKey:  pub,
 			VAPIDPrivateKey: priv,
 			TTL:             600,

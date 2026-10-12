@@ -61,6 +61,9 @@ type Server struct {
 
 	// cancelFn stops the server's context (graceful shutdown).
 	cancelFn context.CancelFunc
+	// ctx is ListenAndServe's context; hijacked links (the local portal)
+	// close when it ends, since Shutdown doesn't track them.
+	ctx context.Context
 	// CanRestart lets POST /api/restart stop the server with ErrRestart; set
 	// only by `ccdash server`, which re-execs itself on that error.
 	CanRestart   bool
@@ -136,6 +139,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/approvals/", wrap(s.handleApprovalDecide))
 	s.mux.HandleFunc("/pty/", wrap(s.handlePTY))
 	s.mux.HandleFunc("/shutdown", wrap(s.handleShutdown))
+	s.mux.HandleFunc("GET "+LocalPortalPath, wrap(s.handleLocalPortal))
 	s.mux.HandleFunc("POST /api/restart", wrap(s.handleRestart))
 
 	// Remote-mode API — consumed by internal/store.Remote so a TUI can run
@@ -222,6 +226,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// listener the server serves.
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancelFn = cancel
+	s.ctx = ctx
 	defer cancel()
 
 	addrs, err := listenAddrs(s.addr)

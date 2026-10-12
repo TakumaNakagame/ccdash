@@ -128,6 +128,7 @@ spawns a collector — everything goes over HTTP.`,
 	root.AddCommand(tuiCmd(rf))
 	root.AddCommand(remoteCmd())
 	root.AddCommand(hubCmd())
+	root.AddCommand(webCmd())
 	root.AddCommand(updateCmd(version))
 	root.AddCommand(mcpCmd(rf, version))
 	return root

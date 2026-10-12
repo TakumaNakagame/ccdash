@@ -681,6 +681,27 @@ What the portal may do is limited by the device's own settings: with
 decide approvals; with **Hub connection** off the device is offline.
 - **On a phone**: swipe right to go back (session → device list → board; from the left edge too when installed as an app, elsewhere in the browser, whose own gesture owns the edge). Opening a session no longer pops the keyboard.
 
+### Local portal (`ccdash web`)
+
+The portal for this machine only, on `127.0.0.1`, with no hub server —
+for a machine nobody may reach from outside (a work laptop) where you
+still want the web UI.
+
+```sh
+ccdash web          # serves http://127.0.0.1:9124 and opens a one-time login link
+ccdash web open     # log in again later (another browser, expired cookie, launchd)
+```
+
+- Links to a running collector, or runs one itself (like `ccdash server`;
+  hooks keep working).
+- Loopback only. One-time login link → cookie (30 days, renewed while
+  used). No device management, no logout.
+- Nothing goes out except Web Push once you turn on 🔔 (through the
+  browser's push service, encrypted).
+- Bounded by the hub allowlist and the **Attach** / **Approval blocking**
+  toggles; **Hub connection** doesn't apply.
+- A launchd example for macOS is in [Hub mode](hub.md), "Local portal".
+
 ## 16. MCP server (`ccdash mcp`)
 
 `ccdash mcp` is a Model Context Protocol server on stdio, so Claude can

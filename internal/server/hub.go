@@ -138,13 +138,18 @@ func (s *Server) hubWatch(ctx context.Context, sess *yamux.Session, cfg hubcfg.C
 // the same device-side toggles as the TUI — but it can never reach the hook
 // endpoints, /shutdown, or settings writes (so a compromised hub can't
 // switch the device's own safety toggles back on).
-func (s *Server) hubHandler() http.Handler {
+func (s *Server) hubHandler() http.Handler { return s.tunnelHandler(false) }
+
+// tunnelHandler is hubHandler's body. local is the local portal's link
+// (`ccdash web`, localportal.go): the same allowlist and gates, but not
+// the hub_enabled toggle, which governs the outbound tunnel to a hub.
+func (s *Server) tunnelHandler(local bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg, err := settings.Load(r.Context(), s.db)
 		if err != nil {
 			cfg = settings.Defaults()
 		}
-		if !cfg.HubEnabled {
+		if !local && !cfg.HubEnabled {
 			http.Error(w, "hub connection is OFF on this device", http.StatusForbidden)
 			return
 		}

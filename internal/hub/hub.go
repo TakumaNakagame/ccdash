@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 
@@ -51,6 +52,9 @@ type Config struct {
 	// ReadTokens are bearer tokens for machine clients: GET-only access to
 	// a fixed set of read routes (see readtoken.go). Empty disables them.
 	ReadTokens []string
+	// Local makes this the local portal (`ccdash web`, local.go): one
+	// fixed device linked in-process, token-file login, loopback only.
+	Local *LocalConfig
 }
 
 // Hub is a running portal.
@@ -62,6 +66,8 @@ type Hub struct {
 	assets string // hash of the embedded web files; the SPA reloads when it changes
 
 	readTokens [][32]byte // SHA-256 of each read token; never the tokens themselves
+
+	pushClient webpush.HTTPClient // nil = a plain http.Client (tests capture pushes)
 
 	mu        sync.Mutex
 	conns     map[string]*deviceConn    // device id → live tunnel
@@ -82,6 +88,10 @@ type deviceConn struct {
 // New opens the hub's store and prepares the handlers.
 func New(ctx context.Context, cfg Config) (*Hub, error) {
 	switch {
+	case cfg.Local != nil:
+		if err := cfg.Local.check(cfg); err != nil {
+			return nil, err
+		}
 	case cfg.Auth.NoAuth:
 	case cfg.Auth.TailscaleServe:
 		// An empty allowlist is allowed here: every visitor gets a 403
@@ -117,11 +127,18 @@ func New(ctx context.Context, cfg Config) (*Hub, error) {
 	for i, e := range cfg.Auth.AllowedEmails {
 		cfg.Auth.AllowedEmails[i] = strings.ToLower(strings.TrimSpace(e))
 	}
+	a := &authn{cfg: cfg.Auth, publicURL: cfg.PublicURL, key: []byte(key), secure: pu.Scheme == "https"}
+	if cfg.Local != nil {
+		if a.local, err = newLocalLogin(cfg.Local, cfg.PublicURL); err != nil {
+			_ = st.Close()
+			return nil, err
+		}
+	}
 	return &Hub{
 		assets: assetsHash(),
 		cfg:    cfg,
 		st:     st,
-		auth:   &authn{cfg: cfg.Auth, publicURL: cfg.PublicURL, key: []byte(key), secure: pu.Scheme == "https"},
+		auth:   a,
 		conns:  map[string]*deviceConn{},
 
 		readTokens: readTokens,
@@ -133,7 +150,16 @@ func (h *Hub) Close() error { return h.st.Close() }
 
 // ListenAndServe serves until ctx ends.
 func (h *Hub) ListenAndServe(ctx context.Context) error {
-	srv := &http.Server{Addr: h.cfg.Listen, Handler: h.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	ln, err := net.Listen("tcp", h.cfg.Listen)
+	if err != nil {
+		return err
+	}
+	return h.Serve(ctx, ln)
+}
+
+// Serve serves on ln until ctx ends.
+func (h *Hub) Serve(ctx context.Context, ln net.Listener) error {
+	srv := &http.Server{Handler: h.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -145,11 +171,13 @@ func (h *Hub) ListenAndServe(ctx context.Context) error {
 		}
 		h.mu.Unlock()
 	}()
-	log.Printf("ccdash hub %s listening on %s (public url %s)", buildinfo.Version, h.cfg.Listen, h.cfg.PublicURL)
+	if h.cfg.Local == nil {
+		log.Printf("ccdash hub %s listening on %s (public url %s)", buildinfo.Version, ln.Addr(), h.cfg.PublicURL)
+	}
 	if n := len(h.readTokens); n > 0 {
 		log.Printf("hub: %d read token(s) configured (GET-only machine access)", n)
 	}
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
@@ -161,21 +189,28 @@ func (h *Hub) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	// Device tunnels authenticate with their device token, not a browser
-	// session.
-	mux.HandleFunc("GET "+tunnel.Path, h.handleAgent)
-
-	mux.HandleFunc("GET /auth/login", h.auth.handleLogin)
-	mux.HandleFunc("GET /auth/callback", h.auth.handleCallback)
-	mux.HandleFunc("GET /auth/logout", h.auth.handleLogout)
-
 	api := http.NewServeMux()
+	if h.cfg.Local != nil {
+		// The local portal has one device, linked in-process (ServeLocal):
+		// no tunnel endpoint, no device management, no OIDC.
+		mux.HandleFunc("GET /auth/local", h.auth.handleLocalLogin)
+		mux.HandleFunc("GET /auth/login", h.auth.handleLocalLoginHelp)
+	} else {
+		// Device tunnels authenticate with their device token, not a
+		// browser session.
+		mux.HandleFunc("GET "+tunnel.Path, h.handleAgent)
+
+		mux.HandleFunc("GET /auth/login", h.auth.handleLogin)
+		mux.HandleFunc("GET /auth/callback", h.auth.handleCallback)
+		mux.HandleFunc("GET /auth/logout", h.auth.handleLogout)
+
+		api.HandleFunc("POST /api/devices", h.handleCreateDevice)
+		api.HandleFunc("POST /api/devices/{id}/rotate", h.handleRotateDevice)
+		api.HandleFunc("POST /api/devices/{id}/rename", h.handleRenameDevice)
+		api.HandleFunc("DELETE /api/devices/{id}", h.handleDeleteDevice)
+	}
 	api.HandleFunc("GET /api/me", h.handleMe)
 	api.HandleFunc("GET /api/devices", h.handleListDevices)
-	api.HandleFunc("POST /api/devices", h.handleCreateDevice)
-	api.HandleFunc("POST /api/devices/{id}/rotate", h.handleRotateDevice)
-	api.HandleFunc("POST /api/devices/{id}/rename", h.handleRenameDevice)
-	api.HandleFunc("DELETE /api/devices/{id}", h.handleDeleteDevice)
 	api.HandleFunc("GET /api/board", h.handleBoard)
 	api.HandleFunc("GET /api/active", h.handleActive)
 	api.HandleFunc("GET /api/locate/{session}", h.handleLocate)
@@ -225,7 +260,7 @@ func (h *Hub) Handler() http.Handler {
 		w.Header().Set("Referrer-Policy", "same-origin")
 		files.ServeHTTP(w, r)
 	}), true))
-	if h.cfg.Auth.NoAuth || h.cfg.Auth.TailscaleServe {
+	if h.cfg.Local != nil || h.cfg.Auth.NoAuth || h.cfg.Auth.TailscaleServe {
 		return hostGuard(h.cfg.PublicURL, mux)
 	}
 	return mux
@@ -236,6 +271,14 @@ func (h *Hub) Handler() http.Handler {
 func (h *Hub) requireUser(next http.Handler, page bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if login, ok := h.auth.user(r); !ok {
+			if h.cfg.Local != nil {
+				if page {
+					h.auth.handleLocalLoginHelp(w, r)
+					return
+				}
+				http.Error(w, "login required", http.StatusUnauthorized)
+				return
+			}
 			if h.cfg.Auth.TailscaleServe {
 				h.logRefused(login)
 				who := login
@@ -386,8 +429,13 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func (h *Hub) handleMe(w http.ResponseWriter, r *http.Request) {
 	email, _ := h.auth.user(r)
+	if h.cfg.Local != nil {
+		// The SPA polls this every 30 s: keep a portal in daily use logged in.
+		h.auth.renewLocal(w, r)
+	}
 	writeJSON(w, map[string]any{"email": email, "version": buildinfo.Version, "publicUrl": h.cfg.PublicURL,
-		"noAuth": h.cfg.Auth.NoAuth || h.cfg.Auth.TailscaleServe, "assets": h.assets})
+		"noAuth": h.cfg.Auth.NoAuth || h.cfg.Auth.TailscaleServe || h.cfg.Local != nil,
+		"local":  h.cfg.Local != nil, "assets": h.assets})
 }
 
 type deviceView struct {
@@ -538,8 +586,12 @@ func (h *Hub) handleAgent(w http.ResponseWriter, r *http.Request) {
 		log.Printf("hub: tunnel accept for %s: %v", d.Name, err)
 		return
 	}
-	hostname := r.Header.Get(tunnel.HeaderDeviceHost)
-	version := r.Header.Get(tunnel.HeaderDeviceVersion)
+	h.serveDevice(d, sess, clientIP(r), r.Header.Get(tunnel.HeaderDeviceHost), r.Header.Get(tunnel.HeaderDeviceVersion))
+}
+
+// serveDevice makes sess the live link of device d — proxying, the PTY
+// socket and push watching all go through it — until sess closes.
+func (h *Hub) serveDevice(d Device, sess *yamux.Session, remote, hostname, version string) {
 	_ = h.st.touchDevice(context.Background(), d.ID, hostname, version)
 
 	tr := &http.Transport{
@@ -547,7 +599,7 @@ func (h *Hub) handleAgent(w http.ResponseWriter, r *http.Request) {
 		MaxIdleConnsPerHost: 8,
 		IdleConnTimeout:     60 * time.Second,
 	}
-	dc := &deviceConn{sess: sess, since: time.Now().UTC(), remote: clientIP(r), transport: tr}
+	dc := &deviceConn{sess: sess, since: time.Now().UTC(), remote: remote, transport: tr}
 	dc.proxy = newDeviceProxy(tr)
 
 	h.mu.Lock()

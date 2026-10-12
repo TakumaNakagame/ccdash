@@ -108,6 +108,16 @@ mode) managing their own Claude Code sessions.
   (bearer, GET-only on five read routes) can read session lists and
   transcript tails — the raw transcript, unredacted — but can't write,
   drive a PTY or decide approvals; treat one like a portal login.
+- Local portal (`ccdash web`): binds 127.0.0.1 only (no flag widens it),
+  refuses foreign `Host` headers, and logs in with a one-time token from
+  a 0600 file traded for an HttpOnly / SameSite=Strict cookie; the token
+  rotates on every use. It reaches the collector only through the hub
+  allowlist (an in-process link, or `/local/portal` on a running
+  collector, which needs the collector token like every other route).
+  Its only outbound traffic is Web Push once the operator enables
+  notifications. Anyone running as the same OS user can read the login
+  file — the same boundary as the collector token. See
+  `docs/decisions/0005-local-portal.md`.
 - DNS rebinding: a hub whose login a rebinding page could satisfy —
   `--no-auth`, `--tailscale-auth` (the page can set the login header
   itself) — answers 421 to any `Host` but `127.0.0.1` / `localhost` /

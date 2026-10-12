@@ -30,7 +30,10 @@ ccdash remote set --url http://host:9123 --token-file ~/.ccdash-token   # one-ti
 ccdash -r                    # TUI against the configured remote collector (--remote-url overrides ad hoc)
 ccdash hub serve --no-auth --listen 127.0.0.1:8080   # local dev hub (real deployments use OIDC; see docs/hub.md)
 ccdash hub join --url http://127.0.0.1:8080          # device side: paste the token from the portal's "Add device"
+ccdash web                   # local portal: the hub SPA for this machine on 127.0.0.1:9124 (+ `ccdash web open` to log in)
 ```
+
+To try `ccdash web` without touching the real collector, use a throwaway `HOME` / `XDG_STATE_HOME` / `XDG_CONFIG_HOME` and the hidden `--collector-addr 127.0.0.1:<other port>` (it links to, or runs, the collector there); `--port` moves the portal.
 
 To test hub mode without touching your real collector or `~/.claude/settings.json`, run the device collector with `HOME`, `XDG_STATE_HOME` and `XDG_CONFIG_HOME` pointed at a temp dir and `ccdash server --listen 127.0.0.1:<other port>` (a fresh state dir has a new token; with your real HOME, `syncInstalledHooks` would rewrite settings.json to it).
 
@@ -46,6 +49,8 @@ ccdash is a single Go binary that plays three roles depending on how it's invoke
 
 The TUI auto-spawns the collector when none is listening, and tears it down on quit. `-k` and `ccdash server` cover persistent-collector setups.
 
+The hub SPA can also run locally as `ccdash web` (`internal/cli/web.go`, `internal/hub/local.go`, `internal/server/localportal.go`; `docs/decisions/0005-local-portal.md`): one process, hub on 127.0.0.1 linked to this machine's collector by yamux over `net.Pipe` (embedded collector) or over the token-gated `GET /local/portal` upgrade (a collector already running).
+
 A fourth, optional role is the **hub** (`ccdash hub serve`, `internal/hub`): a web portal on a home server. Joined devices' collectors dial out to it over a WebSocket + yamux tunnel (`internal/tunnel`) and the hub forwards browser requests through it. See `docs/decisions/0003-hub-web-portal.md`.
 
 ### Top-level layout
@@ -57,7 +62,7 @@ internal/server/                HTTP collector + rate limiter + auth middleware 
 internal/db/                    SQLite layer (sessions / events / approvals / settings)
 internal/store/                 Store seam between TUI/CLI and data: Local (*db.DB + files + title generation) / Remote (HTTP client for -r remote mode)
 internal/clientcfg/             client-side remote config (~/.config/ccdash/config.json) read by -r, written by `ccdash remote set`
-internal/hub/                   `ccdash hub serve`: OIDC login, device registry (own hub.sqlite), tunnel endpoint, device proxy, browser⇄pty-raw WebSocket bridge; web/ = embedded vanilla-JS SPA (chat view + xterm.js)
+internal/hub/                   `ccdash hub serve`: OIDC login, device registry (own hub.sqlite), tunnel endpoint, device proxy, browser⇄pty-raw WebSocket bridge; web/ = embedded vanilla-JS SPA (chat view + xterm.js; libraries vendored in web/vendor/); local.go = `ccdash web` mode
 internal/hubcfg/                device-side join state ($XDG_STATE_HOME/ccdash/hub.json, 0600: hub url + device token)
 internal/tunnel/                device ⇄ hub tunnel: WebSocket (coder/websocket) + yamux, hub = yamux client
 internal/discovery/             scans ~/.claude/projects/*.jsonl, extracts cwd / first user prompt
@@ -151,7 +156,9 @@ The TUI render layer dispatches on `Spec.Kind` automatically; you don't normally
 - **Subagents live in their own files.** `<transcript without .jsonl>/subagents/agent-<id>.jsonl` (+ `.meta.json`: type, description, parent `toolUseId`, `requestShape`). A running subagent is not in the parent transcript yet, so the portal reads `GET /hub/subagents?session=` (status from the tail: `SubagentHandback` = done, quiet > 10 min = stale) and `GET /hub/subagents/{session}/{agentId}` (tail, path derived from the DB row — never from the request).
 - **Attention is collector-side state on the session row** (`attention`, `attention_reason`, `attention_at`; `internal/server/attention.go`). needs_you ← PreToolUse of AskUserQuestion / ExitPlanMode (cleared by their PostToolUse), permission Notification hooks, and `attentionLoop` reading hosted PTY screens through `internal/screenprompt` (the Go twin of `screenAsk`/`screenPrompt` in `web/app.js`); pending approvals are folded in at read time (`db.finishAttention`). done ← Stop; cleared by `POST /api/sessions/{id}/seen` (`Store.MarkSeen`: TUI selection, portal chat open) or the next prompt. The hub's push notifications and `/api/board` only read this field — add new "needs you" signals here, not in the hub.
 - **Portal diff review and usage are read-only device routes.** `GET /hub/git/status|diff?session=` run `git` with `GIT_OPTIONAL_LOCKS=0` in the session's DB cwd (paths confined to the repo). `internal/usage` totals transcript `message.usage` (deduped by message id, incremental per file, subagent files included) at API list prices — an estimate, labelled as such; prices live in `usage.prices`.
-- **Hub auth:** OIDC (any issuer; in the home lab Cloudflare Access for SaaS) + `AllowedEmails` (the hub refuses to start without one) + HMAC-signed cookies keyed by a secret in hub.sqlite; or `--tailscale-auth` (loopback listen only) trusting `tailscale serve`'s `Tailscale-User-Login` header against the same list. The SPA polls `/api/me` and reloads when the embedded-assets hash changes. `--no-auth` is refused on a non-loopback listen. Mutating `/api/` calls go through `http.CrossOriginProtection`; the terminal WebSocket relies on coder/websocket's same-origin check — keep both.
+- **Hub auth:** OIDC (any issuer; in the home lab Cloudflare Access for SaaS) + `AllowedEmails` (the hub refuses to start without one) + HMAC-signed cookies keyed by a secret in hub.sqlite; or `--tailscale-auth` (loopback listen only) trusting `tailscale serve`'s `Tailscale-User-Login` header against the same list. The SPA polls `/api/me` and reloads when the embedded-assets hash changes. `--no-auth` is refused on a non-loopback listen, and `--no-auth` / `--tailscale-auth` hubs (and the local portal) answer 421 to a `Host` that isn't loopback or the public host (`hostGuard`, DNS rebinding). Mutating `/api/` calls go through `http.CrossOriginProtection`; the terminal WebSocket relies on coder/websocket's same-origin check — keep both.
+- **Local portal (`ccdash web`) is the hub with `Config.Local`.** One fixed device (`hub.LocalDeviceID` = "local"), no tunnel endpoint / device management / OIDC routes, login by the one-time token in `$XDG_STATE_HOME/ccdash/web-login` (rotated on use) → `ccdash_web` cookie (SameSite=Strict, its own name because cookies ignore ports), `hostGuard` on every request, read tokens refused. The collector serves the link with `tunnelHandler(true)` — the hub allowlist minus the `hub_enabled` check; never let `/local/portal` skip the token check. `/api/me` reports `local: true` and app.js hides device management / logout on it. The portal binds loopback only — don't add a `--listen`.
+- **The portal loads nothing from outside.** Browser libraries are vendored in `internal/hub/web/vendor/<name>@<version>/` (served immutable; versions, sources, integrity and licenses in its README); `TestVendoredAssets` fails on a CDN / Google Fonts reference or a missing vendored file.
 - **Hub read tokens** (`internal/hub/readtoken.go`, `docs/decisions/0004-hub-read-tokens.md`): `CCDASH_HUB_READ_TOKENS` / `--read-token-file` give machine clients `Authorization: Bearer` access to GET-only `readTokenRoutes` (board, active, devices, a device's sessions, transcript tail). `apiAuth` takes the bearer branch only when tokens are configured; any other route or method is 403, a cookie on a bearer request is dropped. Widening `readTokenRoutes` widens every token — add a case to `readtoken_test.go`. The collector's transcript tail also takes `?lines=N`.
 
 ### Common gotchas

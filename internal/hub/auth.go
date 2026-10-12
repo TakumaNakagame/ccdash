@@ -55,9 +55,10 @@ const (
 
 type authn struct {
 	cfg       AuthConfig
-	publicURL string // origin the browser uses; the OIDC redirect URI hangs off it
-	key       []byte // HMAC key for both cookies
-	secure    bool   // set the Secure cookie flag (https public URL)
+	publicURL string      // origin the browser uses; the OIDC redirect URI hangs off it
+	key       []byte      // HMAC key for both cookies
+	secure    bool        // set the Secure cookie flag (https public URL)
+	local     *localLogin // the local portal's login (local.go); nil on a hub
 
 	mu       sync.Mutex
 	provider *oidc.Provider // lazily discovered so a provider blip doesn't block startup
@@ -127,6 +128,9 @@ type loginState struct {
 
 // user returns the logged-in email for r.
 func (a *authn) user(r *http.Request) (string, bool) {
+	if a.local != nil {
+		return a.localUser(r)
+	}
 	if a.cfg.NoAuth {
 		return "dev@localhost", true
 	}
