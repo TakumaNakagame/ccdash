@@ -2939,11 +2939,32 @@ func (m *model) jumpTo(idx int) tea.Cmd {
 	return m.loadTailCmd()
 }
 
+// windowTitle puts the unread count in the terminal's title ("(3) ccdash"),
+// like the portal's tab title: sessions that need the operator plus unread
+// finishes, across every group — so a background terminal tab shows that a
+// reply came in.
+func (m *model) windowTitle() string {
+	n := 0
+	for _, s := range m.allSessions {
+		if s.Archived {
+			continue
+		}
+		if s.Attention == mdl.AttentionNeedsYou || s.Attention == mdl.AttentionDone || s.Unseen || s.PendingCount > 0 {
+			n++
+		}
+	}
+	if n == 0 {
+		return "ccdash"
+	}
+	return fmt.Sprintf("(%d) ccdash", n)
+}
+
 func (m *model) View() tea.View {
 	v := tea.NewView("")
 	v.AltScreen = true
 	v.ReportFocus = true
 	v.MouseMode = tea.MouseModeCellMotion
+	v.WindowTitle = m.windowTitle()
 	if m.width == 0 {
 		v.SetContent("loading...")
 		return v

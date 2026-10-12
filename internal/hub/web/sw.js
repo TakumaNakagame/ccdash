@@ -6,10 +6,15 @@ self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
 // Web Push from the hub: approvals, questions on a claude's screen, turns
-// that finished. Payload: {title, body, url, tag}.
+// that finished. Payload: {title, body, url, tag, badge}.
 self.addEventListener("push", (event) => {
   let n = {};
   try { n = event.data ? event.data.json() : {}; } catch { n = { title: "ccdash", body: event.data?.text() || "" }; }
+  // The hub sends the app-icon count with each push so the installed app's
+  // badge moves even while no portal window is open.
+  if (typeof n.badge === "number") {
+    try { (n.badge > 0 ? self.navigator.setAppBadge?.(n.badge) : self.navigator.clearAppBadge?.())?.catch?.(() => {}); } catch {}
+  }
   event.waitUntil(self.registration.showNotification(n.title || "ccdash", {
     body: n.body || "",
     tag: n.tag || undefined,

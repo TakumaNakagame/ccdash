@@ -77,6 +77,9 @@ type notification struct {
 	Body  string `json:"body"`
 	URL   string `json:"url"`
 	Tag   string `json:"tag"` // a newer notification with the same tag replaces the older one
+	// Badge is the app-icon count at send time (needs you + unread), so the
+	// installed app's badge moves even while no portal window is open.
+	Badge *int `json:"badge,omitempty"`
 }
 
 // vapidKeys returns the hub's VAPID key pair, generated on first use and
@@ -236,6 +239,8 @@ func (h *Hub) watchDevice(ctx context.Context, d Device, dc *deviceConn) {
 			h.storeSnapshot(d, sessions)
 		}
 		for _, n := range ns {
+			b := h.badgeCount()
+			n.Badge = &b
 			h.push(ctx, n)
 		}
 		select {
@@ -455,6 +460,38 @@ type boardCard struct {
 	Session    model.Session `json:"session"`
 }
 
+// boardColumn places a session on the board: it needs the operator, is
+// working, or finished unread (attention done, or NEW: progress since it
+// was last read) — or "" when it is none of those.
+func boardColumn(s model.Session) string {
+	switch {
+	case s.Attention == model.AttentionNeedsYou:
+		return "needs_you"
+	case s.Status == model.StatusActive:
+		return "working"
+	case s.Attention == model.AttentionDone || s.Unseen:
+		return "done"
+	}
+	return ""
+}
+
+// badgeCount is the app-icon badge: sessions that need the operator plus
+// unread finishes, across every connected device (the portal's
+// updateBadge counts the same from /api/board).
+func (h *Hub) badgeCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, snap := range h.snapshots {
+		for _, s := range snap.Sessions {
+			if k := boardColumn(s); k == "needs_you" || k == "done" {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 // handleBoard is the portal's cross-device view, served from the watchers'
 // latest snapshots: sessions that need the operator, are working, or
 // finished unread — without a round trip to every device.
@@ -464,13 +501,8 @@ func (h *Hub) handleBoard(w http.ResponseWriter, r *http.Request) {
 	for _, snap := range h.snapshots {
 		for _, s := range snap.Sessions {
 			c := boardCard{DeviceID: snap.Device.ID, DeviceName: snap.Device.Name, Session: s}
-			switch {
-			case s.Attention == model.AttentionNeedsYou:
-				board["needs_you"] = append(board["needs_you"], c)
-			case s.Status == model.StatusActive:
-				board["working"] = append(board["working"], c)
-			case s.Attention == model.AttentionDone:
-				board["done"] = append(board["done"], c)
+			if k := boardColumn(s); k != "" {
+				board[k] = append(board[k], c)
 			}
 		}
 	}

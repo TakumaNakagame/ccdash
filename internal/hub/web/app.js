@@ -3457,14 +3457,18 @@ function notifyButton() {
   return btn;
 }
 
-// updateBadge mirrors the board onto the installed app's icon badge and a
-// header chip: how many sessions need the operator (+ unread finishes).
+// updateBadge mirrors the board onto the installed app's icon badge, the
+// tab title ("(3) ccdash hub") and a header chip: how many sessions need
+// the operator (+ unread finishes). The hub's push carries the same count
+// for the service worker (notify.go badgeCount).
+const BASE_TITLE = document.title;
 function updateBadge(b) {
   const needs = (b?.needs_you || []).length, done = (b?.done || []).length;
   try {
-    if (needs + done > 0) navigator.setAppBadge?.(needs + done);
-    else navigator.clearAppBadge?.();
+    if (needs + done > 0) navigator.setAppBadge?.(needs + done)?.catch?.(() => {});
+    else navigator.clearAppBadge?.()?.catch?.(() => {});
   } catch {}
+  document.title = needs + done > 0 ? `(${needs + done}) ${BASE_TITLE}` : BASE_TITLE;
   const el = $("#att");
   if (!el) return;
   el.hidden = needs + done === 0;
@@ -3507,7 +3511,7 @@ function updateBadge(b) {
   navigator.serviceWorker?.addEventListener("message", (e) => {
     if (e.data?.type === "open" && e.data.url) location.href = e.data.url;
   });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { checkUpdate(); badgeTick(); } });
   window.addEventListener("hashchange", () => { noteHash(); navigate(); });
   for (const sp of document.querySelectorAll("[data-icon]")) sp.replaceWith(icon(sp.dataset.icon));
   installSheet();

@@ -111,7 +111,11 @@ func TestBoard(t *testing.T) {
 		{SessionID: "b", Status: model.StatusIdle, Attention: model.AttentionNeedsYou},
 		{SessionID: "c", Status: model.StatusIdle, Attention: model.AttentionDone},
 		{SessionID: "d", Status: model.StatusIdle},
+		{SessionID: "e", Status: model.StatusStopped, Unseen: true}, // NEW without a done flag
 	})
+	if n := hub.badgeCount(); n != 3 {
+		t.Fatalf("badgeCount = %d, want 3 (b, c, e)", n)
+	}
 	wa := serve(hub.Handler(), "GET", "/api/active", "", nil)
 	var act []struct {
 		Session model.Session `json:"session"`
@@ -127,7 +131,7 @@ func TestBoard(t *testing.T) {
 		Session    model.Session `json:"session"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &b)
-	if len(b["needs_you"]) != 1 || len(b["working"]) != 1 || len(b["done"]) != 1 || b["done"][0].Session.SessionID != "c" || b["needs_you"][0].DeviceName != "haruna" {
+	if len(b["needs_you"]) != 1 || len(b["working"]) != 1 || len(b["done"]) != 2 || b["needs_you"][0].DeviceName != "haruna" {
 		t.Fatalf("board = %s", w.Body)
 	}
 }
