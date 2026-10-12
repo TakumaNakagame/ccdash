@@ -2781,9 +2781,9 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   const statusEl = h("span", { class: "chip" });
   const freshEl = h("span", { hidden: true });
   const termBtn = h("a", { class: "btn small", href: "#" }, "ターミナル");
-  const endBtn = h("button", { class: "btn small danger", hidden: true, onclick: async () => {
-    if (!confirm("このセッションの claude を終了しますか？（後から再開できます）")) return;
-    try { await d.del(`/pty/${encodeURIComponent(ptyKey)}`); toast("終了しました"); } catch (e) { toast(e.message); }
+  const endBtn = h("button", { class: "btn small danger", hidden: true, title: "claude を終了してアーカイブする", onclick: async () => {
+    if (!confirm(END_CONFIRM)) return;
+    try { toast(await endAndArchive(d, ptyKey, sid)); } catch (e) { toast(e.message); }
   } }, "終了");
   const restartBtn = h("button", { class: "btn small", hidden: true, title: "claude を終了して --resume で起動し直す", onclick: async () => {
     if (!confirm("このセッションの claude を再起動しますか？（終了して claude --resume で起動し直します。応答中の内容は中断されます）")) return;
@@ -3272,6 +3272,19 @@ const KEYS = [
   ["←", "\x1b[D"], ["→", "\x1b[C"], ["^C", "\x03"], ["Enter", "\r"],
 ];
 
+const END_CONFIRM = "このセッションの claude を終了してアーカイブしますか？（後から再開・アーカイブ解除できます）";
+
+// endAndArchive stops a hosted claude and archives its session. A fresh
+// pid-<N> spawn is archived under the session id it was aliased to; one that
+// never registered a session has nothing to archive.
+async function endAndArchive(d, key, sid) {
+  if (!sid) sid = key.startsWith("pid-") ? aliasOf((await d.get("/pty/").catch(() => [])) || [], key) : key;
+  await d.del(`/pty/${encodeURIComponent(key)}`);
+  if (!sid) return "終了しました";
+  await d.post(`/api/sessions/${encodeURIComponent(sid)}/archive`, { archived: true });
+  return "終了してアーカイブしました";
+}
+
 function terminal(id, key, title, chatHref) {
   const host = mainMount;
   const mount = h("div", { id: "term" });
@@ -3286,9 +3299,10 @@ function terminal(id, key, title, chatHref) {
     h("span", { class: "grow title" }, title),
     h("span", { class: "muted small hide-sm" }, key),
     h("a", { class: "btn small", href: chatHref, title: "ターミナルの接続を切ってチャット表示に戻ります。claude は端末上で動き続けます" }, "チャット"),
-    h("button", { class: "btn small danger", onclick: async () => {
-      if (!confirm("このセッションの claude を終了しますか？（後から再開できます）")) return;
-      try { closedByUs = true; await dev(id).del(`/pty/${encodeURIComponent(key)}`); location.hash = `#/d/${id}`; } catch (e) { toast(e.message); }
+    h("button", { class: "btn small danger", title: "claude を終了してアーカイブする", onclick: async () => {
+      if (!confirm(END_CONFIRM)) return;
+      closedByUs = true;
+      try { toast(await endAndArchive(dev(id), key)); location.hash = `#/d/${id}`; } catch (e) { toast(e.message); }
     } }, "終了"));
   const keys = h("div", { class: "keys" }, KEYS.map(([label, seq]) =>
     h("button", { class: "btn", onclick: () => { send(seq); term?.focus(); } }, label)));
