@@ -697,7 +697,8 @@ ccdash web open     # log in again later (another browser, expired cookie, launc
 - Loopback only. One-time login link → cookie (30 days, renewed while
   used). No device management, no logout.
 - Nothing goes out except Web Push once you turn on 🔔 (through the
-  browser's push service, encrypted).
+  browser's push service, encrypted). Behind a proxy, give `ccdash web`
+  `HTTPS_PROXY`; 🔔 → **テスト通知** shows which link of the chain fails.
 - Bounded by the hub allowlist and the **Attach** / **Approval blocking**
   toggles; **Hub connection** doesn't apply.
 - A launchd example for macOS is in [Hub mode](hub.md), "Local portal".

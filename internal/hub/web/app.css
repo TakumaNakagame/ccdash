@@ -812,3 +812,12 @@ aside.viewer.side .doc { padding: 22px 22px 40px; }
 .tile.max .tile-maxbtn { color: var(--accent); border-color: var(--accent); }
 .chip.recent { color: var(--ok); opacity: .75; }
 .tile.unseen:not(.needs) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+/* notification test (pushDiagnose) */
+.diag { display: flex; flex-direction: column; gap: 10px; margin: 8px 0 4px; }
+.diag-row { display: flex; gap: 10px; align-items: flex-start; line-height: 1.4; }
+.diag-mark { flex: none; width: 18px; height: 18px; margin-top: 1px; color: var(--muted); }
+.diag-mark .ic { width: 18px; height: 18px; }
+.diag-row[data-state="ok"] .diag-mark { color: var(--ok); }
+.diag-row[data-state="bad"] .diag-mark { color: var(--bad); }
+.diag-row[data-state="bad"] .muted { color: var(--text); }

@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,13 @@ func (s *store) addSub(ctx context.Context, email string, sub pushSub) error {
 func (s *store) removeSub(ctx context.Context, endpoint string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM push_subs WHERE endpoint = ?`, endpoint)
 	return err
+}
+
+func (s *store) subByEndpoint(ctx context.Context, endpoint string) (pushSub, error) {
+	var p pushSub
+	err := s.db.QueryRowContext(ctx, `SELECT id, email, endpoint, p256dh, auth FROM push_subs WHERE endpoint = ?`, endpoint).
+		Scan(&p.ID, &p.Email, &p.Endpoint, &p.P256dh, &p.Auth)
+	return p, err
 }
 
 func (s *store) listSubs(ctx context.Context) ([]pushSub, error) {
@@ -115,40 +123,48 @@ func (h *Hub) push(ctx context.Context, n notification) {
 		return
 	}
 	log.Printf("hub: push %q to %d subscription(s)", n.Title, len(subs))
+	for _, s := range subs {
+		_, _ = h.sendPush(ctx, s, n)
+	}
+}
+
+// sendPush sends n to one subscription and returns the push service's
+// HTTP status (0 when the request never got an answer). A subscription the
+// service says is gone is dropped.
+func (h *Hub) sendPush(ctx context.Context, s pushSub, n notification) (int, error) {
 	pub, priv, err := h.vapidKeys(ctx)
 	if err != nil {
 		log.Printf("hub: push: %v", err)
-		return
+		return 0, err
 	}
 	payload, _ := json.Marshal(n)
-	for _, s := range subs {
-		resp, err := webpush.SendNotificationWithContext(ctx, payload, &webpush.Subscription{
-			Endpoint: s.Endpoint,
-			Keys:     webpush.Keys{P256dh: s.P256dh, Auth: s.Auth},
-		}, &webpush.Options{
-			HTTPClient:      h.pushClient,
-			Subscriber:      h.pushSubject(),
-			VAPIDPublicKey:  pub,
-			VAPIDPrivateKey: priv,
-			TTL:             600,
-			Urgency:         webpush.UrgencyHigh,
-		})
-		if err != nil {
-			log.Printf("hub: push to %s: %v", s.Email, err)
-			continue
-		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		switch resp.StatusCode {
-		case http.StatusNotFound, http.StatusGone:
-			_ = h.st.removeSub(ctx, s.Endpoint)
-			log.Printf("hub: dropped expired push subscription of %s", s.Email)
-		default:
-			if resp.StatusCode >= 300 {
-				log.Printf("hub: push to %s: HTTP %d", s.Email, resp.StatusCode)
-			}
-		}
+	resp, err := webpush.SendNotificationWithContext(ctx, payload, &webpush.Subscription{
+		Endpoint: s.Endpoint,
+		Keys:     webpush.Keys{P256dh: s.P256dh, Auth: s.Auth},
+	}, &webpush.Options{
+		HTTPClient:      h.pushClient,
+		Subscriber:      h.pushSubject(),
+		VAPIDPublicKey:  pub,
+		VAPIDPrivateKey: priv,
+		TTL:             600,
+		Urgency:         webpush.UrgencyHigh,
+	})
+	if err != nil {
+		log.Printf("hub: push to %s: %v", s.Email, err)
+		return 0, err
 	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
+		_ = h.st.removeSub(ctx, s.Endpoint)
+		log.Printf("hub: dropped expired push subscription of %s", s.Email)
+		return resp.StatusCode, fmt.Errorf("the push service says this subscription is gone (HTTP %d)", resp.StatusCode)
+	case resp.StatusCode >= 300:
+		log.Printf("hub: push to %s: HTTP %d %s", s.Email, resp.StatusCode, strings.TrimSpace(string(body)))
+		return resp.StatusCode, fmt.Errorf("push service answered HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return resp.StatusCode, nil
 }
 
 func (h *Hub) handlePushKey(w http.ResponseWriter, r *http.Request) {
@@ -202,9 +218,41 @@ func (h *Hub) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handlePushTest sends a test notification. With {"endpoint"} (the
+// portal's diagnostic) it goes to that browser only and the answer says
+// what the push service did, so the operator can tell a hub → push service
+// problem (proxy, firewall, rejected VAPID) from a browser / OS one.
 func (h *Hub) handlePushTest(w http.ResponseWriter, r *http.Request) {
-	h.push(r.Context(), notification{Title: "ccdash hub", Body: "通知のテストです", URL: "/", Tag: "test"})
-	w.WriteHeader(http.StatusNoContent)
+	var req struct {
+		Endpoint string `json:"endpoint"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&req)
+	n := notification{Title: "ccdash", Body: "通知のテストです", URL: "/", Tag: "test"}
+	if req.Endpoint == "" {
+		h.push(r.Context(), n)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	sub, err := h.st.subByEndpoint(r.Context(), req.Endpoint)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "this browser's subscription is not registered here", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := map[string]any{"service": ""}
+	if u, err := url.Parse(sub.Endpoint); err == nil {
+		out["service"] = u.Host
+	}
+	status, err := h.sendPush(r.Context(), sub, n)
+	out["status"] = status
+	out["ok"] = err == nil
+	if err != nil {
+		out["error"] = err.Error()
+	}
+	writeJSON(w, out)
 }
 
 // ---- device watcher ----

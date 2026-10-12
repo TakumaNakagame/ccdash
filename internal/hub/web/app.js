@@ -252,6 +252,7 @@ const ICONS = {
   restart: '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
   open: '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
   stop: '<rect width="12" height="12" x="6" y="6" rx="1.5" fill="currentColor"/>',
   play: '<path d="M6 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L7.5 3.64A1 1 0 0 0 6 4.5z" fill="currentColor"/>',
   edit: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/>',
@@ -3582,7 +3583,7 @@ function notifyButton() {
           h("h1", {}, "通知"),
           h("p", {}, "承認待ち・Claude からの質問や確認・作業の完了を、このブラウザに通知します。"),
           h("div", { class: "actions" },
-            h("button", { type: "button", class: "btn", onclick: async () => { await api("/api/push/test", { method: "POST" }); toast("テスト通知を送りました"); } }, "テスト通知"),
+            h("button", { type: "button", class: "btn", onclick: () => { close(); pushDiagnose(); } }, "テスト通知"),
             h("button", { type: "button", class: "btn danger", onclick: async () => {
               const sub = await pushSubscription();
               if (sub) { await api("/api/push/unsubscribe", { method: "POST", json: { endpoint: sub.endpoint } }); await sub.unsubscribe(); }
@@ -3591,7 +3592,7 @@ function notifyButton() {
             h("button", { class: "btn primary" }, "閉じる"))));
         return;
       }
-      if ((await Notification.requestPermission()) !== "granted") { toast("通知が許可されませんでした（ブラウザの設定を確認してください）", 5000); return; }
+      if ((await Notification.requestPermission()) !== "granted") { pushDiagnose(); return; }
       const { publicKey } = await api("/api/push/key");
       const reg = await navigator.serviceWorker.ready;
       const sub = (await reg.pushManager.getSubscription()) ||
@@ -3599,10 +3600,100 @@ function notifyButton() {
       await api("/api/push/subscribe", { method: "POST", json: sub.toJSON() });
       toast("通知を ON にしました");
       paint();
-    } catch (e) { toast("通知を設定できませんでした: " + e.message, 5000); }
+    } catch (e) { paint(); pushDiagnose(); }
   });
   paint();
   return btn;
+}
+
+// pushDiagnose is the notification test: it walks the chain one link at
+// a time — permission, the browser showing a notification by itself, this
+// browser's subscription on the hub, hub → push service (the service's
+// answer), push service → this browser (the service worker reports back)
+// — so a failure names the link that broke.
+function pushDiagnose() {
+  dialog((body, close) => {
+    const rows = h("div", { class: "diag" });
+    const step = (title) => {
+      const mark = h("span", { class: "diag-mark" }, icon("clock"));
+      const note = h("div", { class: "muted small" });
+      const row = h("div", { class: "diag-row" }, mark, h("div", { class: "grow" }, h("div", {}, title), note));
+      rows.append(row);
+      const set = (state, text) => {
+        row.dataset.state = state;
+        mark.replaceChildren(icon(state === "ok" ? "check" : state === "bad" ? "x" : "clock"));
+        note.textContent = text || "";
+      };
+      return { ok: (t) => set("ok", t), bad: (t) => set("bad", t), wait: (t) => set("wait", t) };
+    };
+    body.append(h("h1", {}, "通知のテスト"), rows,
+      h("div", { class: "actions" }, h("button", { class: "btn primary" }, "閉じる")));
+    run().catch((e) => toast(e.message, 5000));
+
+    async function run() {
+      const perm = step("ブラウザの通知許可");
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) { perm.bad("このブラウザは Web Push に対応していません"); return; }
+      if (Notification.permission === "default") await Notification.requestPermission();
+      if (Notification.permission !== "granted") {
+        perm.bad("このサイトの通知がブロックされています。アドレスバー左のアイコン → 通知 を「許可」にして、もう一度試してください");
+        return;
+      }
+      perm.ok("許可されています");
+
+      const reg = await navigator.serviceWorker.ready;
+      const local = step("ブラウザだけで通知を表示");
+      try {
+        await reg.showNotification("ccdash（ブラウザ内テスト）", { body: "ハブを通さずに表示しています", tag: "test-local", icon: "icon-192.png" });
+        local.ok("表示を依頼しました。画面に出ていなければ OS 側の設定です（macOS: システム設定 → 通知 → ブラウザ名、集中モード）");
+      } catch (e) { local.bad("表示できませんでした: " + e.message); }
+
+      const subStep = step("このブラウザの購読");
+      let sub = await reg.pushManager.getSubscription();
+      try {
+        if (!sub) {
+          const { publicKey } = await api("/api/push/key");
+          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToBytes(publicKey) });
+        }
+        // Register again: harmless, and repairs a hub that lost it.
+        await api("/api/push/subscribe", { method: "POST", json: sub.toJSON() });
+        subStep.ok("登録済み（" + new URL(sub.endpoint).host + "）");
+      } catch (e) {
+        subStep.bad("購読できませんでした: " + e.message + "（ブラウザがプッシュサービスに接続できていない可能性があります）");
+        return;
+      }
+
+      const send = step("ハブ → プッシュサービス");
+      const recv = step("プッシュサービス → このブラウザ");
+      recv.wait("待っています…");
+      const got = new Promise((resolve) => {
+        const on = (e) => {
+          if (e.data?.type !== "push-received") return;
+          navigator.serviceWorker.removeEventListener("message", on);
+          resolve(e.data);
+        };
+        navigator.serviceWorker.addEventListener("message", on);
+        setTimeout(() => { navigator.serviceWorker.removeEventListener("message", on); resolve(null); }, 20000);
+      });
+      let res;
+      try { res = await api("/api/push/test", { method: "POST", json: { endpoint: sub.endpoint } }); } catch (e) {
+        send.bad(e.message);
+        recv.bad("");
+        return;
+      }
+      if (!res.ok) {
+        send.bad(res.status
+          ? `${res.service} が拒否しました: ${res.error}。🔔 を OFF にしてから ON にし直すと直ることがあります`
+          : `${res.service} に届きませんでした: ${res.error}。プロキシのある環境では ccdash（collector / ccdash web）に HTTPS_PROXY を渡してください（launchd なら plist の EnvironmentVariables）`);
+        recv.bad("");
+        return;
+      }
+      send.ok(`${res.service} が受け付けました（HTTP ${res.status}）`);
+      const r = await got;
+      if (!r) recv.bad("20 秒待っても届きません。ブラウザがプッシュサービスに接続できていない可能性があります（ネットワークで遮断されている、ブラウザが省電力で止まっている など）");
+      else if (!r.shown) recv.bad("届きましたが表示できませんでした: " + r.error);
+      else recv.ok("届いて、通知を表示しました。画面に出ていなければ OS の通知設定です");
+    }
+  });
 }
 
 // updateBadge mirrors the board onto the installed app's icon badge, the

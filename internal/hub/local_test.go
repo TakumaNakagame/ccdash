@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -285,5 +286,63 @@ func TestLocalPush(t *testing.T) {
 	}
 	if c.Aud != "https://fcm.googleapis.com" || c.Sub != "https://github.com/takumanakagame/ccmanage" {
 		t.Errorf("vapid claims = %+v", c)
+	}
+}
+
+type pushResult struct {
+	status int
+	err    error
+}
+
+func (p pushResult) Do(*http.Request) (*http.Response, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &http.Response{StatusCode: p.status, Body: io.NopCloser(strings.NewReader("why"))}, nil
+}
+
+// TestPushTestDiagnosis: the portal's notification test sends to one
+// browser and gets back what the push service did.
+func TestPushTestDiagnosis(t *testing.T) {
+	h, loginFile := newLocalHub(t)
+	handler := h.Handler()
+	w := serve(handler, "GET", "/auth/local?token="+loginToken(t, loginFile), "", local(nil))
+	cookie := local(map[string]string{"Cookie": localCookie + "=" + w.Result().Cookies()[0].Value, "Content-Type": "application/json"})
+
+	priv, _ := ecdh.P256().GenerateKey(rand.Reader)
+	auth := make([]byte, 16)
+	_, _ = rand.Read(auth)
+	b64 := base64.RawURLEncoding.EncodeToString
+	const ep = "https://fcm.googleapis.com/fcm/send/abc"
+	sub := `{"endpoint":"` + ep + `","keys":{"p256dh":"` + b64(priv.PublicKey().Bytes()) + `","auth":"` + b64(auth) + `"}}`
+	if w := serve(handler, "POST", "/api/push/subscribe", sub, cookie); w.Code != http.StatusNoContent {
+		t.Fatalf("subscribe = %d %s", w.Code, w.Body)
+	}
+	try := func(c pushResult) map[string]any {
+		t.Helper()
+		h.pushClient = c
+		w := serve(handler, "POST", "/api/push/test", `{"endpoint":"`+ep+`"}`, cookie)
+		if w.Code != http.StatusOK {
+			t.Fatalf("test = %d %s", w.Code, w.Body)
+		}
+		var out map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	if out := try(pushResult{status: http.StatusCreated}); out["ok"] != true || out["status"] != float64(201) || out["service"] != "fcm.googleapis.com" {
+		t.Errorf("accepted: %v", out)
+	}
+	if out := try(pushResult{status: http.StatusForbidden}); out["ok"] != false || out["status"] != float64(403) || !strings.Contains(out["error"].(string), "403") {
+		t.Errorf("rejected: %v", out)
+	}
+	if out := try(pushResult{err: errors.New("proxyconnect tcp: dial tcp: i/o timeout")}); out["ok"] != false || out["status"] != float64(0) || !strings.Contains(out["error"].(string), "i/o timeout") {
+		t.Errorf("unreachable: %v", out)
+	}
+	// Gone: dropped, and a second test says it isn't registered.
+	if out := try(pushResult{status: http.StatusGone}); out["ok"] != false {
+		t.Errorf("gone: %v", out)
+	}
+	if w := serve(handler, "POST", "/api/push/test", `{"endpoint":"`+ep+`"}`, cookie); w.Code != http.StatusNotFound {
+		t.Errorf("after gone = %d, want 404", w.Code)
 	}
 }

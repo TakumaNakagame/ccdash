@@ -164,6 +164,11 @@ ccdash web --port 9200 --no-open
   subscribes the browser to its push service (FCM for Chrome), and the
   portal sends encrypted Web Push messages there. Chrome shows them with
   the tab closed as long as Chrome itself runs; a click opens the session.
+  If they don't arrive, 🔔 → **テスト通知** walks the chain and names the
+  broken link (permission, the OS showing notifications, the
+  subscription, hub → push service with its HTTP answer, push service →
+  browser). Behind a proxy, give `ccdash web` (and a separate collector)
+  `HTTPS_PROXY` — in the launchd plist's `EnvironmentVariables`.
 - **State:** prefs, quick commands, VAPID keys and push subscriptions live
   in `$XDG_STATE_HOME/ccdash/web/hub.sqlite`, separate from a hub's.
 

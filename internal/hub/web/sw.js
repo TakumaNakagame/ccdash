@@ -15,14 +15,25 @@ self.addEventListener("push", (event) => {
   if (typeof n.badge === "number") {
     try { (n.badge > 0 ? self.navigator.setAppBadge?.(n.badge) : self.navigator.clearAppBadge?.())?.catch?.(() => {}); } catch {}
   }
-  event.waitUntil(self.registration.showNotification(n.title || "ccdash", {
-    body: n.body || "",
-    tag: n.tag || undefined,
-    renotify: !!n.tag,
-    icon: "icon-192.png",
-    badge: "icon-192.png",
-    data: { url: n.url || "/" },
-  }));
+  event.waitUntil((async () => {
+    let shown = true, error = "";
+    try {
+      await self.registration.showNotification(n.title || "ccdash", {
+        body: n.body || "",
+        tag: n.tag || undefined,
+        renotify: !!n.tag,
+        icon: "icon-192.png",
+        badge: "icon-192.png",
+        data: { url: n.url || "/" },
+      });
+    } catch (e) { shown = false; error = String(e); }
+    // The portal's notification test waits for this to tell "never
+    // arrived" from "arrived but the OS didn't show it".
+    if (n.tag === "test") {
+      const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      for (const w of wins) w.postMessage({ type: "push-received", tag: n.tag, shown, error });
+    }
+  })());
 });
 
 // Tapping a notification focuses an open portal window (navigating it to
