@@ -77,6 +77,9 @@ type Settings struct {
 	// TimeFormat renders session times as "relative" (4m, 2h, 3d) or
 	// "absolute" (09/30 18:45).
 	TimeFormat string
+	// UpdateChannel is what the update check / `u` / `ccdash update`
+	// follow: "stable" (tagged releases) or "dev" (pre-releases too).
+	UpdateChannel string
 	// AutoArchiveDays archives sessions idle longer than this many days
 	// once a day (the collector's first start of the day, or its first
 	// discovery tick after midnight). 0 = off.
@@ -123,6 +126,7 @@ const (
 	// replaced; Load folds it in once.
 	legacyKeyPaneSplit  = "pane_split"
 	keyTimeFormat       = "time_format"
+	keyUpdateChannel    = "update_channel"
 	keyInvertListScroll = "invert_list_scroll"
 	keyAutoArchiveDays  = "auto_archive_days"
 	keyAutoTitle        = "auto_title"
@@ -150,8 +154,9 @@ func Defaults() Settings {
 		SummaryTimeoutSec: 180,
 		RefreshIntervalMs: 1000,
 
-		PaneListPct: 50,
-		TimeFormat:  "relative",
+		PaneListPct:   50,
+		TimeFormat:    "relative",
+		UpdateChannel: "stable",
 
 		AutoArchiveDays: 7,
 		AutoTitle:       true,
@@ -199,6 +204,11 @@ func loadPairs(out *Settings) []loadPair {
 		{keyTimeFormat, func(v string) {
 			if v == "relative" || v == "absolute" {
 				out.TimeFormat = v
+			}
+		}},
+		{keyUpdateChannel, func(v string) {
+			if v == "stable" || v == "dev" {
+				out.UpdateChannel = v
 			}
 		}},
 	}
@@ -349,6 +359,7 @@ func AllSpecs() []Spec {
 		{Key: keyPaneListPct, Label: "Session list size (%)", Help: "Share of the screen the session list takes (width side-by-side, height when vertical); the work pane gets the rest. 30 = compact list, wide work pane. Also adjustable with < / > on the dashboard.", Kind: KindInt, Min: MinPaneListPct, Max: MaxPaneListPct},
 		{Key: keyInvertListScroll, Label: "Invert list scroll", Help: "Reverse the mouse wheel over the session list (wheel down moves the selection up). The right pane is unaffected.", Kind: KindBool},
 		{Key: keyTimeFormat, Label: "Session time", Help: "How the session list shows each session's last prompt time: relative (4m, 2h) or absolute (09/30 18:45).", Kind: KindEnum, Options: []string{"relative", "absolute"}},
+		{Key: keyUpdateChannel, Label: "Update channel", Help: "What the update check, u and `ccdash update` follow: stable = tagged releases only, dev = pre-releases (rc) too.", Kind: KindEnum, Options: []string{"stable", "dev"}},
 		{Key: keyVerticalAutoCols, Label: "Vertical auto threshold (cols)", Help: "Width in columns below which auto-layout flips to vertical. Lower = stay horizontal longer; higher = go vertical sooner.", Kind: KindInt, Min: 40, Max: 240},
 		// Risk-bearing toggles
 		{Key: keyApproveEnabled, Label: "Approval blocking", Help: "When OFF, ccdash never holds PermissionRequest hooks — Claude prompts you in the terminal as it would without ccdash, and the a/A/d shortcuts are disabled", Kind: KindBool},
@@ -437,6 +448,8 @@ func Get(s Settings, key string) any {
 		return s.PaneListPct
 	case keyTimeFormat:
 		return s.TimeFormat
+	case keyUpdateChannel:
+		return s.UpdateChannel
 	case keyInvertListScroll:
 		return s.InvertListScroll
 	case keyAutoArchiveDays:
@@ -498,6 +511,8 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.PaneListPct = value.(int)
 	case keyTimeFormat:
 		s.TimeFormat = value.(string)
+	case keyUpdateChannel:
+		s.UpdateChannel = value.(string)
 	case keyInvertListScroll:
 		s.InvertListScroll = value.(bool)
 	case keyAutoArchiveDays:

@@ -515,9 +515,18 @@ func (m *model) checkUpdateCmd() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 8*time.Second)
 		defer cancel()
-		tag, err := selfupdate.LatestTag(ctx, selfupdate.ChannelStable)
+		tag, err := selfupdate.LatestTag(ctx, m.updateChannel())
 		return updateCheckMsg{tag: tag, err: err}
 	}
+}
+
+// updateChannel is the release channel the update check and `u` follow
+// (setting update_channel).
+func (m *model) updateChannel() selfupdate.Channel {
+	if c, err := selfupdate.ParseChannel(m.settings.UpdateChannel); err == nil {
+		return c
+	}
+	return selfupdate.ChannelStable
 }
 
 // fetchReleaseNotesCmd asks GitHub for the release body of the given
@@ -538,10 +547,11 @@ func (m *model) fetchReleaseNotesCmd(tag string) tea.Cmd {
 // the y/n confirm fires.
 func (m *model) runUpdateCmd() tea.Cmd {
 	current := buildinfo.Version
+	channel := m.updateChannel()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
 		defer cancel()
-		res, err := selfupdate.Run(ctx, current, selfupdate.ChannelStable)
+		res, err := selfupdate.Run(ctx, current, channel)
 		return updateDoneMsg{res: res, err: err}
 	}
 }

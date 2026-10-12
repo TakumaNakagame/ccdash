@@ -375,6 +375,18 @@ func openStore(rf *remoteFlags) (store.Store, func(), error) {
 	return store.NewLocal(d), func() { _ = d.Close() }, nil
 }
 
+// savedUpdateChannel reads the update_channel setting from the local DB,
+// falling back to stable when there's none (or no DB).
+func savedUpdateChannel(ctx context.Context) string {
+	d, err := openDB()
+	if err != nil {
+		return "stable"
+	}
+	defer d.Close()
+	s, _ := settings.Load(ctx, store.NewLocal(d))
+	return s.UpdateChannel
+}
+
 func updateCmd(currentVersion string) *cobra.Command {
 	var channelFlag string
 	c := &cobra.Command{
@@ -382,11 +394,14 @@ func updateCmd(currentVersion string) *cobra.Command {
 		Short: "Replace this binary with the latest GitHub release",
 		Long: `Update ccdash from a GitHub release.
 
-By default --channel=stable picks the latest tagged release that is not
-flagged as a pre-release. --channel=dev (alias: beta / pre / prerelease)
-includes pre-release tags so beta builds the maintainer cuts on a Mac
-can be installed before they're promoted to stable.`,
+--channel=stable picks the latest tagged release that is not flagged as
+a pre-release. --channel=dev (alias: beta / pre / prerelease) includes
+pre-release tags (rc builds) before they're promoted to stable. Without
+the flag it follows the "Update channel" setting (stable by default).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !cmd.Flags().Changed("channel") {
+				channelFlag = savedUpdateChannel(cmd.Context())
+			}
 			channel, err := selfupdate.ParseChannel(channelFlag)
 			if err != nil {
 				return err
