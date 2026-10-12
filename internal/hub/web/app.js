@@ -889,12 +889,11 @@ async function devicePage(id, opts = {}) {
     selBar.replaceChildren(
       h("b", {}, `${selected.size} 件選択`),
       h("button", { class: "btn small", onclick: () => {
-        const cur = gridList.get() || [];
-        gridList.set([...cur, ...keys.filter((k) => !cur.includes(k))]);
+        keys.forEach((k) => gridList.put(k, true));
         toast("グリッドに追加しました"); selected.clear(); paintSel(); render();
       } }, icon("grid"), "グリッドに追加"),
       h("button", { class: "btn small", onclick: () => {
-        gridList.set((gridList.get() || []).filter((k) => !keys.includes(k)));
+        keys.forEach((k) => gridList.put(k, false));
         toast("グリッドから外しました"); selected.clear(); paintSel(); render();
       } }, "グリッドから外す"),
       h("button", { class: "btn small", onclick: () => bulk(showArchived ? "アーカイブ解除" : "アーカイブ",
@@ -1111,10 +1110,11 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
     showGroup ? groupOf(s) : null, shortPath(s.cwd, info?.home), s.branch, rel(s.last_seen)].filter(Boolean).join(" · ");
   const here = decodeURIComponent(location.hash).startsWith(`#/d/${id}/s/${s.session_id}`);
   const gk = id + ":" + s.session_id;
-  const mark = h("button", { class: "grid-mark" + (gridList.has(gk) ? " on" : ""), type: "button", title: "グリッドに表示する／外す", "aria-label": "グリッドに表示する／外す" }, icon("grid"));
+  const mark = h("button", { class: "grid-mark" + (gridList.is(gk, s) ? " on" : ""), type: "button", title: "グリッドに表示する／外す", "aria-label": "グリッドに表示する／外す" }, icon("grid"));
   mark.addEventListener("click", (e) => {
     e.stopPropagation();
-    const on = gridList.toggle(gk);
+    const on = !gridList.is(gk, s);
+    gridList.put(gk, on);
     mark.classList.toggle("on", on);
     toast(on ? "グリッドに追加しました" : "グリッドから外しました");
   });
@@ -2014,15 +2014,34 @@ function sessionMenu(id, s, groups, refresh) {
 // The grid shows an operator-chosen list of "device:session" keys, kept
 // per browser. null = never chosen: the grid seeds it with what's running.
 // Session lists mark entries onto it directly.
+// The grid's sessions are the devices' session rows (grid / grid_at): one
+// list shared by every browser and the TUI's grid (V). A change shows at
+// once through a local overlay until the next poll reports it.
 const gridList = {
-  get() { try { const v = JSON.parse(localStorage.getItem("ccdash.gridItems")); return Array.isArray(v) ? v : null; } catch { return null; } },
-  set(v) { try { localStorage.setItem("ccdash.gridItems", JSON.stringify(v)); } catch {} },
-  has(k) { return (this.get() || []).includes(k); },
-  toggle(k) {
-    const cur = this.get() || [];
-    const on = !cur.includes(k);
-    this.set(on ? [...cur, k] : cur.filter((x) => x !== k));
-    return on;
+  overlay: new Map(), // "device:session" → { on, at }
+  is(key, s) { const o = this.overlay.get(key); return o ? o.on : !!s?.grid; },
+  at(key, s) { const o = this.overlay.get(key); return o?.on ? o.at : (s?.grid_at ? Date.parse(s.grid_at) : 0); },
+  put(key, on) {
+    const i = key.indexOf(":"), d = key.slice(0, i), sid = key.slice(i + 1);
+    this.overlay.set(key, { on, at: Date.now() });
+    return dev(d).post(`/api/sessions/${encodeURIComponent(sid)}/grid`, { grid: on })
+      .catch((e) => { this.overlay.delete(key); toast("グリッドを更新できませんでした: " + e.message, 4000); });
+  },
+  // settle drops overlay entries the devices now report.
+  settle(all) {
+    for (const c of all) {
+      const k = c.device_id + ":" + c.session.session_id, o = this.overlay.get(k);
+      if (o && o.on === !!c.session.grid) this.overlay.delete(k);
+    }
+  },
+  // takeLegacy hands over (once) the per-browser list kept before the grid
+  // moved onto the devices.
+  takeLegacy() {
+    try {
+      const v = JSON.parse(localStorage.getItem("ccdash.gridItems"));
+      localStorage.removeItem("ccdash.gridItems");
+      return Array.isArray(v) ? v : [];
+    } catch { return []; }
   },
 };
 //
@@ -2099,12 +2118,23 @@ function gridPage() {
   crumbs({ text: "グリッド" });
   // Which sessions are on the grid is the operator's choice: × takes a tile
   // off, ＋ places any session that isn't on it yet. Kept per browser as
-  // "device:session" keys in order; the first visit starts from whatever is
-  // running.
-  const itemsStore = gridList;
-  let items = itemsStore.get();
+  // "device:session" keys in grid_at order, kept on the devices' session
+  // rows (gridList) so the TUI's grid shows the same. With none chosen the
+  // grid is automatic: whatever wants you or is working (same rule as the
+  // TUI's).
+  let items = [], auto = false, legacyDone = false;
   let all = []; // every session the hub knows, from the last poll
   const keyOf = (c) => c.device_id + ":" + c.session.session_id;
+  const busy = (s) => !!s.attention || s.status === "active" || s.unseen || s.pending_count > 0;
+  const computeItems = () => {
+    const marked = all.filter((c) => gridList.is(keyOf(c), c.session))
+      .sort((a, b) => gridList.at(keyOf(a), a.session) - gridList.at(keyOf(b), b.session) || (a.session.num || 0) - (b.session.num || 0));
+    auto = !marked.length;
+    items = (auto ? all.filter((c) => busy(c.session)) : marked).map(keyOf);
+  };
+  // pinAuto turns the automatic set into chosen tiles (minus except) — what
+  // closing or adding a tile means while the grid is automatic.
+  const pinAuto = (except) => { if (auto) items.filter((k) => k !== except).forEach((k) => gridList.put(k, true)); };
   const grid = h("div", { class: "grid" });
   const relayout = () => { layoutGrid(grid, grid.childElementCount); if (free) placeFree(); };
   // Free placement: tiles become windows you drag by the header and resize
@@ -2203,8 +2233,8 @@ function gridPage() {
   grid.addEventListener("tile-close", (e) => {
     const k = keyOfEl(e.target);
     if (!k) return;
+    if (auto) pinAuto(k); else gridList.put(k, false);
     items = items.filter((x) => x !== k);
-    itemsStore.set(items);
     delete rects[k];
     store.set(rects);
     if (maxKey === k) maxKey = null;
@@ -2222,10 +2252,12 @@ function gridPage() {
       const f = q.value.trim().toLowerCase();
       const rows = rest.filter((c) => !f || `${c.device_name} #${c.session.num} ${sessionTitle(c.session)} ${c.session.cwd || ""}`.toLowerCase().includes(f));
       list.replaceChildren(...(rows.length ? rows.map((c) => h("button", { class: "pick-item", type: "button", onclick: () => {
+        pinAuto();
+        gridList.put(keyOf(c), true);
         items = [...items, keyOf(c)];
-        itemsStore.set(items);
+        auto = false;
         close();
-        tick();
+        render();
       } },
         h("div", { class: "row" }, h("span", { class: "chip dev" }, c.device_name), h("span", { class: "chip" }, gridState(c.session)),
           h("span", { class: "grow" }), h("span", { class: "muted small" }, rel(c.session.last_seen))),
@@ -2259,14 +2291,10 @@ function gridPage() {
     h("div", { class: "row grid-top" }, h("h1", { class: "grow" }, "グリッド"), count, addBtn,
       h("div", { class: "seg" }, modeAuto, modeFree), resetBtn), empty, grid));
   setMode(free);
-  // render places a tile for each listed key the hub knows, in list order.
-  // A key whose device is offline stays listed (it comes back with the
-  // device); one whose device answered without it (deleted) is dropped.
+  // render places a tile for each listed key the hub knows, in list order
+  // (a session on an offline device comes back with the device).
   const render = () => {
     const byKey = new Map(all.map((c) => [keyOf(c), c]));
-    const online = new Set(all.map((c) => c.device_id));
-    const kept = items.filter((k) => byKey.has(k) || !online.has(k.split(":")[0]));
-    if (kept.length !== items.length) { items = kept; itemsStore.set(items); }
     const shown = [];
     for (const k of items) {
       const c = byKey.get(k);
@@ -2285,16 +2313,19 @@ function gridPage() {
     applyMax();
     const needs = shown.filter((c) => c.session.attention === "needs_you").length;
     const working = shown.filter((c) => c.session.status === "active").length;
-    const hidden = items.length - shown.length;
-    count.textContent = `${shown.length} 件 · 要対応 ${needs} · 作業中 ${working}` + (hidden ? ` · オフライン ${hidden}` : "");
+    count.textContent = (auto && shown.length ? "自動（要対応・作業中・未確認） · " : "") + `${shown.length} 件 · 要対応 ${needs} · 作業中 ${working}`;
   };
   const tick = async () => {
     all = await api("/api/active?all=1");
-    items = itemsStore.get(); // marks made in a session list (another tab) count too
-    if (!items) {
-      items = all.filter((c) => c.session.status === "active" || c.session.status === "idle" || c.session.attention === "needs_you").map(keyOf);
-      itemsStore.set(items);
+    gridList.settle(all);
+    if (!legacyDone) {
+      // A list this browser kept before the grid moved onto the devices:
+      // put it there once, in order.
+      legacyDone = true;
+      const known = new Set(all.map(keyOf));
+      for (const k of gridList.takeLegacy()) if (known.has(k)) await gridList.put(k, true);
     }
+    computeItems();
     render();
     await Promise.all([...tiles.values()].map((t) => t.refresh().catch(() => {})));
   };

@@ -61,6 +61,8 @@ type Store interface {
 	SetFavorite(ctx context.Context, sessionID string, v bool) error
 	// SetLater marks / clears "watch later".
 	SetLater(ctx context.Context, sessionID string, v bool) error
+	// SetGrid puts a session on the grid shared with the portal.
+	SetGrid(ctx context.Context, sessionID string, v bool) error
 	// SetColor sets the session's color ("#rrggbb"; "" = back to automatic).
 	SetColor(ctx context.Context, sessionID, color string) error
 	// MarkSeen records that the operator looked at the session (clears an

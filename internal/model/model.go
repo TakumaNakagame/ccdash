@@ -67,6 +67,10 @@ type Session struct {
 	// Later marks "watch later" (LaterAt = when, most recent first).
 	Later   bool      `json:"later,omitempty"`
 	LaterAt time.Time `json:"later_at,omitzero"`
+	// Grid puts the session on the grid shared by the TUI (V) and the
+	// portal; tiles go in GridAt order (when it was put there).
+	Grid   bool      `json:"grid,omitempty"`
+	GridAt time.Time `json:"grid_at,omitzero"`
 	// What an active session is doing, from its hook events (read time,
 	// db.fillWork): when the current turn started, and the tool in flight
 	// (empty between tools — Claude is thinking or writing).

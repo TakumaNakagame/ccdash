@@ -287,10 +287,9 @@ type model struct {
 	dupConfirm   bool
 	dupSessionID string
 	// gridOpen shows the grid view (grid.go) in place of the list and
-	// right pane; gridMarks are the sessions chosen for it (space);
-	// gridTails the tiles' transcript tails.
+	// right pane (the sessions on it are Session.Grid, shared with the
+	// portal); gridTails the tiles' transcript tails.
 	gridOpen  bool
-	gridMarks map[string]bool
 	gridTails map[string]*gridTail
 	// gridLive are the live tiles' screen streams by ptyKey (gridlive.go);
 	// gridTyping sends the keyboard to the focused live tile.
@@ -1297,8 +1296,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "V":
 		return m, m.toggleGrid()
 	case "space":
-		m.toggleGridMark()
-		return m, nil
+		return m, m.toggleGridMark()
 	case "a":
 		if !m.settings.ApproveEnabled {
 			m.flash = "approval blocking is OFF (settings ',')"
@@ -4158,7 +4156,7 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if s.Unseen && !selected {
 		titleBudget -= 4 // "NEW "
 	}
-	gridMarked := m.gridMarks[s.SessionID]
+	gridMarked := s.Grid
 	if gridMarked {
 		titleBudget -= 7 // " GRID " + space
 	}

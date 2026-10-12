@@ -27,7 +27,7 @@ A working session's spinner is joined by a band of light running across the row,
 | `X` | toggle archive view (operator-archived sessions) |
 | `o` | full-screen transcript viewer |
 | `V` | grid: the chosen sessions side by side. A session running in ccdash shows its live screen (the tile's size becomes its PTY's size while the grid shows it, like a tmux pane); others show their newest transcript lines. A working tile's frame carries a light running round it. `h` `j` `k` `l` / `tab` move between tiles; `enter` (or a click on the focused tile) types into a live tile — `ctrl+]` / `ctrl+d` hands the keyboard back — and on a transcript tile returns to the dashboard on that session; `V` / `esc` closes. The focused tile is the selection, so `e`, `a` / `d`, `o`, `t`, `f`, `x` … act on it |
-| `space` | choose the session for the grid (a `GRID` badge before its title); with none chosen the grid shows the busy ones — needs you, working, finished unseen |
+| `space` | put the session on the grid (a `GRID` badge before its title) or take it off. The list is kept on the collector and shared with the portal's grid; with none chosen the grid shows the busy ones — needs you, working, finished unseen |
 | `e` | run a `! command` from the latest reply (the way Claude asks you to run something): pick one (`j` `k` / `1`-`9`) and `y` types `!` + the command into the ccdash-hosted claude. Needs `attach_enabled` |
 | `ctrl+t` | generate short titles with `claude -p` — `y` for the selected session, `a` for the recent batch in one call |
 | `n` | start a new claude session (directory picker) |

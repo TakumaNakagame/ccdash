@@ -609,10 +609,11 @@ machine never accepts inbound connections — its collector dials out.
   remembered, and a double-click resets it to the device's TUI "Session
   list size".
 - **Grid** (header button toggles it on/off): the sessions you choose on
-  one screen. It starts with every running session; × on a tile takes it
-  off, **＋ 追加** places any session not already there (stopped ones too);
-  the selection is remembered per browser; ▦ on a session-list row toggles
-  it too. A stopped session's tile has **▶ 再開** (`claude --resume`;
+  one screen. With none chosen it shows what wants you or is working
+  (needs you, working, finished unseen); × on a tile takes it off (and
+  pins the rest), **＋ 追加** places any session not already there (stopped
+  ones too); ▦ on a session-list row toggles it too. The selection lives on
+  the devices, so every browser and the TUI's grid (`V` / `space`) share it. A stopped session's tile has **▶ 再開** (`claude --resume`;
   replying resumes as well). Each tile shows its state, the
   reason it wants you, the latest exchange (live) and a one-line reply.
   Tiles fill the screen (the column count is picked for the largest tiles;

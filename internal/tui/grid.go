@@ -11,7 +11,9 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -150,10 +152,18 @@ func (m *model) gridSessions() []int {
 	limit := gridCapacity(m.width, bodyH)
 	var out []int
 	for i, s := range m.sessions {
-		if m.gridMarks[s.SessionID] {
+		if s.Grid {
 			out = append(out, i)
 		}
 	}
+	// In the order they were put on the grid (then #N), like the portal's.
+	sort.SliceStable(out, func(a, b int) bool {
+		x, y := m.sessions[out[a]], m.sessions[out[b]]
+		if !x.GridAt.Equal(y.GridAt) {
+			return x.GridAt.Before(y.GridAt)
+		}
+		return x.Num < y.Num
+	})
 	if len(out) == 0 {
 		for i, s := range m.sessions {
 			// The focused tile stays while the grid is open, even after
@@ -191,25 +201,43 @@ func (m *model) toggleGrid() tea.Cmd {
 	return tea.Batch(m.gridLoadCmd(), m.markSelectedSeen())
 }
 
-// toggleGridMark is space: put the selected session in (or out of) the
-// grid's chosen set.
-func (m *model) toggleGridMark() {
+// toggleGridMark is space: put the selected session on (or off) the
+// grid — the list shared with the portal, kept on the session row
+// (Store.SetGrid). The row flips here at once; the write follows.
+func (m *model) toggleGridMark() tea.Cmd {
 	if len(m.sessions) == 0 || m.selSess < 0 || m.selSess >= len(m.sessions) {
-		return
+		return nil
 	}
 	sid := m.sessions[m.selSess].SessionID
-	if m.gridMarks == nil {
-		m.gridMarks = map[string]bool{}
+	on := !m.sessions[m.selSess].Grid
+	at := time.Time{}
+	if on {
+		at = time.Now()
 	}
-	if m.gridMarks[sid] {
-		delete(m.gridMarks, sid)
-		m.flash = "removed from the grid"
+	for _, list := range [][]mdl.Session{m.sessions, m.allSessions} {
+		for i := range list {
+			if list[i].SessionID == sid {
+				list[i].Grid, list[i].GridAt = on, at
+			}
+		}
+	}
+	if on {
+		m.flash = "on the grid (V shows it; the portal's grid too)"
 	} else {
-		m.gridMarks[sid] = true
-		m.flash = "added to the grid (V shows it)"
+		m.flash = "off the grid"
 	}
 	if m.gridOpen && len(m.gridSessions()) == 0 {
 		m.gridOpen = false
+		m.closeAllGridLive()
+	}
+	st, ctx := m.store, m.ctx
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := st.SetGrid(c, sid, on); err != nil {
+			return errMsg{fmt.Errorf("grid: %w", err)}
+		}
+		return nil
 	}
 }
 
@@ -242,8 +270,7 @@ func (m *model) handleKeyGrid(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		}
 		return m.loadTailCmd(), true
 	case "space":
-		m.toggleGridMark()
-		return nil, true
+		return m.toggleGridMark(), true
 	case "tab", "right", "l":
 		next = (cur + 1) % len(tiles)
 	case "shift+tab", "left", "h":

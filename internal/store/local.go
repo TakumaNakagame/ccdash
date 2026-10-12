@@ -56,6 +56,10 @@ func (l *Local) SetLater(ctx context.Context, sessionID string, v bool) error {
 	return l.db.SetLater(ctx, sessionID, v)
 }
 
+func (l *Local) SetGrid(ctx context.Context, sessionID string, v bool) error {
+	return l.db.SetGrid(ctx, sessionID, v)
+}
+
 func (l *Local) SetFavorite(ctx context.Context, sessionID string, v bool) error {
 	return l.db.SetFavorite(ctx, sessionID, v)
 }

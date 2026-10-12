@@ -134,6 +134,7 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN last_activity INTEGER`,
 		`ALTER TABLE sessions ADD COLUMN seen_at INTEGER`,
 		`ALTER TABLE sessions ADD COLUMN later_at INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN grid_at INTEGER`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -423,7 +424,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.account,''),
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
-		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0)
+		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0)
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE COALESCE(s.archived,0) = ?
 		ORDER BY COALESCE(s.favorite,0) DESC,
@@ -437,7 +438,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 	var out []model.Session
 	for rows.Next() {
 		var s model.Session
-		var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt int64
+		var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt, gridAt int64
 		var status string
 		var arch, fav int
 		if err := rows.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -449,13 +450,16 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.Project, &s.ProjectColor, &s.ProjectOrder,
 			&first, &last, &status, &s.PendingCount, &s.Account,
 			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
-			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt); err != nil {
+			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt); err != nil {
 			return nil, err
 		}
 		finishAttention(&s, attAt)
 		finishSeen(&s, model.SessionStatus(status), actAt, seenAt)
 		if laterAt > 0 {
 			s.Later, s.LaterAt = true, time.UnixMilli(laterAt).UTC()
+		}
+		if gridAt > 0 {
+			s.Grid, s.GridAt = true, time.UnixMilli(gridAt).UTC()
 		}
 		if genAt > 0 {
 			s.GenTitleAt = time.Unix(genAt, 0).UTC()
@@ -540,12 +544,12 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       COALESCE(s.account,''),
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
-		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0)
+		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0)
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE s.session_id = ?
 	`, sessionID)
 	var s model.Session
-	var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt int64
+	var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt, gridAt int64
 	var status string
 	var arch, fav int
 	err := row.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -557,7 +561,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&s.Project, &s.ProjectColor, &s.ProjectOrder,
 		&first, &last, &status, &s.PendingCount, &s.Account,
 		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
-		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt)
+		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Session{}, false, nil
 	}
@@ -576,6 +580,9 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 	finishSeen(&s, model.SessionStatus(status), actAt, seenAt)
 	if laterAt > 0 {
 		s.Later, s.LaterAt = true, time.UnixMilli(laterAt).UTC()
+	}
+	if gridAt > 0 {
+		s.Grid, s.GridAt = true, time.UnixMilli(gridAt).UTC()
 	}
 	if err := d.fillWork(ctx, &s); err != nil {
 		return model.Session{}, false, err
@@ -769,6 +776,15 @@ func (d *DB) SetFavorite(ctx context.Context, sessionID string, favorite bool) e
 func (d *DB) SetLater(ctx context.Context, sessionID string, later bool) error {
 	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET later_at = CASE WHEN ? THEN ? ELSE NULL END WHERE session_id = ?`,
 		later, time.Now().UnixMilli(), sessionID)
+	return err
+}
+
+// SetGrid puts a session on the grid (or takes it off) — the one list the
+// TUI's grid and the portal's share. Marking again keeps the first time,
+// so a tile keeps its place (tiles go in grid_at order).
+func (d *DB) SetGrid(ctx context.Context, sessionID string, on bool) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET grid_at = CASE WHEN ? THEN COALESCE(grid_at, ?) ELSE NULL END WHERE session_id = ?`,
+		on, time.Now().UnixMilli(), sessionID)
 	return err
 }
 

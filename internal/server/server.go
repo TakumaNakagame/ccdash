@@ -146,6 +146,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/archive", wrap(s.handleAPIArchive))
 	s.mux.HandleFunc("POST /api/sessions/{id}/favorite", wrap(s.handleAPIFavorite))
 	s.mux.HandleFunc("POST /api/sessions/{id}/later", wrap(s.handleAPILater))
+	s.mux.HandleFunc("POST /api/sessions/{id}/grid", wrap(s.handleAPIGrid))
 	s.mux.HandleFunc("POST /api/sessions/{id}/color", wrap(s.handleAPIColor))
 	s.mux.HandleFunc("POST /api/sessions/{id}/title", wrap(s.handleAPITitle))
 	s.mux.HandleFunc("POST /api/sessions/{id}/group", wrap(s.handleAPIGroup))
@@ -1049,6 +1050,21 @@ func (s *Server) handleAPILater(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.db.SetLater(r.Context(), r.PathValue("id"), body.Later); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeOK(w, nil)
+}
+
+func (s *Server) handleAPIGrid(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Grid bool `json:"grid"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.db.SetGrid(r.Context(), r.PathValue("id"), body.Grid); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
