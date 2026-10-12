@@ -493,9 +493,25 @@ function installSwipeBack() {
 // are working, or finished unread — the first thing to look at.
 const BOARD_COLS = [["needs_you", "要対応"], ["working", "作業中"], ["done", "未確認"]];
 
+// What a session declared it hands back at the end of its turn (ccdash mcp
+// set_status; model.WaitLabel in Go). answer / action also make it
+// needs_you, with "回答待ち: <note>" as the reason.
+const WAIT_LABEL = { answer: "回答待ち", action: "作業待ち", report: "報告", background: "自動で続行" };
+const WAIT_LABEL_NEEDS = { answer: true, action: true };
+function waitDeclared(s) {
+  return !!s && !!WAIT_LABEL[s.wait] && s.status !== "active";
+}
+// waitChip: the declared status as a chip — filled for the two that wait on
+// the operator (they ask for action), a quiet word for the rest.
+function waitChip(s) {
+  if (!waitDeclared(s)) return null;
+  return h("span", { class: "chip wait " + s.wait, title: s.wait_note || "" }, WAIT_LABEL[s.wait]);
+}
+
 function boardCard(c) {
   const s = c.session;
-  const reason = s.attention === "needs_you" ? (s.attention_reason || "要対応") : s.attention === "done" ? "完了" : "作業中";
+  const declared = waitDeclared(s) && s.attention !== "needs_you" ? WAIT_LABEL[s.wait] + (s.wait_note ? ": " + s.wait_note : "") : "";
+  const reason = s.attention === "needs_you" ? (s.attention_reason || "要対応") : declared || (s.attention === "done" ? "完了" : "作業中");
   return h("a", { class: "card " + (s.attention || "working"), href: `#/d/${c.device_id}/s/${encodeURIComponent(s.session_id)}` },
     h("div", { class: "row" }, h("span", { class: "chip" }, c.device_name), h("span", { class: "grow" }), h("span", { class: "muted small" }, rel(s.last_seen))),
     h("div", { class: titleClass("card-title", s) }, (s.num ? `#${s.num} ` : "") + sessionTitle(s)),
@@ -1133,10 +1149,13 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
   if (fresh) chips.push(fresh);
   // (watch-later rows sit under the あとで見る band, which says so)
   if (live) chips.push(h("span", { class: "chip live", title: "ccdash 上で動いています（チャットから操作できます）" }, "live"));
-  if (s.attention === "needs_you") chips.push(h("span", { class: "chip pend", title: s.attention_reason || "" }, "要対応"));
+  const wc = waitChip(s);
+  if (wc && (s.attention === "needs_you" || !WAIT_LABEL_NEEDS[s.wait])) chips.push(wc);
+  if (s.attention === "needs_you") { if (!wc) chips.push(h("span", { class: "chip pend", title: s.attention_reason || "" }, "要対応")); }
   else if (s.attention === "done") chips.push(h("span", { class: "chip done" }, "未確認"));
   if (s.account && s.account !== "default") chips.unshift(h("span", { class: "chip" }, s.account));
-  const sub = [s.attention === "needs_you" && s.attention_reason ? "? " + s.attention_reason : null,
+  const sub = [s.attention === "needs_you" && s.attention_reason ? "? " + s.attention_reason
+    : waitDeclared(s) && !WAIT_LABEL_NEEDS[s.wait] && s.wait_note ? s.wait_note : null,
     showGroup ? groupOf(s) : null, shortPath(s.cwd, info?.home), s.branch, rel(s.last_seen)].filter(Boolean).join(" · ");
   const here = decodeURIComponent(location.hash).startsWith(`#/d/${id}/s/${s.session_id}`);
   const gk = id + ":" + s.session_id;
@@ -2188,6 +2207,7 @@ function toolLabel(it) {
 }
 
 function gridState(s) {
+  if (waitDeclared(s) && (s.attention === "needs_you" || !WAIT_LABEL_NEEDS[s.wait])) return WAIT_LABEL[s.wait];
   return s.attention === "needs_you" ? "要対応" : s.status === "active" ? "作業中" : s.attention === "done" ? "未確認"
     : s.status === "idle" ? "待機中" : "停止";
 }
@@ -2877,6 +2897,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   const titleEl = h("span", { class: "grow title sess-title" }, "読み込み中…");
   const statusEl = h("span", { class: "chip" });
   const freshEl = h("span", { hidden: true });
+  const waitEl = h("span", { hidden: true });
   const termBtn = h("a", { class: "btn small", href: "#" }, "ターミナル");
   const endBtn = h("button", { class: "btn small danger", hidden: true, title: "claude を終了してアーカイブする", onclick: async () => {
     if (!confirm(END_CONFIRM)) return;
@@ -2901,12 +2922,12 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   let root;
   const bar = compact
     ? h("div", { class: "term-bar tile-head" },
-      h("span", { class: "chip dev" }, devName), titleEl, freshEl, statusEl, stopTop,
+      h("span", { class: "chip dev" }, devName), titleEl, freshEl, waitEl, statusEl, stopTop,
       h("a", { class: "btn small icon", href: "#", title: "チャット画面で開く", "aria-label": "チャット画面で開く", onclick: (e) => { e.preventDefault(); location.hash = chatHref(); } }, icon("open")),
       maxBtn, menuBtn,
       h("button", { class: "btn small icon tile-close", type: "button", title: "グリッドから外す", "aria-label": "グリッドから外す", onclick: () => root.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })) }, icon("x")))
     : h("div", { class: "term-bar" },
-      h("a", { class: "btn small icon", href: `#/d/${id}`, "aria-label": "戻る", title: "戻る" }, icon("back")), titleEl, freshEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
+      h("a", { class: "btn small icon", href: `#/d/${id}`, "aria-label": "戻る", title: "戻る" }, icon("back")), titleEl, freshEl, waitEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
   if (compact) titleEl.addEventListener("dblclick", () => root.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, "読み込み中…"));
   const scroller = h("div", { class: "chat" }, log);
@@ -3239,6 +3260,9 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     const fc = freshChip(session);
     if (fc) { freshEl.className = fc.className; freshEl.title = fc.title; freshEl.textContent = fc.textContent; }
     freshEl.hidden = !fc;
+    const wc = waitChip(session);
+    if (wc) { waitEl.className = wc.className; waitEl.title = wc.title; waitEl.textContent = wc.textContent; }
+    waitEl.hidden = !wc;
     if (compact) root.classList.toggle("unseen", !!session?.unseen);
 
     const title = session ? (session.num ? `#${session.num} ` : "") + sessionTitle(session) : sid ? sid : "新規セッション";

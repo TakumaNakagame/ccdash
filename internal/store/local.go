@@ -17,6 +17,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/takumanakagame/ccmanage/internal/redact"
 	"github.com/takumanakagame/ccmanage/internal/summarize"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
@@ -50,6 +51,10 @@ func (l *Local) SetArchived(ctx context.Context, sessionID string, v bool) error
 
 func (l *Local) SetColor(ctx context.Context, sessionID, color string) error {
 	return l.db.SetColor(ctx, sessionID, color)
+}
+
+func (l *Local) SetWait(ctx context.Context, sessionID, kind, note string) error {
+	return l.db.SetWait(ctx, sessionID, kind, redact.String(note))
 }
 
 func (l *Local) SetLater(ctx context.Context, sessionID string, v bool) error {

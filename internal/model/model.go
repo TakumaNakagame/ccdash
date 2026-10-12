@@ -58,6 +58,14 @@ type Session struct {
 	Attention       string    `json:"attention,omitempty"`
 	AttentionReason string    `json:"attention_reason,omitempty"`
 	AttentionAt     time.Time `json:"attention_at,omitzero"`
+	// Wait is what the session itself declared at the end of its turn
+	// (ccdash mcp set_status): "answer" (waits for the operator's answer),
+	// "action" (waits for the operator to do something), "report" (done,
+	// just reporting) or "background" (carries on by itself); "" when it
+	// declared nothing. Cleared by the next prompt. See WaitLabel.
+	Wait     string    `json:"wait,omitempty"`
+	WaitNote string    `json:"wait_note,omitempty"`
+	WaitAt   time.Time `json:"wait_at,omitzero"`
 	// LastActivity is when the session last did anything (newest
 	// transcript entry, or a hook); SeenAt when the operator last looked
 	// (MarkSeen). Unseen = progress since then: the NEW mark.
@@ -93,6 +101,36 @@ const (
 	AttentionNeedsYou = "needs_you"
 	AttentionDone     = "done"
 )
+
+// The kinds a session declares with set_status (Session.Wait).
+const (
+	WaitAnswer     = "answer"
+	WaitAction     = "action"
+	WaitReport     = "report"
+	WaitBackground = "background"
+)
+
+// WaitKinds lists the Wait values in the order the tools describe them.
+var WaitKinds = []string{WaitAnswer, WaitAction, WaitReport, WaitBackground}
+
+// WaitLabel is the operator-facing word for a Wait kind ("" for none).
+// Mirrored by WAIT_LABEL in internal/hub/web/app.js.
+func WaitLabel(kind string) string {
+	switch kind {
+	case WaitAnswer:
+		return "回答待ち"
+	case WaitAction:
+		return "作業待ち"
+	case WaitReport:
+		return "報告"
+	case WaitBackground:
+		return "自動で続行"
+	}
+	return ""
+}
+
+// WaitNeedsYou reports the kinds that wait on the operator.
+func WaitNeedsYou(kind string) bool { return kind == WaitAnswer || kind == WaitAction }
 
 // RecentReplyWindow is how long a session that finished a turn keeps a
 // faint "replied" mark after the operator has seen it (RecentReply).

@@ -29,10 +29,15 @@ GitHub anonymous API rate-limit hits).
 Wire ccdash into Claude Code once:
 
 ```sh
-ccdash install-hooks
+ccdash setup          # hooks + the MCP server + the status rule (recommended)
+ccdash install-hooks  # just the hooks
 ```
 
-This appends ccdash's hook entries to `~/.claude/settings.json` —
+`ccdash setup` does what `install-hooks` does, registers ccdash's MCP server
+at user scope in `~/.claude.json` and adds `mcp__ccdash__set_status` to
+`permissions.allow` (see "Status declarations" in section 16). Safe to re-run.
+
+`install-hooks` appends ccdash's hook entries to `~/.claude/settings.json` —
 idempotently, so you can re-run it any time. Existing user hooks are
 preserved (they don't carry the `X-Ccdash-Managed: true` marker).
 PermissionRequest is an HTTP hook (it waits for your allow / deny); every
@@ -703,7 +708,30 @@ Tools:
 | `start_session` | start a new claude session in a directory (absolute path), like the TUI's `n`; optional `project`, first `prompt`, `permission_mode`. Refused while the Attach setting is OFF |
 
 It never stops claude and never answers approvals. Add
-`--read-only` (`ccdash mcp --read-only`) to offer only the first four.
+`--read-only` (`ccdash mcp --read-only`) to offer only the first four plus
+`set_status`.
+
+### Status declarations (`set_status`)
+
+With many sessions running, a stopped one doesn't tell you whether it waits
+for you or just reported. ccdash's MCP server gives every session that has it
+a rule (in the MCP instructions — no CLAUDE.md edits): right before ending a
+turn, call `set_status` once.
+
+| status | shown as | meaning | effect |
+|---|---|---|---|
+| `answer` | 回答待ち | asked you a question / for a decision, can't go on without it | needs you (push "回答待ち") |
+| `action` | 作業待ち | you must do something first (log in, merge, check a device…) | needs you (push "作業待ち") |
+| `report` | 報告 | done; the last message is a report | unread done |
+| `background` | 自動で続行 | waiting on CI / a build / a task, continues by itself | unread done |
+
+The one-line `note` shows on the TUI's second line and in the portal's and
+app's list, board and chat header. 回答待ち / 作業待ち stay "needs you" until
+the next prompt (looking doesn't clear them). The next prompt clears the
+declaration, and a turn that ends without one doesn't inherit the previous.
+The calling session is found from the MCP server's parent process
+(`~/.claude/sessions/<pid>.json`). Restart running claude sessions after
+`ccdash setup` to pick the rule up.
 
 When this machine is joined to a hub (`ccdash hub join`), every session
 carries a `url` (`https://<hub>/s/<session id>`). Opening it in a browser or

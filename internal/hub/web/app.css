@@ -170,6 +170,11 @@ input[type=text], input:not([type]) {
 .chip.idle { color: var(--ok); }
 .chip.live { background: none; border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent); padding: 0 6px; }
 .chip.pend { background: var(--warn); color: #111; font-weight: 700; }
+/* What a session declared it hands back (set_status): the two that wait on
+   the operator are filled like 要対応; 報告 / 自動で続行 stay quiet words. */
+.chip.wait.answer, .chip.wait.action { background: var(--warn); color: #111; font-weight: 700; }
+.chip.wait.report { background: none; color: var(--ok); padding: 0; font-weight: 600; }
+.chip.wait.background { background: none; color: var(--muted); padding: 0; }
 .bucket.later { display: flex; align-items: center; gap: 6px; color: var(--warn); font-weight: 600; }
 /* Session state: a dot and a word. */
 .stat { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; }

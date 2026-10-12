@@ -140,6 +140,11 @@ func (r *Remote) SetGrid(ctx context.Context, sessionID string, v bool) error {
 		map[string]any{"grid": v}, nil)
 }
 
+func (r *Remote) SetWait(ctx context.Context, sessionID, kind, note string) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "wait"), nil,
+		map[string]any{"wait": kind, "note": note}, nil)
+}
+
 func (r *Remote) SetLater(ctx context.Context, sessionID string, v bool) error {
 	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "later"), nil,
 		map[string]any{"later": v}, nil)

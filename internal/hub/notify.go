@@ -321,12 +321,25 @@ func watchOnce(ctx context.Context, c *http.Client, d Device, st *watchState) ([
 		case model.AttentionNeedsYou:
 			n.Title = d.Name + " · 要対応"
 			n.Body = sessionLabel(s)
+			if l := model.WaitLabel(s.Wait); model.WaitNeedsYou(s.Wait) && strings.HasPrefix(reason, l) {
+				// Declared with set_status: "回答待ち" / "作業待ち" says more.
+				n.Title = d.Name + " · " + l
+				reason = strings.TrimPrefix(strings.TrimPrefix(reason, l), ": ")
+			}
 			if reason != "" {
 				n.Body += "\n" + reason
 			}
 		case model.AttentionDone:
-			n.Title = d.Name + " · 完了"
+			// What the session declared it hands back (set_status), if anything.
+			label := model.WaitLabel(s.Wait)
+			if label == "" {
+				label = "完了"
+			}
+			n.Title = d.Name + " · " + label
 			n.Body = sessionLabel(s)
+			if s.Wait != "" && s.WaitNote != "" {
+				n.Body += "\n" + s.WaitNote
+			}
 		default:
 			continue
 		}

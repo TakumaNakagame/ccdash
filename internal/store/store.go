@@ -59,6 +59,9 @@ type Store interface {
 
 	SetArchived(ctx context.Context, sessionID string, v bool) error
 	SetFavorite(ctx context.Context, sessionID string, v bool) error
+	// SetWait records what a session declared it waits for (MCP
+	// set_status: model.WaitAnswer …); "" clears it.
+	SetWait(ctx context.Context, sessionID, kind, note string) error
 	// SetLater marks / clears "watch later".
 	SetLater(ctx context.Context, sessionID string, v bool) error
 	// SetGrid puts a session on the grid shared with the portal.

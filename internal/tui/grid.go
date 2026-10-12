@@ -427,6 +427,8 @@ func (m *model) renderGridTile(s mdl.Session, focused bool, w, h int) string {
 		sub = pendingStyle.Render("? " + reason)
 	case workLine(s, time.Now()) != "":
 		sub = statusActive.Render(workLine(s, time.Now()))
+	case waitText(s) != "":
+		sub = statusIdle.Render(waitText(s))
 	default:
 		where := baseLast(s.Cwd)
 		if s.Branch != "" && s.Branch != "HEAD" {

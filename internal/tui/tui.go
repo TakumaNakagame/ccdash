@@ -4178,6 +4178,8 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	}
 	statusDot := renderStatusDot(s.Status, m.animTick)
 	switch {
+	case s.Attention == mdl.AttentionNeedsYou && s.Wait == mdl.WaitAction && s.Status != mdl.StatusActive:
+		statusDot = pendingStyle.Render("!") // waits for the operator to do something
 	case s.Attention == mdl.AttentionNeedsYou && s.Status != mdl.StatusActive:
 		statusDot = pendingStyle.Render("?")
 	case s.Attention == mdl.AttentionNeedsYou:
@@ -4270,6 +4272,8 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 			reason = "要対応"
 		}
 		parts = append(parts, pendingStyle.Render("? "+shorten(reason, 60)))
+	} else if w := waitText(s); w != "" {
+		parts = append(parts, statusIdle.Render(shorten(w, 60)))
 	}
 	switch s.TitleStatus {
 	case "running":
@@ -4936,4 +4940,17 @@ func humanDuration(d time.Duration) string {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// waitText is what a stopped session declared it hands back when that isn't
+// a needs-you (those show their reason): "報告: <note>" / "自動で続行: …".
+func waitText(s mdl.Session) string {
+	if s.Wait == "" || mdl.WaitNeedsYou(s.Wait) || s.Status == mdl.StatusActive {
+		return ""
+	}
+	w := mdl.WaitLabel(s.Wait)
+	if s.WaitNote != "" {
+		w += ": " + s.WaitNote
+	}
+	return w
 }

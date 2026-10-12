@@ -55,3 +55,49 @@ func TestAttentionFromHooks(t *testing.T) {
 		t.Fatalf("after seen = %q", a)
 	}
 }
+
+func TestAttentionFromDeclaredWait(t *testing.T) {
+	s, d, tok := newTestServer(t)
+	ctx := context.Background()
+	get := func() model.Session {
+		t.Helper()
+		ss, ok, err := d.GetSession(ctx, "s1")
+		if err != nil || !ok {
+			t.Fatalf("get session: %v %v", ok, err)
+		}
+		return ss
+	}
+	post := func(path, body string, want int) {
+		t.Helper()
+		if r := do(t, s, "POST", path, tok, []byte(body)); r.status != want {
+			t.Fatalf("%s = %d %s", path, r.status, r.body)
+		}
+	}
+	post("/hooks/user-prompt", `{"session_id":"s1","cwd":"/tmp","prompt":"hi"}`, 200)
+	post("/api/sessions/s1/wait", `{"wait":"nope"}`, 400)
+	post("/api/sessions/s1/wait", `{"wait":"answer","note":"A案とB案どちらにしますか"}`, 200)
+	post("/hooks/stop", `{"session_id":"s1","cwd":"/tmp"}`, 200)
+	if x := get(); x.Attention != model.AttentionNeedsYou || x.AttentionReason != "回答待ち: A案とB案どちらにしますか" || x.Wait != model.WaitAnswer {
+		t.Fatalf("after declared answer = %q %q %q", x.Attention, x.AttentionReason, x.Wait)
+	}
+	// Looking at it doesn't answer it.
+	post("/api/sessions/s1/seen", `{}`, 200)
+	if x := get(); x.Attention != model.AttentionNeedsYou {
+		t.Fatalf("seen cleared needs you: %q", x.Attention)
+	}
+	post("/hooks/user-prompt", `{"session_id":"s1","cwd":"/tmp","prompt":"A"}`, 200)
+	if x := get(); x.Attention != "" || x.Wait != "" {
+		t.Fatalf("after reply = %q %q", x.Attention, x.Wait)
+	}
+	post("/api/sessions/s1/wait", `{"wait":"report","note":"done"}`, 200)
+	post("/hooks/stop", `{"session_id":"s1","cwd":"/tmp"}`, 200)
+	if x := get(); x.Attention != model.AttentionDone || x.Wait != model.WaitReport {
+		t.Fatalf("after report = %q %q", x.Attention, x.Wait)
+	}
+	// A turn with no prompt (e.g. a background task woke it) that declares
+	// nothing drops the old declaration.
+	post("/hooks/stop", `{"session_id":"s1","cwd":"/tmp"}`, 200)
+	if x := get(); x.Wait != "" {
+		t.Fatalf("stale wait kept: %q", x.Wait)
+	}
+}

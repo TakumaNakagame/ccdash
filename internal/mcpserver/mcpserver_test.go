@@ -78,7 +78,7 @@ func TestServe(t *testing.T) {
 	if r[0].Result.ProtocolVersion != "2025-03-26" {
 		t.Errorf("initialize: %s", lines[0])
 	}
-	if len(r[1].Result.Tools) != 12 {
+	if len(r[1].Result.Tools) != 13 {
 		t.Errorf("tools/list: %s", lines[1])
 	}
 	body := func(i int) string { return r[i].Result.Content[0].Text }
@@ -147,7 +147,7 @@ func TestOrganize(t *testing.T) {
 	if _, err := ro.call(ctx, "set_project", json.RawMessage(`{"sessions":["#1"],"project":"z"}`)); err == nil {
 		t.Fatal("read-only server accepted a write")
 	}
-	if len(ro.tools()) != 4 {
+	if len(ro.tools()) != 5 {
 		t.Fatalf("read-only tools: %d", len(ro.tools()))
 	}
 }
@@ -214,5 +214,46 @@ func TestHubLinks(t *testing.T) {
 	out, _ = New(store.NewLocal(d), "test", true).call(ctx, "get_session", json.RawMessage(`{"session":"#1"}`))
 	if strings.Contains(out, `"url"`) {
 		t.Fatalf("url without a hub: %s", out)
+	}
+}
+
+func TestSetStatus(t *testing.T) {
+	ctx := context.Background()
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	s := model.Session{SessionID: "me", Cwd: "/w", Status: model.StatusActive}
+	if err := d.UpsertSession(ctx, &s); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(store.NewLocal(d), "test", true) // read-only keeps set_status
+	srv.self = func() string { return "me" }
+	if _, err := srv.call(ctx, "set_status", json.RawMessage(`{"status":"maybe","note":"x"}`)); err == nil {
+		t.Fatal("accepted an unknown status")
+	}
+	if _, err := srv.call(ctx, "set_status", json.RawMessage(`{"status":"answer","note":"どちらの案で\n進めますか？"}`)); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := d.GetSession(ctx, "me")
+	if got.Wait != model.WaitAnswer || got.WaitNote != "どちらの案で 進めますか？" || got.WaitAt.IsZero() {
+		t.Fatalf("wait %q %q %v", got.Wait, got.WaitNote, got.WaitAt)
+	}
+	srv.self = func() string { return "" }
+	if _, err := srv.call(ctx, "set_status", json.RawMessage(`{"status":"report","note":"x"}`)); err == nil {
+		t.Fatal("no session to set")
+	}
+	if _, err := srv.call(ctx, "set_status", json.RawMessage(`{"status":"report","note":"done","session":"me"}`)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParentOf(t *testing.T) {
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc")
+	}
+	if got := parentOf(os.Getpid()); got != os.Getppid() {
+		t.Fatalf("parentOf = %d, want %d", got, os.Getppid())
 	}
 }

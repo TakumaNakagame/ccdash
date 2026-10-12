@@ -38,7 +38,7 @@ resume sessions from one place instead of hunting through terminal tabs.
 # install (Linux / macOS, amd64 / arm64) — or: go install ./cmd/ccdash
 curl -fsSL https://raw.githubusercontent.com/TakumaNakagame/ccdash/main/install.sh | sh
 
-ccdash install-hooks   # once: wire ccdash's hooks into ~/.claude/settings.json (keeps yours)
+ccdash setup           # once: hooks (keeps yours) + MCP server + the status rule
 ccdash                 # open the dashboard; claude sessions show up as you use them
 ```
 
@@ -89,7 +89,11 @@ Hands-on guides: [English](docs/usage_en.md) · [日本語](docs/usage_jp.md)
   What the hub may do on a machine is limited by an allowlist on that machine.
 - **[Remote mode](docs/remote-mode.md).** Point a TUI at a collector on
   another machine over your LAN / VPN: `ccdash remote set …`, then `ccdash -r`.
-- **MCP.** `claude mcp add --scope user ccdash -- ccdash mcp` gives Claude
+- **Status declarations.** Every session ends its turn with `set_status`:
+  回答待ち (waits for your answer), 作業待ち (waits for you to do something),
+  報告 (just reporting) or 自動で続行 (continues by itself) — shown in the
+  TUI, portal and app; the first two count as "needs you".
+- **MCP.** `ccdash setup` (or `claude mcp add --scope user ccdash -- ccdash mcp`) gives Claude
   read tools (overview, projects, sessions, a session's recent conversation)
   and organizing tools (projects, titles, archive, watch later, start a
   session). It never stops claude or answers approvals; `--read-only` keeps

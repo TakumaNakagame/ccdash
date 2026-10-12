@@ -25,10 +25,13 @@ OS / Homebrew の有無に応じて、`PATH` に通っている場所を自動�
 Claude Code に hook を組み込むのは 1 度だけです。
 
 ```sh
-ccdash install-hooks
+ccdash setup          # hook + MCP サーバー + 「状態申告ルール」をまとめて設定 (推奨)
+ccdash install-hooks  # hook だけ
 ```
 
-`~/.claude/settings.json` に ccdash 用の hook エントリを追記します。冪等なので何度走らせても OK。既存の user hook は `X-Ccdash-Managed: true` マーカーで区別するので壊しません。PermissionRequest だけは許可/拒否を待つ HTTP hook、それ以外のイベントは `$XDG_STATE_HOME/ccdash/hook.sh` (バックグラウンドで `curl` 送信する転送スクリプト) を呼ぶので、ccdash が止まっていても claude が待たされることはありません。
+`ccdash setup` は `install-hooks` に加えて、ccdash の MCP サーバーを user スコープで `~/.claude.json` に登録し、`mcp__ccdash__set_status` を `permissions.allow` に足します (16 章の「状態申告」)。何度実行しても同じ結果になります。
+
+`install-hooks` は `~/.claude/settings.json` に ccdash 用の hook エントリを追記します。冪等なので何度走らせても OK。既存の user hook は `X-Ccdash-Managed: true` マーカーで区別するので壊しません。PermissionRequest だけは許可/拒否を待つ HTTP hook、それ以外のイベントは `$XDG_STATE_HOME/ccdash/hook.sh` (バックグラウンドで `curl` 送信する転送スクリプト) を呼ぶので、ccdash が止まっていても claude が待たされることはありません。
 
 バージョンを確認します。
 
@@ -493,6 +496,23 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | `set_archived` | アーカイブ／解除 |
 | `start_session` | 指定ディレクトリ (絶対パス) で新しい claude セッションを起動 (TUI の `n` と同じ)。`project` / 最初の `prompt` / `permission_mode` を指定可。設定の Attach が OFF なら使えない |
 
-claude の停止や承認の判断はできません。`ccdash mcp --read-only` にすると上の 4 つ (参照系) だけになります。
+claude の停止や承認の判断はできません。`ccdash mcp --read-only` にすると上の 4 つ (参照系) と `set_status` だけになります。
+
+### 状態申告 (`set_status`)
+
+セッションを大量に回していると、止まっているセッションが「自分の回答や作業を待っている」のか「報告して終わっただけ」なのか見分けがつきません。そこで ccdash の MCP サーバーは、登録されたすべてのセッションに次のルールを伝えます (MCP の instructions に入るので、CLAUDE.md を書き換える必要はありません)。
+
+> ターンを終える直前に `set_status` を 1 回呼び、何を渡して終わるかを申告すること。
+
+| status | 表示 | 意味 | 扱い |
+|---|---|---|---|
+| `answer` | 回答待ち | 質問・判断を求めていて、答えがないと進めない | 要対応 (プッシュ通知「回答待ち」) |
+| `action` | 作業待ち | ログイン・マージ・実機確認など、あなたが先に何かをする必要がある | 要対応 (プッシュ通知「作業待ち」) |
+| `report` | 報告 | 終わった。最後のメッセージは報告で、何もしなくてよい | 未確認 (完了) |
+| `background` | 自動で続行 | CI・ビルド・バックグラウンド処理を待っていて、自分で再開する | 未確認 (完了) |
+
+`note` には一行で「何をしてほしいか／何を報告したか」が入り、TUI の 2 行目、ポータルとアプリの一覧・ボード・チャットのヘッダーに出ます。回答待ち・作業待ちは開いて見ただけでは消えず、次のプロンプトを送るまで要対応のままです。申告は次のプロンプトで消え、申告せずに終わったターンでは前の申告を引き継ぎません (表示は従来どおり「完了」)。
+
+呼び出し元のセッションは MCP サーバーの親プロセス (`~/.claude/sessions/<pid>.json`) から自動で特定します。`ccdash setup` は `set_status` を許可リストに入れるので、毎回の許可確認は出ません。設定後、動いている claude を再起動すると新しいルールが効きます。
 
 この端末がハブに参加している (`ccdash hub join` 済み) と、各セッションに `url` (`https://<ハブ>/s/<セッションID>`) が付きます。ブラウザやインストールしたアプリで開くと、ハブがそのセッションを持つ端末を探してチャット画面を開きます (未ログインならログイン後に移動)。「対応が必要なセッションを、開けるリンク付きで一覧にして」と頼めば、管理役の Claude がそのまま飛べるリストを作れます。ハブの URL は `--hub-url` で指定・上書きできます。ポータルのチャット内でこのリンクをタップすると、新しいタブを開かずにその場でそのチャットへ移動します (アプリでもアプリ内で移動)。

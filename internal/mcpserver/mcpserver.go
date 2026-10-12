@@ -47,7 +47,20 @@ start_session opens a new claude session in a directory (optionally in a project
 first prompt); the operator sees and drives it in ccdash.
 When this machine is joined to a ccdash hub, each session carries "url": a link that opens
 that session's chat in the hub portal (browser or installed app). Put it next to a session
-whenever you list sessions for the operator, e.g. the ones that need them.`
+whenever you list sessions for the operator, e.g. the ones that need them.
+
+Status rule — follow it in every session that has these tools: the operator juggles many
+sessions and can't tell which ones wait on them. Right before you end a turn (the message
+that hands control back to the operator), call set_status once with what you hand back:
+  answer      you asked the operator a question or for a decision and can't go on without it
+  action      the operator has to do something themselves first (log in, run or approve
+              something outside this session, check a device, merge, restart…)
+  report      you are done; the final message reports results and nothing is needed
+  background  you are waiting on something else (CI, a build, a background task, a timer)
+              and will carry on by yourself
+with note = one short line in the operator's language saying what you need, or what you
+report ("PR #12 のマージ待ち", "テスト全部通過、デプロイ済み"). Declare it every turn, even a short
+reply; a new turn forgets the last one. Don't call it mid-turn while you keep working.`
 
 // Server serves one stdio connection.
 type Server struct {
@@ -56,6 +69,7 @@ type Server struct {
 	readOnly bool
 	hubURL   string // hub origin for session links; "" = not joined, no links
 	now      func() time.Time
+	self     func() string // the calling claude's session id ("" = unknown); see selfSession
 }
 
 // WithHubURL makes every session row carry a link to its chat in that hub's
@@ -67,14 +81,31 @@ func (s *Server) WithHubURL(u string) *Server {
 
 // New returns a server over st; readOnly leaves out the organizing tools.
 func New(st store.Store, version string, readOnly bool) *Server {
-	return &Server{st: st, version: version, readOnly: readOnly, now: time.Now}
+	return &Server{st: st, version: version, readOnly: readOnly, now: time.Now, self: selfSession}
 }
 
 func (s *Server) tools() []map[string]any {
+	// set_status touches only the caller's own session, so --read-only
+	// keeps it: the status rule holds in every session.
+	out := append(append([]map[string]any{}, readTools...), statusTool)
 	if s.readOnly {
-		return readTools
+		return out
 	}
-	return append(append([]map[string]any{}, readTools...), writeTools...)
+	return append(out, writeTools...)
+}
+
+var statusTool = map[string]any{
+	"name": "set_status",
+	"description": "Tell the operator what this session hands back at the end of the turn — call it once, right before your final message. " +
+		"answer = you wait for their answer / decision; action = they must do something themselves first; " +
+		"report = done, the message just reports; background = you wait on something else (CI, a build, a task) and continue by yourself. " +
+		"note: one short line in the operator's language (what you need / what you report). The status shows in ccdash (TUI, portal, app) and answer / action mark the session \"needs you\".",
+	"inputSchema": required(map[string]any{
+		"status":  map[string]any{"type": "string", "enum": model.WaitKinds},
+		"note":    map[string]any{"type": "string", "description": "one short line: what you need from the operator, or what you report"},
+		"session": map[string]any{"type": "string", "description": "only if the call fails to find your session: your session id"},
+	}, "status", "note"),
+	"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true},
 }
 
 type request struct {
@@ -327,6 +358,8 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		Cwd             string   `json:"cwd"`
 		Prompt          string   `json:"prompt"`
 		PermissionMode  string   `json:"permission_mode"`
+		Status          string   `json:"status"`
+		Note            string   `json:"note"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -343,6 +376,8 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		}
 	}
 	switch name {
+	case "set_status":
+		v, err = s.setStatus(ctx, args.Status, args.Note, args.Session)
 	case "start_session":
 		v, err = s.startSession(ctx, args.Cwd, args.Project, args.Prompt, args.PermissionMode)
 	case "set_project":
@@ -417,6 +452,8 @@ type sessionRow struct {
 	Pinned    bool   `json:"pinned,omitempty"`
 	New       bool   `json:"new_since_seen,omitempty"` // progress since the operator last looked
 	Later     bool   `json:"watch_later,omitempty"`
+	Wait      string `json:"declared_status,omitempty"` // what the session said it hands back (set_status)
+	WaitNote  string `json:"declared_note,omitempty"`
 	Archived  bool   `json:"archived,omitempty"`
 	SessionID string `json:"session_id"`
 	URL       string `json:"url,omitempty"` // the session's chat in the hub portal
@@ -426,7 +463,7 @@ func (s *Server) row(x model.Session) sessionRow {
 	r := sessionRow{
 		Ref: x.Ref(), Title: x.DisplayTitle(), Project: x.Project, Group: groupOf(x),
 		Status: string(x.Status), Attention: x.Attention, Reason: x.AttentionReason, Pending: x.PendingCount,
-		Cwd: x.Cwd, Branch: x.Branch, Pinned: x.Favorite, New: x.Unseen, Later: x.Later, Archived: x.Archived, SessionID: x.SessionID,
+		Cwd: x.Cwd, Branch: x.Branch, Pinned: x.Favorite, New: x.Unseen, Later: x.Later, Wait: x.Wait, WaitNote: x.WaitNote, Archived: x.Archived, SessionID: x.SessionID,
 	}
 	if s.hubURL != "" {
 		r.URL = s.hubURL + "/s/" + url.PathEscape(x.SessionID)

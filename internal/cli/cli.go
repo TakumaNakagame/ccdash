@@ -73,7 +73,7 @@ func Root(version string) *cobra.Command {
 		Long: `ccdash is a local TUI dashboard for monitoring multiple Claude Code sessions.
 
 Quick start:
-  1) ccdash install-hooks  (one-time: enables real-time event capture)
+  1) ccdash setup          (one-time: hooks, MCP server, the status rule)
   2) ccdash               (opens the dashboard; embeds the server while open)
 
 The default 'ccdash' command opens the TUI. If no collector is already
@@ -120,6 +120,7 @@ spawns a collector — everything goes over HTTP.`,
 	root.AddCommand(trustCmd(rf))
 	root.AddCommand(eventsCmd(rf))
 	root.AddCommand(approvalsCmd(rf))
+	root.AddCommand(setupCmd())
 	root.AddCommand(installHooksCmd())
 	root.AddCommand(uninstallHooksCmd())
 	root.AddCommand(installStatusLineCmd())

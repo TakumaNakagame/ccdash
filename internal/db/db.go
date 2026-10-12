@@ -135,6 +135,10 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN seen_at INTEGER`,
 		`ALTER TABLE sessions ADD COLUMN later_at INTEGER`,
 		`ALTER TABLE sessions ADD COLUMN grid_at INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN wait TEXT`,
+		`ALTER TABLE sessions ADD COLUMN wait_note TEXT`,
+		`ALTER TABLE sessions ADD COLUMN wait_at INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN wait_stopped INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -424,7 +428,8 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.account,''),
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
-		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0)
+		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0),
+		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0)
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE COALESCE(s.archived,0) = ?
 		ORDER BY COALESCE(s.favorite,0) DESC,
@@ -438,7 +443,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 	var out []model.Session
 	for rows.Next() {
 		var s model.Session
-		var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt, gridAt int64
+		var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt, gridAt, waitAt int64
 		var status string
 		var arch, fav int
 		if err := rows.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -450,10 +455,12 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.Project, &s.ProjectColor, &s.ProjectOrder,
 			&first, &last, &status, &s.PendingCount, &s.Account,
 			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
-			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt); err != nil {
+			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt,
+			&s.Wait, &s.WaitNote, &waitAt); err != nil {
 			return nil, err
 		}
 		finishAttention(&s, attAt)
+		finishWait(&s, waitAt)
 		finishSeen(&s, model.SessionStatus(status), actAt, seenAt)
 		if laterAt > 0 {
 			s.Later, s.LaterAt = true, time.UnixMilli(laterAt).UTC()
@@ -544,12 +551,13 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       COALESCE(s.account,''),
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
-		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0)
+		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0),
+		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0)
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE s.session_id = ?
 	`, sessionID)
 	var s model.Session
-	var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt, gridAt int64
+	var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt, gridAt, waitAt int64
 	var status string
 	var arch, fav int
 	err := row.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -561,7 +569,8 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&s.Project, &s.ProjectColor, &s.ProjectOrder,
 		&first, &last, &status, &s.PendingCount, &s.Account,
 		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
-		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt)
+		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt,
+		&s.Wait, &s.WaitNote, &waitAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Session{}, false, nil
 	}
@@ -577,6 +586,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		s.GenTitleAt = time.Unix(genAt, 0).UTC()
 	}
 	finishAttention(&s, attAt)
+	finishWait(&s, waitAt)
 	finishSeen(&s, model.SessionStatus(status), actAt, seenAt)
 	if laterAt > 0 {
 		s.Later, s.LaterAt = true, time.UnixMilli(laterAt).UTC()
@@ -622,6 +632,52 @@ func finishAttention(s *model.Session, attAt int64) {
 		s.Attention = model.AttentionNeedsYou
 		s.AttentionReason = "承認待ち"
 	}
+}
+
+func finishWait(s *model.Session, waitAt int64) {
+	if waitAt > 0 {
+		s.WaitAt = time.UnixMilli(waitAt).UTC()
+	}
+}
+
+// SetWait records what the session declared it is waiting for (set_status);
+// kind "" clears it.
+func (d *DB) SetWait(ctx context.Context, sessionID, kind, note string) error {
+	var at any
+	if kind != "" {
+		at = time.Now().UnixMilli()
+	} else {
+		note = ""
+	}
+	res, err := d.sql.ExecContext(ctx, `UPDATE sessions SET wait = ?, wait_note = ?, wait_at = ?, wait_stopped = 0 WHERE session_id = ?`,
+		kind, note, at, sessionID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no session %s", sessionID)
+	}
+	return nil
+}
+
+// TurnWait is the wait declared during the turn a Stop just ended. A
+// declaration that already went through a Stop belongs to an earlier turn
+// (Claude didn't declare this time), so it is cleared and "" returned.
+func (d *DB) TurnWait(ctx context.Context, sessionID string) (kind, note string, err error) {
+	var stopped int
+	err = d.sql.QueryRowContext(ctx, `SELECT COALESCE(wait,''), COALESCE(wait_note,''), wait_stopped FROM sessions WHERE session_id = ?`,
+		sessionID).Scan(&kind, &note, &stopped)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil || kind == "" {
+		return "", "", err
+	}
+	if stopped != 0 {
+		return "", "", d.SetWait(ctx, sessionID, "", "")
+	}
+	_, err = d.sql.ExecContext(ctx, `UPDATE sessions SET wait_stopped = 1 WHERE session_id = ?`, sessionID)
+	return kind, note, err
 }
 
 // SetAttention records what a session wants from the operator.

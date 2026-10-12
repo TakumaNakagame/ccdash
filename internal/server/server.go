@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/takumanakagame/ccmanage/internal/accounts"
 	"github.com/takumanakagame/ccmanage/internal/auth"
@@ -146,6 +147,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/archive", wrap(s.handleAPIArchive))
 	s.mux.HandleFunc("POST /api/sessions/{id}/favorite", wrap(s.handleAPIFavorite))
 	s.mux.HandleFunc("POST /api/sessions/{id}/later", wrap(s.handleAPILater))
+	s.mux.HandleFunc("POST /api/sessions/{id}/wait", wrap(s.handleAPIWait))
 	s.mux.HandleFunc("POST /api/sessions/{id}/grid", wrap(s.handleAPIGrid))
 	s.mux.HandleFunc("POST /api/sessions/{id}/color", wrap(s.handleAPIColor))
 	s.mux.HandleFunc("POST /api/sessions/{id}/title", wrap(s.handleAPITitle))
@@ -618,6 +620,7 @@ func (s *Server) handleUserPrompt(w http.ResponseWriter, r *http.Request) {
 	}
 	s.ensureSessionAt(r, p, model.StatusActive, true) // a prompt is what moves last_seen
 	_ = s.db.ClearAttention(r.Context(), p.SessionID, "")
+	_ = s.db.SetWait(r.Context(), p.SessionID, "", "") // the declaration answered
 	summary := truncate(strings.TrimSpace(p.Prompt), 200)
 	_, _ = s.db.AppendEvent(r.Context(), &model.Event{
 		SessionID: p.SessionID,
@@ -866,13 +869,15 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.ensureSession(r, p, model.StatusIdle)
+	wait, note, _ := s.db.TurnWait(r.Context(), p.SessionID)
 	_, _ = s.db.AppendEvent(r.Context(), &model.Event{
 		SessionID: p.SessionID,
 		EventType: model.EventStop,
 		Summary:   "stop",
 		Payload:   raw,
 	})
-	_ = s.db.SetAttention(r.Context(), p.SessionID, model.AttentionDone, "")
+	kind, reason := stopAttention(wait, note)
+	_ = s.db.SetAttention(r.Context(), p.SessionID, kind, reason)
 	writeOK(w, nil)
 }
 
@@ -961,6 +966,9 @@ func summarizeToolInput(tool string, input json.RawMessage) string {
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) { // never split a character
+		n--
 	}
 	return s[:n] + "..."
 }

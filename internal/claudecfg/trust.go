@@ -70,18 +70,9 @@ func SplitRoots(roots string) []string {
 // Everything else in the file is kept: numbers stay as written, and the
 // write is a same-directory temp file renamed over the original.
 func Trust(path, dir string) (bool, error) {
-	b, err := os.ReadFile(path)
+	cfg, err := load(path)
 	if err != nil {
 		return false, err
-	}
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.UseNumber()
-	var cfg map[string]any
-	if err := dec.Decode(&cfg); err != nil {
-		return false, fmt.Errorf("parse %s: %w", path, err)
-	}
-	if cfg == nil {
-		return false, errors.New(path + " is not a JSON object")
 	}
 	projects, _ := cfg["projects"].(map[string]any)
 	if projects == nil {
@@ -107,12 +98,36 @@ func Trust(path, dir string) (bool, error) {
 	if !changed {
 		return false, nil
 	}
+	return true, save(path, cfg)
+}
+
+// load reads the config at path as a JSON object, numbers kept as written.
+func load(path string) (map[string]any, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var cfg map[string]any
+	if err := dec.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if cfg == nil {
+		return nil, errors.New(path + " is not a JSON object")
+	}
+	return cfg, nil
+}
+
+// save writes cfg over path: a same-directory temp file renamed over the
+// original, keeping its mode.
+func save(path string, cfg map[string]any) error {
 	var out bytes.Buffer
 	enc := json.NewEncoder(&out)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(cfg); err != nil {
-		return false, err
+		return err
 	}
 	mode := os.FileMode(0o600)
 	if st, err := os.Stat(path); err == nil {
@@ -120,19 +135,19 @@ func Trust(path, dir string) (bool, error) {
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".claude.json.ccdash-*")
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(bytes.TrimRight(out.Bytes(), "\n")); err != nil {
 		tmp.Close()
-		return false, err
+		return err
 	}
 	if err := tmp.Chmod(mode); err != nil {
 		tmp.Close()
-		return false, err
+		return err
 	}
 	if err := tmp.Close(); err != nil {
-		return false, err
+		return err
 	}
-	return true, os.Rename(tmp.Name(), path)
+	return os.Rename(tmp.Name(), path)
 }

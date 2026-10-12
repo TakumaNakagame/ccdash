@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/takumanakagame/ccmanage/internal/redact"
 	"github.com/takumanakagame/ccmanage/internal/screenprompt"
 )
 
@@ -24,6 +26,10 @@ import (
 //     db), or a dialog on a ccdash-hosted claude's screen (attentionLoop).
 //   - done — the turn finished (Stop hook) and nobody has looked yet; the
 //     TUI selecting the session or the portal opening it marks it seen.
+//   - a turn that ends after the session declared "answer" / "action"
+//     (ccdash mcp set_status → sessions.wait) is needs_you instead of done,
+//     with the declared note as the reason ("回答待ち: …"); it stays until
+//     the next prompt, being looked at doesn't clear it.
 //   - a new prompt clears whatever was there.
 
 // attentionTools are tool calls that wait on the operator.
@@ -51,6 +57,42 @@ func (s *Server) attentionFromPreTool(ctx context.Context, p *hookPayload) {
 	if err := s.db.SetAttention(ctx, p.SessionID, model.AttentionNeedsYou, reason); err != nil {
 		log.Printf("attention: %v", err)
 	}
+}
+
+// stopAttention is the attention a finished turn leaves: what the session
+// declared (answer / action wait on the operator), else an unread done.
+func stopAttention(wait, note string) (kind, reason string) {
+	if !model.WaitNeedsYou(wait) {
+		return model.AttentionDone, ""
+	}
+	reason = model.WaitLabel(wait)
+	if note != "" {
+		reason += ": " + truncate(note, 120)
+	}
+	return model.AttentionNeedsYou, reason
+}
+
+// handleAPIWait records what a session says it waits for (MCP set_status
+// through store.Remote; the local store writes the DB itself).
+// POST /api/sessions/{id}/wait {"wait","note"}
+func (s *Server) handleAPIWait(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Wait string `json:"wait"`
+		Note string `json:"note"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if body.Wait != "" && model.WaitLabel(body.Wait) == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown wait %q", body.Wait))
+		return
+	}
+	if err := s.db.SetWait(r.Context(), r.PathValue("id"), body.Wait, redact.String(truncate(body.Note, 300))); err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	writeOK(w, nil)
 }
 
 func (s *Server) attentionFromPostTool(ctx context.Context, p *hookPayload) {
