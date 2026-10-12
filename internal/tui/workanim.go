@@ -19,19 +19,25 @@ import (
 // loop. Colors are tail → head.
 var beamColors = []string{"#38bdf8", "#a78bfa", "#f472b6", "#fbbf24"}
 
-// beamLoopTicks is one lap in animTicks (28 × 75 ms ≈ 2.1 s).
-const beamLoopTicks = 28
+// beamLoopTicks is one lap of a list row in animTicks (28 × 75 ms ≈
+// 2.1 s); a grid tile's frame is far longer, so its lap takes twice that
+// (gridLoopTicks) or the light races.
+const (
+	beamLoopTicks = 28
+	gridLoopTicks = 2 * beamLoopTicks
+)
 
-// beamCells returns the lit cells of a perimeter of n cells at tick:
+// beamCells returns the lit cells of a perimeter of n cells at tick, one
+// lap per loop ticks:
 // perimeter index → color. Every lit row moves in step, and the phase
 // follows the shared tick so a redraw carries on where it was.
-func beamCells(tick, n int) map[int]string {
+func beamCells(tick, n, loop int) map[int]string {
 	if n <= 0 {
 		return nil
 	}
 	length := min(max(n/6, 6), 24, n)
-	t := ((tick % beamLoopTicks) + beamLoopTicks) % beamLoopTicks
-	head := t * n / beamLoopTicks
+	t := ((tick % loop) + loop) % loop
+	head := t * n / loop
 	out := make(map[int]string, length)
 	for d := 0; d < length; d++ {
 		out[((head-d)%n+n)%n] = beamColors[(length-1-d)*len(beamColors)/length]
@@ -48,7 +54,7 @@ func beamRow(line1, line2 string, width, tick int) (string, string) {
 		return line1, line2
 	}
 	top, bottom := map[int]string{}, map[int]string{}
-	for p, c := range beamCells(tick, 2*width) {
+	for p, c := range beamCells(tick, 2*width, beamLoopTicks) {
 		if p < width {
 			top[p] = c
 		} else {

@@ -120,7 +120,7 @@ func TestTileFrame(t *testing.T) {
 	}
 	// The light runs round the whole frame: over a lap every edge lights.
 	edges := map[string]bool{}
-	for tick := 0; tick < beamLoopTicks; tick++ {
+	for tick := 0; tick < gridLoopTicks; tick++ {
 		lines := strings.Split(ansi.Strip(tileFrame(body, 30, 6, "240", true, tick)), "\n")
 		if strings.Contains(lines[0], "━") {
 			edges["top"] = true

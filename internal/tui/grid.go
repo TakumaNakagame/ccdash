@@ -438,7 +438,7 @@ func tileFrame(body []string, w, h int, border lipgloss.Color, glow bool, tick i
 	// down the right side, the bottom row backwards, up the left side.
 	var lit map[int]string
 	if glow {
-		lit = beamCells(tick, 2*w+2*(h-2))
+		lit = beamCells(tick, 2*w+2*(h-2), gridLoopTicks)
 	}
 	glyph := func(p int, plain, heavy string) string {
 		if c, ok := lit[p]; ok {

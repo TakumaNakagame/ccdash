@@ -14,7 +14,7 @@ import (
 func TestBeamCells(t *testing.T) {
 	for _, n := range []int{1, 7, 40, 300} {
 		for tick := -3; tick < 2*beamLoopTicks; tick++ {
-			lit := beamCells(tick, n)
+			lit := beamCells(tick, n, beamLoopTicks)
 			if len(lit) == 0 || len(lit) > n {
 				t.Fatalf("n=%d tick=%d: %d lit", n, tick, len(lit))
 			}
@@ -26,7 +26,7 @@ func TestBeamCells(t *testing.T) {
 		}
 	}
 	// One lap per beamLoopTicks.
-	a, b := beamCells(3, 100), beamCells(3+beamLoopTicks, 100)
+	a, b := beamCells(3, 100, gridLoopTicks), beamCells(3+gridLoopTicks, 100, gridLoopTicks)
 	if !reflect.DeepEqual(a, b) {
 		t.Fatal("not periodic")
 	}
