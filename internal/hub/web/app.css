@@ -564,7 +564,7 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 
 /* Working beam (runBeam in app.js): a conic-gradient comet on a square
    that the compositor rotates, masked to a 2px ring over a faint base. */
-.item.working, .tile.working { position: relative; }
+.item.working, .tile.working, .card.working, .term-bar.working { position: relative; }
 .beam {
   position: absolute; inset: 0; border-radius: inherit; padding: 2px; overflow: hidden; pointer-events: none; z-index: 2;
   background: conic-gradient(color-mix(in srgb, #a78bfa 30%, transparent), color-mix(in srgb, #38bdf8 30%, transparent), color-mix(in srgb, #a78bfa 30%, transparent));

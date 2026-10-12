@@ -499,7 +499,8 @@ function boardCard(c) {
   return h("a", { class: "card " + (s.attention || "working"), href: `#/d/${c.device_id}/s/${encodeURIComponent(s.session_id)}` },
     h("div", { class: "row" }, h("span", { class: "chip" }, c.device_name), h("span", { class: "grow" }), h("span", { class: "muted small" }, rel(s.last_seen))),
     h("div", { class: titleClass("card-title", s) }, (s.num ? `#${s.num} ` : "") + sessionTitle(s)),
-    h("div", { class: "card-reason" }, reason));
+    h("div", { class: "card-reason" }, reason),
+    s.attention ? null : beamEl());
 }
 
 function devicesPage() {
@@ -1090,6 +1091,13 @@ function beamEl() {
   return b;
 }
 const refreshBeams = () => document.querySelectorAll(".beam").forEach(runBeam);
+// setBeam lights or puts out the beam on a box that stays mounted across
+// refreshes (a grid tile, the chat header), keeping a running one going.
+function setBeam(el, on) {
+  if (on && !el.classList.contains("working")) el.append(beamEl());
+  else if (!on) el.querySelector(":scope > .beam")?.remove();
+  el.classList.toggle("working", on);
+}
 
 // statusTag: a session's state as a dot + Japanese word (docs/design.md:
 // status is words, not English pills).
@@ -3140,14 +3148,15 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     titleEl.textContent = title;
     titleEl.classList.toggle("titling", session?.title_status === "running");
     titleEl.style.setProperty("--sess", session ? sessionColorOf(session) : sessionColor(sid));
-    if (!compact) crumbs({ text: "端末", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: title });
-    else {
+    if (!compact) {
+      crumbs({ text: "端末", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: title });
+      // Full screen (the phone app's usual view): the light runs round the
+      // header while Claude is mid-turn, like a tile's frame.
+      setBeam(bar, session?.status === "active");
+    } else {
       root.style.setProperty("--sess", session ? sessionColorOf(session) : sessionColor(sid || ptyKey || ""));
       root.classList.toggle("needs", session?.attention === "needs_you");
-      const working = session?.status === "active";
-      if (working && !root.classList.contains("working")) root.append(beamEl());
-      else if (!working) root.querySelector(":scope > .beam")?.remove();
-      root.classList.toggle("working", working);
+      setBeam(root, session?.status === "active");
     }
     // A ccdash-hosted claude is alive even when discovery still files the
     // session as recent/stopped (no hook fired since it was resumed).

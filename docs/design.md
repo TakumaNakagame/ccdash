@@ -13,8 +13,9 @@ A quiet tool, not a landing page. Neutral surfaces, text in two weights, one
 warm accent (the brand orange) for "act here", status colours only for
 status. Density closer to a terminal / issue tracker than a SaaS dashboard.
 The one indulgent element is the **working beam** (the gradient comet round
-a session that is mid-turn) — it carries real information, so it is allowed
-to be loud. Nothing else is.
+a session that is mid-turn: its list row, board card, grid tile and the chat
+header) — it carries real information, so it is allowed to be loud. Nothing
+else is.
 
 ## Tokens (`:root` in app.css)
 
