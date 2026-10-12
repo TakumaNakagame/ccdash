@@ -32,7 +32,7 @@ type Settings struct {
 	AutoRepoTabs   bool
 	BellOnPending  bool
 	NewestAtBottom bool // session list with newest sessions at the bottom
-	WorkAnim       bool // a light sweeping across the titles of working sessions
+	WorkAnim       bool // a light running round working sessions (list rows, grid tiles)
 
 	// LayoutMode is one of "auto" / "vertical" / "horizontal". "auto" picks
 	// vertical on narrow terminals so 4K-half windows do the right thing
@@ -344,7 +344,7 @@ func AllSpecs() []Spec {
 		{Key: keyAutoRepoTabs, Label: "Auto repo tabs", Help: "Include repo names in the Tab cycle alongside user-named tabs", Kind: KindBool},
 		{Key: keyBellOnPending, Label: "Bell on pending", Help: "Ring the terminal bell when the pending count goes from 0 to >0", Kind: KindBool},
 		{Key: keyNewestAtBottom, Label: "Newest at bottom", Help: "Show the newest session at the bottom of the list (matches the transcript tail orientation)", Kind: KindBool},
-		{Key: keyWorkAnim, Label: "Working animation", Help: "Sweep a light across the titles of sessions that are working (the spinner stays either way)", Kind: KindBool},
+		{Key: keyWorkAnim, Label: "Working animation", Help: "Run a light round the edge of sessions that are working — list rows and grid tiles (the spinner stays either way)", Kind: KindBool},
 		{Key: keyLayoutMode, Label: "Vertical layout", Help: "Auto = pick from terminal width (vertical when narrow). On = always vertical. Off = always horizontal (side-by-side).", Kind: KindEnum, Options: []string{"auto", "on", "off"}},
 		{Key: keyPaneListPct, Label: "Session list size (%)", Help: "Share of the screen the session list takes (width side-by-side, height when vertical); the work pane gets the rest. 30 = compact list, wide work pane. Also adjustable with < / > on the dashboard.", Kind: KindInt, Min: MinPaneListPct, Max: MaxPaneListPct},
 		{Key: keyInvertListScroll, Label: "Invert list scroll", Help: "Reverse the mouse wheel over the session list (wheel down moves the selection up). The right pane is unaffected.", Kind: KindBool},

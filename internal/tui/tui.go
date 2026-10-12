@@ -224,10 +224,10 @@ type model struct {
 	// (ServerModeExisting) or was spawned by this TUI launch (ServerModeSpawned).
 	serverMode ServerMode
 
-	// animTick advances on every animTickMsg (~150 ms). Drives the spinner
-	// frame for active rows so the operator can tell at a glance which
-	// sessions are doing work right now. Wraps naturally — we mod into the
-	// frame slice on read.
+	// animTick counts 75 ms steps (animTickCmd). Drives the spinners (a
+	// frame per 2 steps) and the working light so the operator can tell at
+	// a glance which sessions are doing work right now. Wraps naturally —
+	// we mod into the frame slice on read.
 	animTick int
 
 	// updateAvailable is the GitHub release tag of a newer ccdash, set
@@ -499,7 +499,7 @@ func expandPath(p string) (string, error) {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.refresh(), tickCmd(m.tickInterval()), animTickCmd(), m.checkUpdateCmd())
+	return tea.Batch(m.refresh(), tickCmd(m.tickInterval()), animTickCmd(1), m.checkUpdateCmd())
 }
 
 // checkUpdateCmd asks GitHub for the latest release tag in the background
@@ -563,7 +563,8 @@ func (m *model) usageCmd() tea.Cmd {
 	}
 }
 
-type animTickMsg time.Time
+// animTickMsg advances animTick by step (75 ms units).
+type animTickMsg struct{ step int }
 
 // updateCheckMsg is the result of the startup release-tag probe. tag is
 // the latest published tag (e.g. "v0.3.1"); err is set on a failed
@@ -600,12 +601,24 @@ func tickCmd(every time.Duration) tea.Cmd {
 	return tea.Tick(every, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-// animTickCmd schedules the next spinner frame. 150 ms feels lively without
-// drowning the terminal in repaints — Bubble Tea coalesces renders, but
-// every tick also rebuilds the view tree, so we don't want to push it
-// faster than the eye actually resolves.
-func animTickCmd() tea.Cmd {
-	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg { return animTickMsg(t) })
+// animTickCmd schedules the next animation frame. animTick counts 75 ms
+// steps: the working light needs that pace, but every tick rebuilds the
+// view tree, so with nothing lit it ticks every 150 ms and steps by 2 —
+// the spinners (one frame per 2 steps) keep their speed either way.
+func animTickCmd(step int) tea.Cmd {
+	return tea.Tick(time.Duration(step)*75*time.Millisecond, func(time.Time) tea.Msg { return animTickMsg{step} })
+}
+
+// animStep is 1 (75 ms) while a working light is on screen, else 2.
+func (m *model) animStep() int {
+	if m.settings.WorkAnim {
+		for _, s := range m.sessions {
+			if s.Status == mdl.StatusActive {
+				return 1
+			}
+		}
+	}
+	return 2
 }
 
 func (m *model) tickInterval() time.Duration {
@@ -739,8 +752,8 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash = "! command failed: " + msg.err.Error()
 		}
 	case animTickMsg:
-		m.animTick++
-		return m, animTickCmd()
+		m.animTick += msg.step
+		return m, animTickCmd(m.animStep())
 	case updateCheckMsg:
 		if m.updateChecking {
 			// The operator asked (settings → Update ccdash): always answer.
@@ -4147,9 +4160,6 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		titleStyle = subtitleStyle
 	}
 	titleStyled := titleStyle.Render(titleText)
-	if s.Status == mdl.StatusActive && m.settings.WorkAnim {
-		titleStyled = sweep(titleText, m.animTick, titleStyle)
-	}
 	if titling != "" {
 		titleStyled = pendingStyle.Render(titling) + titleStyled
 	}
@@ -4211,6 +4221,10 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if selected {
 		line1 = selectedRow.Render(padRight(line1, width))
 		line2 = selectedRow.Render(padRight(line2, width))
+	}
+	if s.Status == mdl.StatusActive && m.settings.WorkAnim {
+		// The working light runs round the row's outer edge.
+		line1, line2 = beamRow(fitWidth(line1, width), fitWidth(line2, width), width, m.animTick)
 	}
 	return bar + line1 + "\n" + bar + line2 + "\n"
 }
@@ -4711,6 +4725,7 @@ var activeSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "�
 // generated (title_status "running").
 func titleSpinner(tick int) string {
 	n := len(activeSpinnerFrames)
+	tick /= 2 // a frame per 150 ms
 	return activeSpinnerFrames[((tick%n)+n)%n]
 }
 
@@ -4720,8 +4735,7 @@ func renderStatusDot(s mdl.SessionStatus, tick int) string {
 		// Spin only on the active state — idle / recent / stopped get a
 		// static dot so motion in the list reads as "this one is doing
 		// something" and not visual noise.
-		frame := activeSpinnerFrames[((tick%len(activeSpinnerFrames))+len(activeSpinnerFrames))%len(activeSpinnerFrames)]
-		return statusActive.Bold(true).Render(frame)
+		return statusActive.Bold(true).Render(titleSpinner(tick))
 	case mdl.StatusIdle:
 		return statusIdle.Render("●")
 	case mdl.StatusRecent:

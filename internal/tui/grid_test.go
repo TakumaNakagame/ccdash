@@ -118,21 +118,27 @@ func TestTileFrame(t *testing.T) {
 			}
 		}
 	}
-	// The light runs along the top edge only.
-	lit := 0
-	for tick := 0; tick < 30; tick++ {
+	// The light runs round the whole frame: over a lap every edge lights.
+	edges := map[string]bool{}
+	for tick := 0; tick < beamLoopTicks; tick++ {
 		lines := strings.Split(ansi.Strip(tileFrame(body, 30, 6, "240", true, tick)), "\n")
 		if strings.Contains(lines[0], "━") {
-			lit++
+			edges["top"] = true
 		}
-		for _, l := range lines[1:] {
-			if strings.Contains(l, "━") {
-				t.Fatal("light off the top edge")
+		if strings.Contains(lines[5], "━") {
+			edges["bottom"] = true
+		}
+		for _, l := range lines[1:5] {
+			if strings.HasPrefix(l, "┃") {
+				edges["left"] = true
+			}
+			if strings.HasSuffix(l, "┃") {
+				edges["right"] = true
 			}
 		}
 	}
-	if lit == 0 {
-		t.Fatal("the top edge never lit")
+	if len(edges) != 4 {
+		t.Fatalf("lit edges %v", edges)
 	}
 	if strings.Contains(ansi.Strip(tileFrame(body, 30, 6, "240", false, 3)), "━") {
 		t.Fatal("lit without glow")

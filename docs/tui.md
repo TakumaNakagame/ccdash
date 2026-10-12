@@ -4,7 +4,7 @@ Every key is also listed in the app: press `?`.
 
 ## Sessions view (default)
 
-A working session's spinner is joined by a light sweeping across its title (setting "Working animation") and, on line 2, what it is doing: the tool in flight and how long the turn has run (`Bash: go test ./... · 1m23s`, or `thinking · 12s` between tools). Both come from ccdash's hooks, so sessions on a machine without them only spin.
+A working session's spinner is joined by a light running round the row's outer edge (setting "Working animation") and, on line 2, what it is doing: the tool in flight and how long the turn has run (`Bash: go test ./... · 1m23s`, or `thinking · 12s` between tools). Both come from ccdash's hooks, so sessions on a machine without them only spin.
 
 | Key | Action |
 | --- | --- |
@@ -26,7 +26,7 @@ A working session's spinner is joined by a light sweeping across its title (sett
 | `x` | archive / unarchive |
 | `X` | toggle archive view (operator-archived sessions) |
 | `o` | full-screen transcript viewer |
-| `V` | grid: the chosen sessions side by side. A session running in ccdash shows its live screen (the tile's size becomes its PTY's size while the grid shows it, like a tmux pane); others show their newest transcript lines. A working tile's top edge carries a running light. `h` `j` `k` `l` / `tab` move between tiles; `enter` (or a click on the focused tile) types into a live tile — `ctrl+]` / `ctrl+d` hands the keyboard back — and on a transcript tile returns to the dashboard on that session; `V` / `esc` closes. The focused tile is the selection, so `e`, `a` / `d`, `o`, `t`, `f`, `x` … act on it |
+| `V` | grid: the chosen sessions side by side. A session running in ccdash shows its live screen (the tile's size becomes its PTY's size while the grid shows it, like a tmux pane); others show their newest transcript lines. A working tile's frame carries a light running round it. `h` `j` `k` `l` / `tab` move between tiles; `enter` (or a click on the focused tile) types into a live tile — `ctrl+]` / `ctrl+d` hands the keyboard back — and on a transcript tile returns to the dashboard on that session; `V` / `esc` closes. The focused tile is the selection, so `e`, `a` / `d`, `o`, `t`, `f`, `x` … act on it |
 | `space` | choose the session for the grid (marked "grid" on line 2); with none chosen the grid shows the busy ones — needs you, working, finished unseen |
 | `e` | run a `! command` from the latest reply (the way Claude asks you to run something): pick one (`j` `k` / `1`-`9`) and `y` types `!` + the command into the ccdash-hosted claude. Needs `attach_enabled` |
 | `ctrl+t` | generate short titles with `claude -p` — `y` for the selected session, `a` for the recent batch in one call |

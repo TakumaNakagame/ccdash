@@ -425,58 +425,61 @@ func (m *model) renderGridTile(s mdl.Session, focused bool, w, h int) string {
 	return tileFrame(body, w, h, lipgloss.Color(border), glow, m.animTick)
 }
 
-// edgeColors is the light on a working tile's top edge, tail → head: the
-// beam's colors, each over a couple of cells.
-var edgeColors = []string{"#38bdf8", "#38bdf8", "#a78bfa", "#a78bfa", "#f472b6", "#f472b6", "#fbbf24", "#fbbf24"}
-
 // tileFrame draws body inside a rounded frame of exactly w × h cells.
 // Rows are padded / cut to the inner width, so live emulator rows go in
-// as they are. With glow the top edge carries a light that runs left to
-// right (the portal beam's TUI cousin), two cells a tick.
+// as they are. With glow a light runs round the whole frame (beamCells;
+// the portal beam's TUI cousin), drawn as heavy, colored border glyphs.
 func tileFrame(body []string, w, h int, border lipgloss.Color, glow bool, tick int) string {
 	inner := max(0, w-2)
 	bs := lipgloss.NewStyle().Foreground(border)
-	top := bs.Render("╭" + strings.Repeat("─", inner) + "╮")
-	if glow && inner > 0 {
-		period := inner + len(edgeColors) + 2*sweepGap
-		head := ((tick*2)%period + period) % period
-		var b strings.Builder
-		b.WriteString(bs.Render("╭"))
-		run := 0
-		flush := func() {
-			if run > 0 {
-				b.WriteString(bs.Render(strings.Repeat("─", run)))
-				run = 0
-			}
+	h = max(h, 2)
+
+	// The frame's cells clockwise from the top-left corner: the top row,
+	// down the right side, the bottom row backwards, up the left side.
+	var lit map[int]string
+	if glow {
+		lit = beamCells(tick, 2*w+2*(h-2))
+	}
+	glyph := func(p int, plain, heavy string) string {
+		if c, ok := lit[p]; ok {
+			return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Bold(true).Render(heavy)
 		}
-		for x := 0; x < inner; x++ {
-			d := head - x
-			if d < 0 || d >= len(edgeColors) {
-				run++
+		return bs.Render(plain)
+	}
+	// edge renders a run of frame cells whose perimeter indexes come from at.
+	edge := func(n int, at func(i int) int, plain, heavy string) string {
+		var b strings.Builder
+		run := 0
+		for i := 0; i < n; i++ {
+			if _, ok := lit[at(i)]; ok {
+				if run > 0 {
+					b.WriteString(bs.Render(strings.Repeat(plain, run)))
+					run = 0
+				}
+				b.WriteString(glyph(at(i), plain, heavy))
 				continue
 			}
-			flush()
-			c := edgeColors[len(edgeColors)-1-d]
-			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Bold(true).Render("━"))
+			run++
 		}
-		flush()
-		b.WriteString(bs.Render("╮"))
-		top = b.String()
+		if run > 0 {
+			b.WriteString(bs.Render(strings.Repeat(plain, run)))
+		}
+		return b.String()
 	}
-	side := bs.Render("│")
+	right := func(y int) int { return w - 1 + y }                // y = 1 … h-2
+	bottom := func(x int) int { return w + h - 2 + (w - 1 - x) } // x = 0 … w-1
+	left := func(y int) int { return 2*w + h - 2 + (h - 2 - y) } // y = h-2 … 1
+
 	lines := make([]string, 0, h)
-	lines = append(lines, top)
-	for i := 0; i < h-2; i++ {
+	lines = append(lines, glyph(0, "╭", "┏")+edge(inner, func(i int) int { return 1 + i }, "─", "━")+glyph(w-1, "╮", "┓"))
+	for y := 1; y <= h-2; y++ {
 		row := ""
-		if i < len(body) {
-			row = body[i]
+		if y-1 < len(body) {
+			row = body[y-1]
 		}
-		lines = append(lines, side+fitWidth(row, inner)+side)
+		lines = append(lines, glyph(left(y), "│", "┃")+fitWidth(row, inner)+glyph(right(y), "│", "┃"))
 	}
-	lines = append(lines, bs.Render("╰"+strings.Repeat("─", inner)+"╯"))
-	if len(lines) > h {
-		lines = lines[:h]
-	}
+	lines = append(lines, glyph(bottom(0), "╰", "┗")+edge(inner, func(i int) int { return bottom(1 + i) }, "─", "━")+glyph(bottom(w-1), "╯", "┛"))
 	return strings.Join(lines, "\n")
 }
 

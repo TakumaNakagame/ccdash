@@ -2,60 +2,97 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
+	"github.com/charmbracelet/x/ansi"
 
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 )
 
 // The TUI twin of the portal's working beam (runBeam in web/app.js): a
-// short comet in the beam's colors runs left to right across the title of
-// a working session, one cell per animTick. Colors are tail → head.
-var sweepColors = []string{"#38bdf8", "#a78bfa", "#f472b6", "#fbbf24"}
+// comet in the beam's colors runs round the outer edge of a working
+// session — a grid tile's frame, or the two lines of a list row — once
+// every beamLoopTicks, whatever the size, like the portal's constant-time
+// loop. Colors are tail → head.
+var beamColors = []string{"#38bdf8", "#a78bfa", "#f472b6", "#fbbf24"}
 
-// sweepGap is how many ticks the comet spends off the end of the title
-// before it comes round again, so a short title isn't one constant blur.
-const sweepGap = 14
+// beamLoopTicks is one lap in animTicks (28 × 75 ms ≈ 2.1 s).
+const beamLoopTicks = 28
 
-// sweep renders text in base with the comet's cells recolored. Columns
-// are cells, not runes, so a wide (CJK) character is lit when the head
-// reaches either of its cells. tick follows the shared animTick, so every
-// working row moves in step and a redraw carries on where it was.
-func sweep(text string, tick int, base lipgloss.Style) string {
-	w := runewidth.StringWidth(text)
-	if w == 0 {
-		return ""
+// beamCells returns the lit cells of a perimeter of n cells at tick:
+// perimeter index → color. Every lit row moves in step, and the phase
+// follows the shared tick so a redraw carries on where it was.
+func beamCells(tick, n int) map[int]string {
+	if n <= 0 {
+		return nil
 	}
-	period := w + len(sweepColors) + sweepGap
-	head := ((tick % period) + period) % period
-	var b, run strings.Builder
-	flush := func() {
-		if run.Len() > 0 {
-			b.WriteString(base.Render(run.String()))
-			run.Reset()
+	length := min(max(n/6, 6), 24, n)
+	t := ((tick % beamLoopTicks) + beamLoopTicks) % beamLoopTicks
+	head := t * n / beamLoopTicks
+	out := make(map[int]string, length)
+	for d := 0; d < length; d++ {
+		out[((head-d)%n+n)%n] = beamColors[(length-1-d)*len(beamColors)/length]
+	}
+	return out
+}
+
+// beamRow lights a list row's outer edge: its two lines (each exactly
+// width cells) are the top and bottom of a 2-line box, so the comet runs
+// left to right along line 1 and back along line 2. Lit cells take the
+// beam color as background; the text on them stays readable in black.
+func beamRow(line1, line2 string, width, tick int) (string, string) {
+	if width <= 0 {
+		return line1, line2
+	}
+	top, bottom := map[int]string{}, map[int]string{}
+	for p, c := range beamCells(tick, 2*width) {
+		if p < width {
+			top[p] = c
+		} else {
+			bottom[2*width-1-p] = c
 		}
 	}
-	col := 0
-	for _, r := range text {
-		cw := runewidth.RuneWidth(r)
-		// Distance behind the head of this rune's nearest cell.
-		d := head - (col + cw - 1)
-		if d < 0 && head >= col {
-			d = 0
-		}
-		col += cw
-		if d < 0 || d >= len(sweepColors) {
-			run.WriteRune(r)
-			continue
-		}
-		flush()
-		c := sweepColors[len(sweepColors)-1-d]
-		b.WriteString(base.Foreground(lipgloss.Color(c)).Bold(true).Render(string(r)))
+	return paintCells(line1, top), paintCells(line2, bottom)
+}
+
+// paintCells gives the cells of row in lit (column → color) a background
+// color, keeping row's text and its styling everywhere else. A wide
+// (CJK) character is lit as a whole when either of its cells is.
+func paintCells(row string, lit map[int]string) string {
+	if len(lit) == 0 {
+		return row
 	}
-	flush()
+	type unit struct {
+		from, to int
+		color    string
+	}
+	var units []unit
+	for x, c := range lit {
+		u := unit{x, x + 1, c}
+		switch ansi.StringWidth(ansi.Cut(row, x, x+1)) {
+		case 0: // first cell of a wide char (Cut reports it at its last cell)
+			u.to = x + 2
+		case 2: // last cell of one
+			u.from = x - 1
+		}
+		units = append(units, u)
+	}
+	sort.Slice(units, func(i, j int) bool { return units[i].from < units[j].from })
+	var b strings.Builder
+	at := 0
+	for _, u := range units {
+		if u.from < at {
+			continue // the other half of a wide char already lit
+		}
+		b.WriteString(ansi.Cut(row, at, u.from))
+		cell := ansi.Strip(ansi.Cut(row, u.from, u.to))
+		b.WriteString(lipgloss.NewStyle().Background(lipgloss.Color(u.color)).Foreground(lipgloss.Color("0")).Render(cell))
+		at = u.to
+	}
+	b.WriteString(ansi.TruncateLeft(row, at, ""))
 	return b.String()
 }
 
