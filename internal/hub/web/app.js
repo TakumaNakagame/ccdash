@@ -1098,9 +1098,29 @@ function statusTag(st) {
   return h("span", { class: "stat " + st }, h("i"), STATUS_JA[st] || st);
 }
 
+// recentReply mirrors model.Session.RecentReply: finished a turn within
+// RECENT_REPLY_MS and already seen — NEW is gone, a quiet "返信 3分前" stays.
+const RECENT_REPLY_MS = 30 * 60 * 1000;
+// SEEN_DWELL_MS: how long an open chat must be looked at before it counts
+// as seen (twin of seenDwell in internal/tui). engagedTile is the grid tile
+// last clicked / focused — the only tile that can become seen.
+const SEEN_DWELL_MS = 3000;
+let engagedTile = null;
+function recentReply(s) {
+  return !!s && !s.unseen && s.status !== "active" && s.attention !== "needs_you" && !s.pending_count &&
+    !!s.last_activity && Date.now() - new Date(s.last_activity).getTime() < RECENT_REPLY_MS;
+}
+// freshChip: NEW (unread progress) or "返信 3分前" (recently replied, seen).
+function freshChip(s) {
+  if (s?.unseen) return h("span", { class: "chip new", title: "最後に見た後に進捗あり" }, "NEW");
+  if (recentReply(s)) return h("span", { class: "chip recent", title: "最近返信あり（既読）" }, "返信 " + rel(s.last_activity));
+  return null;
+}
+
 function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
   const chips = [];
-  if (s.unseen) chips.push(h("span", { class: "chip new", title: "最後に見た後に進捗あり" }, "NEW"));
+  const fresh = freshChip(s);
+  if (fresh) chips.push(fresh);
   // (watch-later rows sit under the あとで見る band, which says so)
   if (live) chips.push(h("span", { class: "chip live", title: "ccdash 上で動いています（チャットから操作できます）" }, "live"));
   if (s.attention === "needs_you") chips.push(h("span", { class: "chip pend", title: s.attention_reason || "" }, "要対応"));
@@ -2732,6 +2752,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   let name = devName;
   let session = null, ptyKey = key || null, hosted = false, info = null;
   let lastStat = "", items = [], pendingSends = [];
+  let lookingSince = 0;
   // History window: the poll reads only the last TAIL bytes and splices
   // them onto what's loaded (by entry uuid), so "older history" loaded
   // once stays without re-downloading megabytes on every update.
@@ -2750,6 +2771,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
 
   const titleEl = h("span", { class: "grow title sess-title" }, "読み込み中…");
   const statusEl = h("span", { class: "chip" });
+  const freshEl = h("span", { hidden: true });
   const termBtn = h("a", { class: "btn small", href: "#" }, "ターミナル");
   const endBtn = h("button", { class: "btn small danger", hidden: true, onclick: async () => {
     if (!confirm("このセッションの claude を終了しますか？（後から再開できます）")) return;
@@ -2774,12 +2796,12 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   let root;
   const bar = compact
     ? h("div", { class: "term-bar tile-head" },
-      h("span", { class: "chip dev" }, devName), titleEl, statusEl, stopTop,
+      h("span", { class: "chip dev" }, devName), titleEl, freshEl, statusEl, stopTop,
       h("a", { class: "btn small icon", href: "#", title: "チャット画面で開く", "aria-label": "チャット画面で開く", onclick: (e) => { e.preventDefault(); location.hash = chatHref(); } }, icon("open")),
       maxBtn, menuBtn,
       h("button", { class: "btn small icon tile-close", type: "button", title: "グリッドから外す", "aria-label": "グリッドから外す", onclick: () => root.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })) }, icon("x")))
     : h("div", { class: "term-bar" },
-      h("a", { class: "btn small icon", href: `#/d/${id}`, "aria-label": "戻る", title: "戻る" }, icon("back")), titleEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
+      h("a", { class: "btn small icon", href: `#/d/${id}`, "aria-label": "戻る", title: "戻る" }, icon("back")), titleEl, freshEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
   if (compact) titleEl.addEventListener("dblclick", () => root.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, "読み込み中…"));
   const scroller = h("div", { class: "chat" }, log);
@@ -2903,6 +2925,11 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   bucket.push(keepDraft); // also catches text set by the quick buttons / slash picker
   // On a touch screen, typing into a tile maximises it: the on-screen
   // keyboard would otherwise cover most of a small tile.
+  // engaged / lookingSince gate MarkSeen (see poll).
+  if (compact) {
+    root.addEventListener("pointerdown", () => { engagedTile = root; });
+    root.addEventListener("focusin", () => { engagedTile = root; });
+  }
   if (compact) input.addEventListener("focus", () => {
     if (matchMedia("(pointer: coarse)").matches) root.dispatchEvent(new CustomEvent("tile-max", { bubbles: true, detail: { on: true } }));
   });
@@ -3091,13 +3118,23 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
         (await d.get("/api/sessions?archived=1").catch(() => []))?.find((s) => s.session_id === sid) || session;
     }
     hosted = !!ptyKey && ptys.some((p) => p.key === ptyKey && p.alive);
-    // Open and visible: the operator is looking at it (clears "done" and
-    // the NEW mark; while it works, each poll keeps it seen).
-    if ((session?.attention === "done" || session?.unseen) && sid && !document.hidden) {
+    // Open, visible and looked at for SEEN_DWELL_MS: the operator has seen
+    // it (clears "done" and the NEW mark; while it works, each poll keeps
+    // it seen). A grid tile counts only once engaged (focused, clicked,
+    // maximised) — merely being on screen among many tiles isn't reading.
+    const looking = !!sid && !document.hidden && document.hasFocus() && (!compact || engagedTile === root);
+    if (!looking) lookingSince = 0;
+    else if (!lookingSince) lookingSince = Date.now();
+    if ((session?.attention === "done" || session?.unseen) && looking && Date.now() - lookingSince >= SEEN_DWELL_MS) {
       d.post(`/api/sessions/${encodeURIComponent(sid)}/seen`, {}).catch(() => {});
       session.attention = "";
       session.unseen = false;
     }
+    freshEl.replaceChildren();
+    const fc = freshChip(session);
+    if (fc) { freshEl.className = fc.className; freshEl.title = fc.title; freshEl.textContent = fc.textContent; }
+    freshEl.hidden = !fc;
+    if (compact) root.classList.toggle("unseen", !!session?.unseen);
 
     const title = session ? (session.num ? `#${session.num} ` : "") + sessionTitle(session) : sid ? sid : "新規セッション";
     titleEl.textContent = title;

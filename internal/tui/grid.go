@@ -405,6 +405,9 @@ func (m *model) renderGridTile(s mdl.Session, focused bool, w, h int) string {
 	if s.Unseen && !focused {
 		head += newStyle.Render("NEW") + " "
 	}
+	if r := recentBadge(s); r != "" {
+		head += recentStyle.Render(r) + " "
+	}
 	title := s.DisplayTitle()
 	if title == "" {
 		title = "(no prompt yet)"

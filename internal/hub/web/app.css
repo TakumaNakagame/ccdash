@@ -803,3 +803,5 @@ aside.viewer.side .doc { padding: 22px 22px 40px; }
 .tile.compact .tile-head .chip { flex: none; }
 .tile.compact .tile-head .title { flex: 1 1 auto; min-width: 4em; }
 .tile.max .tile-maxbtn { color: var(--accent); border-color: var(--accent); }
+.chip.recent { color: var(--ok); opacity: .75; }
+.tile.unseen:not(.needs) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }

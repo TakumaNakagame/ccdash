@@ -94,6 +94,19 @@ const (
 	AttentionDone     = "done"
 )
 
+// RecentReplyWindow is how long a session that finished a turn keeps a
+// faint "replied" mark after the operator has seen it (RecentReply).
+const RecentReplyWindow = 30 * time.Minute
+
+// RecentReply reports a session that did something in the last
+// RecentReplyWindow, has stopped working, and was already seen: NEW is gone,
+// but the row still says "this one answered a moment ago". Mirrored by
+// recentReply in internal/hub/web/app.js.
+func (s Session) RecentReply(now time.Time) bool {
+	return !s.Unseen && s.Status != StatusActive && s.Attention != AttentionNeedsYou && s.PendingCount == 0 &&
+		!s.LastActivity.IsZero() && now.Sub(s.LastActivity) < RecentReplyWindow
+}
+
 // DisplayTitle returns the operator-set title when present, then the
 // generated one (ctrl+t), then the auto-derived first prompt.
 func (s Session) DisplayTitle() string {

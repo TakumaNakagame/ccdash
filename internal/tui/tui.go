@@ -168,6 +168,14 @@ type model struct {
 	// seenSent remembers the unread "done" marks this TUI already cleared,
 	// so a slow refresh doesn't re-send MarkSeen every tick.
 	seenSent map[string]time.Time
+	// dwellSID / dwellSince: the row under the cursor and since when. A
+	// row becomes seen only after seenDwell on it, so passing over rows
+	// with j/k doesn't clear their NEW marks.
+	dwellSID   string
+	dwellSince time.Time
+	// blurred: the terminal reported losing focus (tea.BlurMsg) — nobody
+	// is looking, so nothing becomes seen.
+	blurred bool
 
 	settings settings.Settings
 
@@ -741,6 +749,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.FocusMsg:
+		m.blurred = false
+		m.dwellSID = "" // looking again: the dwell starts over
+	case tea.BlurMsg:
+		m.blurred = true
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -2136,14 +2149,25 @@ func (m *model) toggleArchiveCurrent() tea.Cmd {
 	}
 }
 
+// seenDwell is how long the cursor must stay on a row before it counts as
+// seen (the sessions poll re-runs markSelectedSeen every tick).
+const seenDwell = 3 * time.Second
+
 // markSelectedSeen clears the unread "done" mark of the session under the
-// cursor: it is on screen (the right pane shows it), so it has been seen.
+// cursor once it has stayed there for seenDwell: it is on screen (the right
+// pane shows it), so it has been seen.
 func (m *model) markSelectedSeen() tea.Cmd {
 	if m.selSess < 0 || m.selSess >= len(m.sessions) {
 		return nil
 	}
 	s := m.sessions[m.selSess]
+	if s.SessionID != m.dwellSID {
+		m.dwellSID, m.dwellSince = s.SessionID, time.Now()
+	}
 	if s.Attention != mdl.AttentionDone && !s.Unseen {
+		return nil
+	}
+	if m.blurred || time.Since(m.dwellSince) < seenDwell {
 		return nil
 	}
 	if m.seenSent == nil {
@@ -2918,6 +2942,7 @@ func (m *model) jumpTo(idx int) tea.Cmd {
 func (m *model) View() tea.View {
 	v := tea.NewView("")
 	v.AltScreen = true
+	v.ReportFocus = true
 	v.MouseMode = tea.MouseModeCellMotion
 	if m.width == 0 {
 		v.SetContent("loading...")
@@ -3056,6 +3081,8 @@ var (
 	footerStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	laterHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("214"))
 	newStyle           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11"))
+	// recentStyle: the faint "replied a moment ago, already seen" mark.
+	recentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Faint(true)
 	// gridBadgeStyle marks a session chosen for the grid (space), in the
 	// working light's sky blue.
 	gridBadgeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("#38bdf8"))
@@ -4156,6 +4183,10 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if s.Unseen && !selected {
 		titleBudget -= 4 // "NEW "
 	}
+	recent := recentBadge(s)
+	if recent != "" {
+		titleBudget -= runewidth.StringWidth(recent) + 1
+	}
 	gridMarked := s.Grid
 	if gridMarked {
 		titleBudget -= 7 // " GRID " + space
@@ -4190,6 +4221,9 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if s.Unseen && !selected {
 		// Progress since the operator last looked (Session.Unseen).
 		titleStyled = newStyle.Render("NEW") + " " + titleStyled
+	}
+	if recent != "" {
+		titleStyled = recentStyle.Render(recent) + " " + titleStyled
 	}
 	if gridMarked {
 		titleStyled = gridBadgeStyle.Render(" GRID ") + " " + titleStyled
@@ -4855,6 +4889,16 @@ func (m *model) sessionTime(t time.Time) string {
 		return t.Local().Format("01/02 15:04")
 	}
 	return runewidth.FillRight(humanDuration(time.Since(t)), 4)
+}
+
+// recentBadge is "✓4m" for a session that replied within
+// RecentReplyWindow and was already seen (Session.RecentReply): NEW is gone,
+// but the row still tells which one answered a moment ago.
+func recentBadge(s mdl.Session) string {
+	if !s.RecentReply(time.Now()) {
+		return ""
+	}
+	return "✓" + humanDuration(time.Since(s.LastActivity))
 }
 
 func humanDuration(d time.Duration) string {
