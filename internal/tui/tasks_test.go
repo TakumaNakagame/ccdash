@@ -98,7 +98,7 @@ func TestTasksPaneKeys(t *testing.T) {
 	// The pane renders exactly w × h, with the overdue mark.
 	out := m.renderTasksPane(50, 10)
 	lines := strings.Split(out, "\n")
-	if len(lines) != 10 || !strings.Contains(out, "#65") || !strings.Contains(out, "⚠10/6") {
+	if len(lines) != 10 || !strings.Contains(out, "#65") || !strings.Contains(out, "⚠期限 10/6") {
 		t.Fatalf("pane:\n%s", out)
 	}
 	for _, l := range lines {

@@ -112,7 +112,8 @@ type model struct {
 	tasksLoaded      bool
 	tasksErr         error
 	taskSel          int
-	taskScroll       int
+	taskScroll       int   // in lines (tasks take two)
+	taskLineRow      []int // drawn line → taskRows index (-1 = blank), for clicks
 	tasksFocus       bool
 	taskDetail       bool
 	taskDetailScroll int

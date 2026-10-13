@@ -517,11 +517,12 @@ func (m *model) clickTasks(mm tea.Mouse) tea.Cmd {
 	if m.taskDetail || line < 0 {
 		return cmd
 	}
-	i := m.taskScroll + line
 	rows := m.taskRows()
-	if i < len(rows) && rows[i].task >= 0 {
-		m.taskSel = i
-		m.taskDetailScroll = 0
+	if line < len(m.taskLineRow) {
+		if i := m.taskLineRow[line]; i >= 0 && i < len(rows) && rows[i].task >= 0 {
+			m.taskSel = i
+			m.taskDetailScroll = 0
+		}
 	}
 	return cmd
 }
@@ -596,80 +597,143 @@ func (m *model) renderTasksPane(w, h int) string {
 
 func runeW(s string) int { return lipgloss.Width(s) }
 
+// taskListLines lays the list out two lines per task — what it is (status,
+// priority, title) above when and where (id, due, plan, project, sessions)
+// — under bucket headings with their counts. taskScroll counts lines;
+// taskLineRow maps each drawn line back to its row for clicks.
 func (m *model) taskListLines(w, h int) []string {
 	rows := m.taskRows()
+	m.taskLineRow = nil
 	if len(rows) == 0 {
 		return []string{subtitleStyle.Render(" タスクはありません")}
 	}
-	// Keep the selection in view.
-	if m.taskSel < m.taskScroll {
-		m.taskScroll = m.taskSel
-		if m.taskScroll > 0 && rows[m.taskScroll-1].task < 0 {
-			m.taskScroll-- // show the heading above the first task
+	today := m.tasks.Today
+	counts := map[string]int{}
+	for _, r := range rows {
+		if r.task >= 0 {
+			counts[m.tasks.Tasks[r.task].Bucket]++
 		}
 	}
-	if m.taskSel >= m.taskScroll+h {
-		m.taskScroll = m.taskSel - h + 1
-	}
-	m.taskScroll = clamp(m.taskScroll, 0, max(0, len(rows)-h))
-	today := m.tasks.Today
-	var out []string
-	for i := m.taskScroll; i < len(rows) && len(out) < h; i++ {
-		r := rows[i]
+	var lines []string
+	var owner []int
+	selTop, selBottom := 0, 0
+	for i, r := range rows {
 		if r.task < 0 {
-			out = append(out, taskBucketStyle.Render(" "+r.heading))
+			if len(lines) > 0 {
+				lines, owner = append(lines, ""), append(owner, -1)
+			}
+			bucket := ""
+			if i+1 < len(rows) && rows[i+1].task >= 0 {
+				bucket = m.tasks.Tasks[rows[i+1].task].Bucket
+			}
+			head := taskBucketStyle.Render(" "+r.heading) + subtitleStyle.Render(fmt.Sprintf("  %d", counts[bucket]))
+			lines, owner = append(lines, head), append(owner, i)
 			continue
 		}
 		t := m.tasks.Tasks[r.task]
-		line := m.taskLine(t, today, w)
+		l1, l2 := m.taskRowLines(t, today, w)
 		if i == m.taskSel && m.tasksFocus {
-			line = selectedRow.Render(padRight(ansi.Strip(line), w))
+			selTop = len(lines)
+			l1 = taskSelBar + selectedRow.Render(padRight(ansi.Truncate(ansi.Strip(l1), w-1, ""), w-1))
+			l2 = taskSelBar + selectedRow.Render(padRight(ansi.Truncate(ansi.Strip(l2), w-1, ""), w-1))
+			selBottom = len(lines) + 1
 		}
-		out = append(out, line)
+		lines, owner = append(lines, l1, l2), append(owner, i, i)
 	}
-	return out
+	// Keep the selected task (both lines, and its heading when it is the
+	// bucket's first) in view.
+	if m.tasksFocus {
+		top := selTop
+		if selTop >= 2 && owner[selTop-1] >= 0 && rows[owner[selTop-1]].task < 0 {
+			top = selTop - 1
+		}
+		if top < m.taskScroll {
+			m.taskScroll = top
+		}
+		if selBottom >= m.taskScroll+h {
+			m.taskScroll = selBottom - h + 1
+		}
+	}
+	m.taskScroll = clamp(m.taskScroll, 0, max(0, len(lines)-h))
+	end := min(len(lines), m.taskScroll+h)
+	m.taskLineRow = owner[m.taskScroll:end]
+	return lines[m.taskScroll:end]
 }
 
-var taskStatusMark = map[string]string{
-	mdl.TaskTodo: " ", mdl.TaskDoing: "▸", mdl.TaskWaiting: "…", mdl.TaskDone: "✓", mdl.TaskCancelled: "×",
+var taskSelBar = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Render("▌")
+
+// taskStatusStyle colours the status word: doing = working green, waiting
+// = attention yellow, finished = dim.
+var taskStatusStyle = map[string]lipgloss.Style{
+	mdl.TaskTodo:      subtitleStyle,
+	mdl.TaskDoing:     statusActive.Bold(true),
+	mdl.TaskWaiting:   pendingRowStyle.Bold(true),
+	mdl.TaskDone:      statusIdle,
+	mdl.TaskCancelled: subtitleStyle,
 }
 
-// taskLine is "  #65 ▸ title  ⚠10/06" fitted to w.
-func (m *model) taskLine(t mdl.Task, today string, w int) string {
-	id := fmt.Sprintf("#%d", t.ID)
-	if t.Priority == 1 && !t.Finished() {
-		id = taskP1Style.Render(id)
-	} else {
-		id = refStyle.Render(id)
+var taskPriorityStyle = map[int]lipgloss.Style{
+	1: taskP1Style,
+	2: lipgloss.NewStyle().Foreground(lipgloss.Color("11")),
+	3: lipgloss.NewStyle().Foreground(lipgloss.Color("250")),
+	4: subtitleStyle,
+}
+
+// taskRowLines is one task as two lines:
+//
+//	P1 待ち   定点観測テンプレに入ったインフラ管理組合の…
+//	   #65  ⚠期限 10/6  10/6〜持ち越し  ● Alert D4U  #302
+func (m *model) taskRowLines(t mdl.Task, today string, w int) (string, string) {
+	fin := t.Finished()
+	pri := t.Priority
+	if pri < 1 || pri > 4 {
+		pri = 4
 	}
-	mark := taskStatusMark[t.Status]
-	var tail []string
-	if t.Due != "" && !t.Finished() && t.Due <= today {
-		tail = append(tail, taskDueStyle.Render("⚠"+shortDay(t.Due)))
-	} else if t.Due != "" && !t.Finished() {
-		tail = append(tail, subtitleStyle.Render("〆"+shortDay(t.Due)))
+	prio := taskPriorityStyle[pri].Render(fmt.Sprintf("P%d", pri))
+	if fin {
+		prio = subtitleStyle.Render(fmt.Sprintf("P%d", pri))
 	}
-	if !t.Finished() && t.Plan != "" && t.Plan < today {
-		tail = append(tail, taskCarriedStyle.Render(shortDay(t.Plan)+"〜"))
-	} else if t.Bucket == tasks.BucketWeek || t.Bucket == tasks.BucketNextWeek || t.Bucket == tasks.BucketLater {
-		tail = append(tail, subtitleStyle.Render(shortDay(t.Plan)))
+	label := tasks.StatusLabel[t.Status]
+	if t.Status == mdl.TaskDone {
+		label = "✓完了"
 	}
-	suffix := strings.Join(tail, " ")
-	prefix := "  " + id + " " + mark + " "
-	room := w - lipgloss.Width(prefix) - lipgloss.Width(suffix) - 1
-	title := t.Title
-	if room < 4 {
-		suffix, room = "", w-lipgloss.Width(prefix)
-	}
-	title = ansi.Truncate(title, max(room, 1), "…")
-	if t.Finished() {
+	status := taskStatusStyle[t.Status].Render(padRight(label, 6))
+	prefix := " " + prio + " " + status + " "
+	title := ansi.Truncate(t.Title, max(4, w-lipgloss.Width(prefix)), "…")
+	switch {
+	case fin:
 		title = taskDoneStyle.Render(title)
+	case pri == 1:
+		title = lipgloss.NewStyle().Bold(true).Render(title)
 	}
-	line := prefix + title
-	if suffix != "" {
-		line = padRight(line, w-lipgloss.Width(suffix)) + suffix
+	line1 := prefix + title
+
+	var meta []string
+	meta = append(meta, refStyle.Render(fmt.Sprintf("#%d", t.ID)))
+	if t.Due != "" && !fin {
+		switch {
+		case t.Due < today:
+			meta = append(meta, taskDueStyle.Bold(true).Render("⚠期限 "+shortDay(t.Due)))
+		case t.Due == today:
+			meta = append(meta, taskDueStyle.Render("期限 今日"))
+		default:
+			meta = append(meta, subtitleStyle.Render("期限 "+shortDay(t.Due)))
+		}
 	}
-	return line
+	if !fin && t.Plan != "" && t.Plan < today {
+		meta = append(meta, taskCarriedStyle.Render(shortDay(t.Plan)+"〜持ち越し"))
+	} else if !fin && t.Plan != "" && t.Bucket != tasks.BucketToday && t.Bucket != tasks.BucketTomorrow {
+		meta = append(meta, subtitleStyle.Render("予定 "+shortDay(t.Plan)))
+	}
+	if t.Project != "" {
+		dot := lipgloss.NewStyle().Background(lipgloss.Color(mdl.ProjectColorOf(t.Project, ""))).Render(" ")
+		meta = append(meta, dot+" "+subtitleStyle.Render(t.Project))
+	}
+	for _, sid := range t.Sessions {
+		meta = append(meta, refStyle.Render(m.sessionRefOf(sid)))
+	}
+	line2 := ansi.Truncate("    "+strings.Join(meta, "  "), w, "…")
+	return line1, line2
 }
 
 // shortDay is "10/6" for 2026-10-06.
