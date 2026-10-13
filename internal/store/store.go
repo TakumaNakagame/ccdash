@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/takumanakagame/ccmanage/internal/tasks"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
@@ -135,6 +136,25 @@ type Store interface {
 	// TranscriptFull returns the whole parsed transcript, for the
 	// full-screen modal viewer ('o').
 	TranscriptFull(ctx context.Context, s model.Session) ([]transcript.Message, error)
+
+	// The to-do list (docs/decisions/0006-tasks.md). Tasks are named by
+	// id ("11" / "#11") or key.
+	//
+	// ListTasks returns the list bucketed and ordered for display
+	// (archived tasks only when asked) with the change counter.
+	ListTasks(ctx context.Context, includeArchived bool) (model.TaskList, error)
+	GetTask(ctx context.Context, ident string) (model.Task, error)
+	AddTask(ctx context.Context, in tasks.Input) (model.Task, error)
+	UpdateTask(ctx context.Context, ident string, p tasks.Patch) (model.Task, error)
+	AddTaskNote(ctx context.Context, ident string, n model.TaskNote) (model.Task, error)
+	// OrderTasks places the given tasks first, in that order.
+	OrderTasks(ctx context.Context, ids []int64) error
+	// SyncTasks merges an automated run's proposal (tasks.Merge rules).
+	SyncTasks(ctx context.Context, p tasks.Proposal) (tasks.SyncResult, error)
+	// TaskContext is the open tasks and their links for an automated run.
+	TaskContext(ctx context.Context) (tasks.Context, error)
+	// ImportTasks brings in a work-status tasks.json (dryRun = plan only).
+	ImportTasks(ctx context.Context, f tasks.LegacyFile, opt tasks.ImportOptions, dryRun bool) (tasks.ImportPlan, error)
 }
 
 // WaitingSpawn is a hosted claude stuck on a dialog before it has a

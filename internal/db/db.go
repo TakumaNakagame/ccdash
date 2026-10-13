@@ -183,7 +183,7 @@ func (d *DB) migrate() error {
 	if _, err := d.sql.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_num ON sessions(num)`); err != nil {
 		return fmt.Errorf("migrate num index: %w", err)
 	}
-	return nil
+	return d.migrateTasks()
 }
 
 // backfillNums gives every row without a num the next numbers in
@@ -942,7 +942,8 @@ func (d *DB) ensureProject(ctx context.Context, name string) error {
 func (d *DB) ListProjects(ctx context.Context) ([]model.Project, error) {
 	rows, err := d.sql.QueryContext(ctx, `
 		SELECT p.name, COALESCE(p.color,''),
-		       (SELECT COUNT(*) FROM sessions s WHERE s.project = p.name AND COALESCE(s.archived,0) = 0)
+		       (SELECT COUNT(*) FROM sessions s WHERE s.project = p.name AND COALESCE(s.archived,0) = 0),
+		       (SELECT COUNT(*) FROM tasks t WHERE t.project = p.name AND t.archived_at IS NULL AND t.status NOT IN ('done','cancelled'))
 		FROM projects p
 		ORDER BY COALESCE(p.ord,0), p.name`)
 	if err != nil {
@@ -952,7 +953,7 @@ func (d *DB) ListProjects(ctx context.Context) ([]model.Project, error) {
 	out := []model.Project{}
 	for rows.Next() {
 		var p model.Project
-		if err := rows.Scan(&p.Name, &p.Color, &p.Sessions); err != nil {
+		if err := rows.Scan(&p.Name, &p.Color, &p.Sessions, &p.Tasks); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -1054,6 +1055,12 @@ func (d *DB) RenameProject(ctx context.Context, from, to string) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET project = ? WHERE project = ?`, to, from); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET project = ? WHERE project = ?`, to, from); err != nil {
+		return err
+	}
+	if err := bumpTasksRev(ctx, tx); err != nil {
 		return err
 	}
 	return tx.Commit()

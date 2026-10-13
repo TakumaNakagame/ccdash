@@ -162,6 +162,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/projects/color", wrap(s.handleAPIProjectColor))
 	s.mux.HandleFunc("POST /api/projects/rename", wrap(s.handleAPIProjectRename))
 	s.mux.HandleFunc("POST /api/projects/order", wrap(s.handleAPIProjectOrder))
+	s.registerTaskRoutes(wrap)
 	s.mux.HandleFunc("POST /api/titles", wrap(s.handleAPITitles))
 	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
 	s.mux.HandleFunc("GET /api/sessions/{id}/usage", wrap(s.handleAPISessionUsage))

@@ -212,12 +212,16 @@ func (s *Server) tunnelHandler(local bool) http.Handler {
 }
 
 var (
-	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|projects|usage|usage/sessions|sessions/[^/]+/(transcript|usage|statusline))$`)
+	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|projects|usage|usage/sessions|sessions/[^/]+/(transcript|usage|statusline)|tasks|tasks/[^/]+)$`)
 	hubSessionEdit = regexp.MustCompile(`^/api/(sessions/[^/]+/(archive|favorite|later|grid|color|title|group|project|seen)|projects/(color|rename|order))$`)
 	// claude -p runs; summarize.KickoffTitles refuses them itself while
 	// summary_enabled is off.
 	hubTitles      = regexp.MustCompile(`^/api/titles$`)
 	hubDecideRoute = regexp.MustCompile(`^/approvals/\d+/decide$`)
+	// The person-sized task edits: add, edit (status, plan, archive …), a
+	// note, reorder. Not sync / import: those replace the list wholesale
+	// and belong to the machine's own automation.
+	hubTaskEdit = regexp.MustCompile(`^/api/tasks(/[^/]+(/notes)?)?$`)
 )
 
 // hubAllowed reports whether a tunnel request may reach the mux.
@@ -229,6 +233,8 @@ func hubAllowed(r *http.Request, cfg settings.Settings) (bool, string) {
 	case r.Method == http.MethodPost && hubSessionEdit.MatchString(p):
 		return true, ""
 	case r.Method == http.MethodPost && hubTitles.MatchString(p):
+		return true, ""
+	case r.Method == http.MethodPost && hubTaskEdit.MatchString(p) && p != "/api/tasks/sync" && p != "/api/tasks/import":
 		return true, ""
 	case r.Method == http.MethodGet && (p == "/pty/" || p == "/pty"):
 		return true, ""

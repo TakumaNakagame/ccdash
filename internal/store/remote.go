@@ -16,6 +16,7 @@ import (
 
 	"github.com/takumanakagame/ccmanage/internal/auth"
 	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/takumanakagame/ccmanage/internal/tasks"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
@@ -317,4 +318,65 @@ func (r *Remote) TranscriptFull(ctx context.Context, s model.Session) ([]transcr
 
 func sessionPath(sessionID, suffix string) string {
 	return "/api/sessions/" + url.PathEscape(sessionID) + "/" + suffix
+}
+
+func taskPath(ident string) string {
+	return "/api/tasks/" + url.PathEscape(strings.TrimPrefix(strings.TrimSpace(ident), "#"))
+}
+
+func (r *Remote) ListTasks(ctx context.Context, includeArchived bool) (model.TaskList, error) {
+	var q url.Values
+	if includeArchived {
+		q = url.Values{"archived": {"1"}}
+	}
+	var out model.TaskList
+	err := r.doJSON(ctx, 5*time.Second, http.MethodGet, "/api/tasks", q, nil, &out)
+	return out, err
+}
+
+func (r *Remote) GetTask(ctx context.Context, ident string) (model.Task, error) {
+	var out model.Task
+	err := r.doJSON(ctx, 5*time.Second, http.MethodGet, taskPath(ident), nil, nil, &out)
+	return out, err
+}
+
+func (r *Remote) AddTask(ctx context.Context, in tasks.Input) (model.Task, error) {
+	var out model.Task
+	err := r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/tasks", nil, in, &out)
+	return out, err
+}
+
+func (r *Remote) UpdateTask(ctx context.Context, ident string, p tasks.Patch) (model.Task, error) {
+	var out model.Task
+	err := r.doJSON(ctx, mutationTimeout, http.MethodPost, taskPath(ident), nil, p, &out)
+	return out, err
+}
+
+func (r *Remote) AddTaskNote(ctx context.Context, ident string, n model.TaskNote) (model.Task, error) {
+	var out model.Task
+	err := r.doJSON(ctx, mutationTimeout, http.MethodPost, taskPath(ident)+"/notes", nil, n, &out)
+	return out, err
+}
+
+func (r *Remote) OrderTasks(ctx context.Context, ids []int64) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/tasks/order", nil, map[string]any{"ids": ids}, nil)
+}
+
+func (r *Remote) SyncTasks(ctx context.Context, p tasks.Proposal) (tasks.SyncResult, error) {
+	var out tasks.SyncResult
+	err := r.doJSON(ctx, 30*time.Second, http.MethodPost, "/api/tasks/sync", nil, p, &out)
+	return out, err
+}
+
+func (r *Remote) TaskContext(ctx context.Context) (tasks.Context, error) {
+	var out tasks.Context
+	err := r.doJSON(ctx, 5*time.Second, http.MethodGet, "/api/tasks/context", nil, nil, &out)
+	return out, err
+}
+
+func (r *Remote) ImportTasks(ctx context.Context, f tasks.LegacyFile, opt tasks.ImportOptions, dryRun bool) (tasks.ImportPlan, error) {
+	var out tasks.ImportPlan
+	err := r.doJSON(ctx, 30*time.Second, http.MethodPost, "/api/tasks/import", nil,
+		map[string]any{"file": f, "map": opt.Map, "unmapped": opt.Unmapped, "dry_run": dryRun}, &out)
+	return out, err
 }

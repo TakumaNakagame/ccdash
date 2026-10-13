@@ -19,6 +19,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/redact"
 	"github.com/takumanakagame/ccmanage/internal/summarize"
+	"github.com/takumanakagame/ccmanage/internal/tasks"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
@@ -245,4 +246,44 @@ func (l *Local) TranscriptFull(ctx context.Context, s model.Session) ([]transcri
 		return nil, fmt.Errorf("no transcript path recorded for this session")
 	}
 	return transcript.Load(s.TranscriptPath)
+}
+
+func (l *Local) ListTasks(ctx context.Context, includeArchived bool) (model.TaskList, error) {
+	return l.db.TaskList(ctx, includeArchived)
+}
+
+func (l *Local) GetTask(ctx context.Context, ident string) (model.Task, error) {
+	t, err := l.db.GetTask(ctx, ident)
+	if err == nil {
+		t.Bucket = tasks.BucketOf(t, time.Now())
+	}
+	return t, err
+}
+
+func (l *Local) AddTask(ctx context.Context, in tasks.Input) (model.Task, error) {
+	return l.db.AddTask(ctx, in)
+}
+
+func (l *Local) UpdateTask(ctx context.Context, ident string, p tasks.Patch) (model.Task, error) {
+	return l.db.UpdateTask(ctx, ident, p)
+}
+
+func (l *Local) AddTaskNote(ctx context.Context, ident string, n model.TaskNote) (model.Task, error) {
+	return l.db.AddTaskNote(ctx, ident, n)
+}
+
+func (l *Local) OrderTasks(ctx context.Context, ids []int64) error {
+	return l.db.OrderTasks(ctx, ids)
+}
+
+func (l *Local) SyncTasks(ctx context.Context, p tasks.Proposal) (tasks.SyncResult, error) {
+	return l.db.SyncTasks(ctx, p)
+}
+
+func (l *Local) TaskContext(ctx context.Context) (tasks.Context, error) {
+	return l.db.TaskContext(ctx)
+}
+
+func (l *Local) ImportTasks(ctx context.Context, f tasks.LegacyFile, opt tasks.ImportOptions, dryRun bool) (tasks.ImportPlan, error) {
+	return l.db.ImportTasks(ctx, f, opt, dryRun)
 }

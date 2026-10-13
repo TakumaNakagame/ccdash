@@ -95,6 +95,8 @@ type Project struct {
 	// Sessions counts the project's sessions in the working set
 	// (not archived).
 	Sessions int `json:"sessions"`
+	// Tasks counts the project's open tasks (not finished, not archived).
+	Tasks int `json:"tasks"`
 }
 
 const (

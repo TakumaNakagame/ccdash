@@ -117,6 +117,7 @@ spawns a collector — everything goes over HTTP.`,
 	root.AddCommand(serverCmd())
 	root.AddCommand(claudeCmd())
 	root.AddCommand(sessionsCmd(rf))
+	root.AddCommand(tasksCmd(rf))
 	root.AddCommand(trustCmd(rf))
 	root.AddCommand(eventsCmd(rf))
 	root.AddCommand(approvalsCmd(rf))

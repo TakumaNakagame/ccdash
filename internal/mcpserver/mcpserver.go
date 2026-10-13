@@ -52,6 +52,15 @@ session carries "url": a link that opens that session's chat in the portal (brow
 installed app). Put it next to a session
 whenever you list sessions for the operator, e.g. the ones that need them.
 
+The operator's to-do list lives here too (list_tasks, get_task …). Claude keeps it: add
+tasks the operator takes on, record progress with add_task_note when work on a task moves,
+change status with set_task_status (with why), and set the day with plan_task when the
+operator decides it. Edits from a session link that session to the task. There is no
+delete: done / cancelled tasks are archived. Writes to Jira, Slack or GitHub are not done
+here — use those services' own tools and keep the links on the task.
+Task ids and session numbers are both small numbers: a bare "#11" from the operator most
+often means a task; if both a task and a session fit and the context doesn't decide, ask.
+
 Status rule — follow it in every session that has these tools: the operator juggles many
 sessions and can't tell which ones wait on them. Right before you end a turn (the message
 that hands control back to the operator), call set_status once with what you hand back:
@@ -90,11 +99,11 @@ func New(st store.Store, version string, readOnly bool) *Server {
 func (s *Server) tools() []map[string]any {
 	// set_status touches only the caller's own session, so --read-only
 	// keeps it: the status rule holds in every session.
-	out := append(append([]map[string]any{}, readTools...), statusTool)
+	out := append(append(append([]map[string]any{}, readTools...), taskReadTools...), statusTool)
 	if s.readOnly {
 		return out
 	}
-	return append(out, writeTools...)
+	return append(append(out, writeTools...), taskWriteTools...)
 }
 
 var statusTool = map[string]any{
@@ -391,6 +400,13 @@ var readTools = []map[string]any{
 }
 
 func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if v, ok, err := s.callTask(ctx, name, raw); ok {
+		if err != nil {
+			return "", err
+		}
+		b, err := json.MarshalIndent(v, "", " ")
+		return string(b), err
+	}
 	var args struct {
 		Project         string   `json:"project"`
 		Query           string   `json:"query"`
@@ -502,28 +518,29 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 
 // sessionRow is the compact view of a session the tools return.
 type sessionRow struct {
-	Ref       string `json:"ref,omitempty"`
-	Title     string `json:"title"`
-	Project   string `json:"project,omitempty"`
-	Group     string `json:"group,omitempty"`
-	Status    string `json:"status"`
-	Attention string `json:"attention,omitempty"`
-	Reason    string `json:"attention_reason,omitempty"`
-	Pending   int    `json:"pending_approvals,omitempty"`
-	Cwd       string `json:"cwd"`
-	Branch    string `json:"branch,omitempty"`
-	Account   string `json:"account,omitempty"`
-	LastSeen  string `json:"last_seen"`
-	Ago       string `json:"last_seen_ago"`
-	Pinned    bool   `json:"pinned,omitempty"`
-	New       bool   `json:"new_since_seen,omitempty"` // progress since the operator last looked
-	Later     bool   `json:"watch_later,omitempty"`
-	Grid      bool   `json:"on_grid,omitempty"`         // on the grid shared by the TUI (V) and the portal
-	Wait      string `json:"declared_status,omitempty"` // what the session said it hands back (set_status)
-	WaitNote  string `json:"declared_note,omitempty"`
-	Archived  bool   `json:"archived,omitempty"`
-	SessionID string `json:"session_id"`
-	URL       string `json:"url,omitempty"` // the session's chat in the hub portal
+	Ref       string  `json:"ref,omitempty"`
+	Title     string  `json:"title"`
+	Project   string  `json:"project,omitempty"`
+	Group     string  `json:"group,omitempty"`
+	Status    string  `json:"status"`
+	Attention string  `json:"attention,omitempty"`
+	Reason    string  `json:"attention_reason,omitempty"`
+	Pending   int     `json:"pending_approvals,omitempty"`
+	Cwd       string  `json:"cwd"`
+	Branch    string  `json:"branch,omitempty"`
+	Account   string  `json:"account,omitempty"`
+	LastSeen  string  `json:"last_seen"`
+	Ago       string  `json:"last_seen_ago"`
+	Pinned    bool    `json:"pinned,omitempty"`
+	New       bool    `json:"new_since_seen,omitempty"` // progress since the operator last looked
+	Later     bool    `json:"watch_later,omitempty"`
+	Grid      bool    `json:"on_grid,omitempty"`         // on the grid shared by the TUI (V) and the portal
+	Wait      string  `json:"declared_status,omitempty"` // what the session said it hands back (set_status)
+	WaitNote  string  `json:"declared_note,omitempty"`
+	Archived  bool    `json:"archived,omitempty"`
+	SessionID string  `json:"session_id"`
+	URL       string  `json:"url,omitempty"`   // the session's chat in the hub portal
+	Tasks     []int64 `json:"tasks,omitempty"` // open tasks this session worked on
 }
 
 func (s *Server) row(x model.Session) sessionRow {
@@ -702,6 +719,7 @@ func (s *Server) listSessions(ctx context.Context, project, query string, runnin
 	q := strings.ToLower(strings.TrimSpace(query))
 	var out []sessionRow
 	matched := 0
+	byTask := s.tasksBySession(ctx)
 	for _, x := range ss {
 		if project != "" && x.Project != project ||
 			runningOnly && !running(x) ||
@@ -712,7 +730,9 @@ func (s *Server) listSessions(ctx context.Context, project, query string, runnin
 		}
 		matched++
 		if len(out) < limit {
-			out = append(out, s.row(x))
+			r := s.row(x)
+			r.Tasks = byTask[x.SessionID]
+			out = append(out, r)
 		}
 	}
 	return map[string]any{"matched": matched, "sessions": out}, nil
@@ -766,7 +786,9 @@ func (s *Server) getSession(ctx context.Context, ref string, n int) (any, error)
 		n = 30
 	}
 	n = min(n, 200)
-	out := map[string]any{"session": s.row(x)}
+	row := s.row(x)
+	row.Tasks = s.tasksBySession(ctx)[x.SessionID]
+	out := map[string]any{"session": row}
 	if aps, err := s.st.ListPendingApprovals(ctx); err == nil {
 		var mine []map[string]any
 		for _, a := range aps {
