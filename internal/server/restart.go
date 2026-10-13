@@ -5,10 +5,13 @@ package server
 //   - POST /pty/{key}/restart kills one hosted claude and starts
 //     `claude --resume <session>` in its place (same key, cwd and size).
 //   - POST /api/restart saves the hosted sessions to resume-on-start.json and
-//     stops the server with ErrRestart, on which `ccdash server` re-execs
-//     itself (only it sets CanRestart); the
-//     TUI's "Restart ccdash" does the same save via POST /shutdown?resume=1
-//     before it stops the collector and spawns a fresh one.
+//     stops the server with ErrRestart, on which `ccdash server` or
+//     `ccdash web` (the ones that set CanRestart) re-execs itself; the
+//     TUI's "Restart ccdash" and `ccdash web stop --resume` do the same
+//     save via POST /shutdown?resume=1, which stops the collector for good
+//     (and with it a `ccdash web` that runs it) — the next start resumes.
+//   - Whichever way the server stops, its hosted claudes are closed
+//     (ListenAndServe), so a resumed claude never runs next to the old one.
 //   - On start, resumeSaved brings back what a recent save lists. The file
 //     is consumed once and ignored when stale, so a reboot days later does
 //     not suddenly launch claude everywhere.
@@ -145,7 +148,7 @@ func (s *Server) resumeSaved() {
 	}
 }
 
-// closeAllPTYs ends every hosted claude (before a re-exec).
+// closeAllPTYs ends every hosted claude (when the server stops).
 func (s *Server) closeAllPTYs() {
 	s.ptyMu.Lock()
 	seen := map[*ptyEntry]bool{}

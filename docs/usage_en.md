@@ -688,12 +688,20 @@ for a machine nobody may reach from outside (a work laptop) where you
 still want the web UI.
 
 ```sh
-ccdash web          # serves http://127.0.0.1:9124 and opens a one-time login link
+ccdash web          # starts http://127.0.0.1:9124 in the background and opens a one-time login link
 ccdash web open     # log in again later (another browser, expired cookie, launchd)
+ccdash web status   # running? pid, URL, log ($XDG_STATE_HOME/ccdash/web.log)
+ccdash web restart  # restart; hosted claude sessions are resumed
+ccdash web stop     # stop it (add --resume to have the next start resume the sessions)
+ccdash web -f       # --foreground: stay in this terminal (launchd / systemd)
 ```
 
+- Runs in the background: the prompt comes back at once and closing the
+  terminal doesn't stop it.
 - Links to a running collector, or runs one itself (like `ccdash server`;
-  hooks keep working).
+  hooks keep working). A collector it runs — and the claude sessions in
+  it — stop with it; `POST /shutdown` to that collector (the TUI's
+  **Restart ccdash**) stops the portal too.
 - Loopback only. One-time login link → cookie (30 days, renewed while
   used). No device management, no logout.
 - Nothing goes out except Web Push once you turn on 🔔 (through the

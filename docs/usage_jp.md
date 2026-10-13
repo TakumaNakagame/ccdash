@@ -476,11 +476,16 @@ curl -H "Authorization: Bearer $TOKEN" \
 ハブを立てずに、このマシンだけのポータルを `127.0.0.1` で開く。外から接続できない会社のマシンなどで Web 画面を使いたいとき向け。
 
 ```sh
-ccdash web          # http://127.0.0.1:9124 を起動し、ログイン用リンクをブラウザで開く
+ccdash web          # http://127.0.0.1:9124 をバックグラウンドで起動し、ログイン用リンクをブラウザで開く
 ccdash web open     # あとからログインし直す（別のブラウザ・cookie 切れ・launchd で常駐させたとき）
+ccdash web status   # 動いているか、PID・URL・ログ（$XDG_STATE_HOME/ccdash/web.log）
+ccdash web restart  # 起動し直す。ホスト中の claude は再開される
+ccdash web stop     # 止める（--resume を付けると、次の起動でセッションを再開する）
+ccdash web -f       # --foreground: 前面で動かす（launchd / systemd 用）
 ```
 
-- collector が動いていればそれにつなぎ、なければ自分の中で collector を動かす（`ccdash server` と同じ。フックもそのまま届く）
+- バックグラウンドで動く。プロンプトはすぐ返り、ターミナルを閉じても止まらない
+- collector が動いていればそれにつなぎ、なければ自分の中で collector を動かす（`ccdash server` と同じ。フックもそのまま届く）。自分で動かした collector と、その中の claude は `ccdash web` と一緒に止まる。その collector に `POST /shutdown` が届いたとき（TUI の「Restart ccdash」）も web ごと止まる
 - 待ち受けは 127.0.0.1 のみ。ログインはワンタイムのリンク → cookie（30 日、使っている間は延長）。端末の追加・ログアウトはない
 - 外への通信はない。例外は 🔔 で通知を ON にしたときの Web Push（ブラウザのプッシュサービス経由、内容は暗号化）。プロキシのある環境では `ccdash web` に `HTTPS_PROXY` を渡す
 - できることはハブと同じ許可リストと **Attach** / **Approval blocking** で決まる。**Hub connection** は関係しない

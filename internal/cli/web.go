@@ -35,22 +35,35 @@ const webReexecEnv = "CCDASH_WEB_REEXEC"
 
 func webCmd() *cobra.Command {
 	var port int
-	var noOpen bool
+	var noOpen, foreground bool
 	var collector string
 	c := &cobra.Command{
 		Use:   "web",
-		Short: "Open the web portal for this machine on 127.0.0.1 (no hub needed)",
+		Short: "Start the web portal for this machine on 127.0.0.1 in the background (no hub needed)",
 		Long: `Serve the hub's web portal for this machine only, on 127.0.0.1.
+
+'ccdash web' starts the portal in the background and returns: it runs
+detached from the terminal (closing it doesn't stop the portal), logs to
+$XDG_STATE_HOME/ccdash/web.log, and opens a login link in your browser.
+If a portal is already running it only opens the login link.
+
+  ccdash web stop            stop it (and the collector + claude sessions it runs)
+  ccdash web stop --resume   ... remembering those sessions for the next start
+  ccdash web restart         restart it; hosted claude sessions are resumed
+  ccdash web status          is it running, where, which collector
+  ccdash web open            log in again (another browser, expired cookie)
+
+--foreground keeps it in the terminal instead (Ctrl-C stops it); use it
+under launchd / systemd. A portal started by launchd (parent PID 1) or a
+systemd unit runs in the foreground by itself.
 
 The portal talks to this machine's collector in-process: if one is already
 running (ccdash server, ccdash -k, a TUI's) it links to that; otherwise it
-runs the collector itself, like 'ccdash server'. Nothing listens beyond
-loopback and nothing connects out, apart from Web Push notifications once
-you turn them on in the portal (the browser's push service).
-
-Login: a one-time link is opened in your browser (open / xdg-open) and
-traded for a cookie. To log in again later — another browser, an expired
-cookie, or a portal started by launchd — run 'ccdash web open'.
+runs the collector itself, like 'ccdash server'. A collector run here stops
+with the portal, and POST /shutdown to it (the TUI's "Restart ccdash")
+stops the whole portal. Nothing listens beyond loopback and nothing
+connects out, apart from Web Push notifications once you turn them on in
+the portal (the browser's push service).
 
 See docs/hub.md ("Local portal") and docs/decisions/0005-local-portal.md.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -58,21 +71,29 @@ See docs/hub.md ("Local portal") and docs/decisions/0005-local-portal.md.`,
 			if err != nil || !isLoopbackHost(host) {
 				return fmt.Errorf("--collector-addr must be a loopback host:port, got %q", collector)
 			}
+			if !foreground && !underSupervisor() {
+				return startWebDaemon(port, collector, !noOpen)
+			}
 			err = runWeb(cmd.Context(), port, collector, !noOpen && os.Getenv(webReexecEnv) == "")
 			if errors.Is(err, server.ErrRestart) {
 				_ = os.Setenv(webReexecEnv, "1")
 				return reexecSelf()
+			}
+			if errors.Is(err, errCollectorStopped) {
+				log.Printf("web: the collector was shut down; ccdash web exits with it")
+				return nil
 			}
 			return err
 		},
 	}
 	c.Flags().IntVar(&port, "port", defaultWebPort, "port on 127.0.0.1")
 	c.Flags().BoolVar(&noOpen, "no-open", false, "don't open a browser (and don't print the login link; use 'ccdash web open')")
+	c.Flags().BoolVarP(&foreground, "foreground", "f", false, "run in this terminal instead of the background (for launchd / systemd)")
 	// Testing aid: link to / run a collector on another loopback port, so a
 	// throwaway HOME can be tried next to the real collector on 9123.
 	c.Flags().StringVar(&collector, "collector-addr", fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort), "collector address (loopback)")
 	_ = c.Flags().MarkHidden("collector-addr")
-	c.AddCommand(webOpenCmd())
+	c.AddCommand(webOpenCmd(), webStopCmd(), webRestartCmd(), webStatusCmd())
 	return c
 }
 
@@ -141,6 +162,9 @@ func runWeb(parent context.Context, port int, collector string, openIt bool) err
 	if f, err := webURLFile(); err == nil && os.WriteFile(f, []byte("http://"+listen+"\n"), 0o600) == nil {
 		defer os.Remove(f)
 	}
+	st := newWebState(port, "http://"+listen, collector)
+	st.save()
+	defer st.remove()
 
 	log.Printf("ccdash web %s on http://%s (loopback only)", buildinfo.Version, listen)
 	if openIt {
@@ -153,7 +177,7 @@ func runWeb(parent context.Context, port int, collector string, openIt bool) err
 	}
 
 	linkErr := make(chan error, 1)
-	go func() { linkErr <- linkCollector(ctx, h, collector) }()
+	go func() { linkErr <- linkCollector(ctx, h, collector, st.setMode) }()
 	select {
 	case err := <-serveErr:
 		cancel()
@@ -168,10 +192,12 @@ func runWeb(parent context.Context, port int, collector string, openIt bool) err
 
 // linkCollector keeps the portal's one device linked to this machine's
 // collector: a running one through its /local/portal upgrade, else one
-// run here in-process over net.Pipe. Returns at ctx end, or with
-// server.ErrRestart when the portal asked the embedded collector to
-// restart.
-func linkCollector(ctx context.Context, h *hub.Hub, addr string) error {
+// run here in-process over net.Pipe. Returns at ctx end, with
+// server.ErrRestart when the embedded collector was asked to restart
+// (POST /api/restart: the caller re-execs), or with errCollectorStopped
+// when it was shut down (POST /shutdown) — never by starting another
+// collector in this process next to what the old one hosted.
+func linkCollector(ctx context.Context, h *hub.Hub, addr string, mode func(string)) error {
 	host, _ := os.Hostname()
 	lastErr := ""
 	note := func(err error) {
@@ -182,6 +208,7 @@ func linkCollector(ctx context.Context, h *hub.Hub, addr string) error {
 	}
 	for ctx.Err() == nil {
 		if alive, hasPTY := serverCapabilities(addr); alive {
+			mode(webLinked)
 			err := linkRunning(ctx, h, addr, host, hasPTY)
 			if err == nil {
 				lastErr = ""
@@ -191,9 +218,13 @@ func linkCollector(ctx context.Context, h *hub.Hub, addr string) error {
 			sleepCtx(ctx, 5*time.Second)
 			continue
 		}
+		mode(webEmbedded)
 		err := runEmbeddedCollector(ctx, h, addr, host)
 		if errors.Is(err, server.ErrRestart) {
 			return err
+		}
+		if err == nil && ctx.Err() == nil {
+			return errCollectorStopped
 		}
 		if err != nil {
 			note(err)
@@ -252,11 +283,7 @@ func runEmbeddedCollector(ctx context.Context, h *hub.Hub, addr, host string) er
 	go func() { _ = h.ServeLocal(sess, host, buildinfo.Version) }()
 
 	log.Printf("web: running the collector in this process")
-	err = s.ListenAndServe(sctx)
-	if err == nil && ctx.Err() == nil {
-		log.Printf("web: collector stopped")
-	}
-	return err
+	return s.ListenAndServe(sctx) // closes the claudes it hosted
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) {
@@ -282,35 +309,40 @@ func webOpenCmd() *cobra.Command {
 		Use:   "open",
 		Short: "Log in to the running 'ccdash web' (opens a fresh one-time link)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p, err := webLoginFile()
-			if err != nil {
-				return err
-			}
-			b, err := os.ReadFile(p)
-			if errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("'ccdash web' has never run here — start it first")
-			}
-			if err != nil {
-				return err
-			}
-			link := strings.TrimSpace(string(b))
-			base, _, _ := strings.Cut(link, "/auth/")
-			c := &http.Client{Timeout: time.Second}
-			resp, err := c.Get(base + "/healthz")
-			if err != nil {
-				return fmt.Errorf("'ccdash web' is not running (%s): start it first", base)
-			}
-			resp.Body.Close()
-			if printOnly {
-				fmt.Println(link)
-				return nil
-			}
-			fmt.Println("ccdash web: opening a login link for", base)
-			return openLogin(link)
+			return openWebLogin(printOnly)
 		},
 	}
 	c.Flags().BoolVar(&printOnly, "print", false, "print the login link instead of opening a browser")
 	return c
+}
+
+// openWebLogin opens (or prints) the running portal's current login link.
+func openWebLogin(printOnly bool) error {
+	p, err := webLoginFile()
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("'ccdash web' has never run here — start it first")
+	}
+	if err != nil {
+		return err
+	}
+	link := strings.TrimSpace(string(b))
+	base, _, _ := strings.Cut(link, "/auth/")
+	c := &http.Client{Timeout: time.Second}
+	resp, err := c.Get(base + "/healthz")
+	if err != nil {
+		return fmt.Errorf("'ccdash web' is not running (%s): start it first", base)
+	}
+	resp.Body.Close()
+	if printOnly {
+		fmt.Println(link)
+		return nil
+	}
+	fmt.Println("ccdash web: opening a login link for", base)
+	return openLogin(link)
 }
 
 // openLogin opens the login link without putting it on a command line,

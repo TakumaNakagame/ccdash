@@ -283,8 +283,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			cancel()
 		}
 	}
+	// The hosted claudes end with the collector, however it stops: a
+	// caller that starts another collector in the same process (ccdash
+	// web, a restart) must never find the old ones still running next to
+	// the ones it resumes.
+	s.closeAllPTYs()
 	if firstErr == nil && s.restartAsked.Load() {
-		s.closeAllPTYs()
 		return ErrRestart
 	}
 	return firstErr

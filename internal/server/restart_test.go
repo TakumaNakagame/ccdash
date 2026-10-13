@@ -136,3 +136,45 @@ func TestRestartNeedsCanRestart(t *testing.T) {
 		t.Errorf("restart = %d, want 501", r.status)
 	}
 }
+
+// TestShutdownClosesPTYs: however the collector stops (here its context
+// ends, as on SIGTERM or POST /shutdown), its hosted claudes end with it — a process that starts
+// another collector afterwards (ccdash web) must not leave them running
+// next to the ones it resumes.
+func TestShutdownClosesPTYs(t *testing.T) {
+	fakeClaude(t)
+	t.Setenv("HOME", t.TempDir()) // ListenAndServe's hook sync reads ~/.claude
+	s, d, tok := newTestServer(t)
+	dir := t.TempDir()
+	_ = d.UpsertSession(context.Background(), &model.Session{SessionID: "sess-s", Cwd: dir, Status: model.StatusIdle})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.ListenAndServe(ctx) }()
+	if r := do(t, s, http.MethodPost, "/pty/start", tok, []byte(`{"sessionId":"sess-s","cwd":"`+dir+`","cols":80,"rows":24}`)); r.status != http.StatusOK {
+		t.Fatalf("start: %d %s", r.status, r.body)
+	}
+	e := s.lookupPTY("sess-s")
+	if e == nil {
+		t.Fatal("no pty")
+	}
+	time.Sleep(300 * time.Millisecond) // let the listener come up
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ListenAndServe: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("server did not stop")
+	}
+	select {
+	case <-e.sess.ChildExit():
+	case <-time.After(5 * time.Second):
+		t.Fatal("hosted child still running after shutdown")
+	}
+	if s.lookupPTY("sess-s") != nil {
+		t.Fatal("pty map not cleared")
+	}
+}

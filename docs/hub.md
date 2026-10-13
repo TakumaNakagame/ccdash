@@ -134,17 +134,43 @@ grid, diff review, notifications. See
 `docs/decisions/0005-local-portal.md`.
 
 ```sh
-ccdash web              # serves http://127.0.0.1:9124 and opens a one-time login link
+ccdash web              # starts http://127.0.0.1:9124 in the background, opens a one-time login link
 ccdash web open         # log in again later (another browser, expired cookie, launchd)
+ccdash web status       # running? pid, URL, which collector, log file
+ccdash web restart      # restart; the claude sessions it hosts are resumed
+ccdash web stop         # stop it, with the collector and claude sessions it runs
+ccdash web stop --resume  # ... saving those sessions; the next `ccdash web` resumes them
+ccdash web --foreground # stay in this terminal (Ctrl-C stops); for launchd / systemd
 ccdash web --port 9200 --no-open
 ```
 
+- **Background:** `ccdash web` starts `ccdash web --foreground` detached
+  from the terminal (its own session, stdin `/dev/null`) and returns once
+  it answers. Its output goes to `$XDG_STATE_HOME/ccdash/web.log` (rotated
+  to `web.log.1` past 10 MB at start); `web.json` next to it records the
+  PID, port and collector for `stop` / `restart` / `status`. If one is
+  already running, `ccdash web` only opens its login link. The child keeps
+  the environment of the shell you ran it from, so hosted claude sessions
+  start exactly as from a foreground `ccdash web`; closing the terminal no
+  longer stops the portal. Started by launchd (parent PID 1) or a systemd
+  unit it stays in the foreground by itself.
 - **Collector:** if one is already running (`ccdash server`, `ccdash -k`,
   a TUI's), `ccdash web` links to it; otherwise it runs the collector
   itself, exactly as `ccdash server` would (hooks keep working). If a
-  linked collector stops, `ccdash web` starts its own. The portal's
-  **↻ 再起動** re-execs `ccdash web` (with the embedded collector) and
-  resumes the hosted sessions.
+  linked collector stops, `ccdash web` starts its own.
+- **Stop and restart mean one thing each.** A collector `ccdash web` runs
+  lives and dies with it, and every claude it hosts ends with that
+  collector, however it stops (the collector closes its PTYs on the way
+  out). `ccdash web stop` (SIGTERM) and `POST /shutdown` to its collector
+  — the TUI's **Restart ccdash** — stop the whole portal; it never starts
+  a second collector in the same process. `ccdash web restart` and the
+  portal's **↻ 再起動** use `POST /api/restart`: the hosted sessions are
+  saved, their claudes closed, `ccdash web` re-execs itself (same PID and
+  log) and resumes them. Linked to another collector, `stop` / `restart`
+  only touch the portal; the sessions live in that collector. (The TUI's
+  **Restart ccdash** on a collector run by `ccdash web` stops the portal
+  too; the TUI then starts a `ccdash server`, which resumes the sessions —
+  run `ccdash web` again for the portal.)
 - **Loopback only.** It binds `127.0.0.1` (no `--listen`), answers 421 to
   any `Host` header but `127.0.0.1` / `localhost` / `[::1]` (DNS
   rebinding), and keeps the hub's cross-origin checks.
@@ -187,6 +213,7 @@ ccdash web --port 9200 --no-open
   <array>
     <string>/Users/you/.local/bin/ccdash</string>
     <string>web</string>
+    <string>--foreground</string>
     <string>--no-open</string>
   </array>
   <!-- launchd starts with an empty environment: SHELL lets hosted
@@ -205,6 +232,10 @@ ccdash web --port 9200 --no-open
 </plist>
 ```
 
-With `--no-open` the login link is never written to the log; use
-`ccdash web open`. Stop it with `launchctl unload` on the same file.
+launchd must keep the process it started, hence `--foreground` (a
+portal started by launchd stays in the foreground even without it). With
+`--no-open` the login link is never written to the log; use
+`ccdash web open`. Stop it with `launchctl unload` on the same file —
+`ccdash web stop` would only have launchd start it again (`KeepAlive`);
+`ccdash web restart` works.
 Running the TUI as well is fine: it finds this collector and uses it.

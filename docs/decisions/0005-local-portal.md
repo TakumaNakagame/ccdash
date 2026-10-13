@@ -105,6 +105,24 @@ talks to this machine's collector over an in-process tunnel.**
   commands, VAPID keys, push subscriptions, cookie key) is
   `$XDG_STATE_HOME/ccdash/web/hub.sqlite`, separate from a hub's.
 - **Read tokens are off** in local mode (no machine clients on a laptop).
+- **Runs in the background** (added later). `ccdash web` starts a detached
+  `ccdash web --foreground` (Setsid, stdin `/dev/null`, output to
+  `web.log`) and returns; `web.json` (PID, port, collector address and
+  whether the collector is embedded or linked) backs `ccdash web
+  stop|restart|status`. The child inherits the caller's environment, so
+  hosted claude sessions start as before. launchd (parent PID 1) and
+  systemd (`INVOCATION_ID`) starts stay in the foreground, so existing
+  agents keep working.
+- **One meaning for stop and for restart.** A first version restarted the
+  embedded collector inside the same process whenever it returned; after
+  `POST /shutdown?resume=1` that left the old claudes running (only a
+  restart closed them) while the new collector resumed the same sessions —
+  two claudes per session. Now the collector closes every hosted PTY
+  whenever `ListenAndServe` returns, and `ccdash web` exits when its
+  collector is shut down (`errCollectorStopped`); only `POST /api/restart`
+  (`ccdash web restart`, the portal's ↻) brings it back, by re-exec.
+  `ccdash web stop --resume` is `POST /shutdown?resume=1`: saved, stopped,
+  resumed by the next start.
 
 ## Alternatives considered
 
