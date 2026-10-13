@@ -3893,7 +3893,7 @@ func (m *model) leftPaneWidth() int {
 		return collapsedListW
 	}
 	work := m.workWidth()
-	w := work * settings.ClampPaneListPct(m.settings.PaneListPct) / 100
+	w := work * m.settings.Ratio().ListShare() / 100
 	w = min(w, work-3-20)
 	return max(w, 30)
 }
@@ -3901,14 +3901,14 @@ func (m *model) leftPaneWidth() int {
 // adjustPaneSplit grows (+) or shrinks (-) the session list by step
 // percent and persists it — the `<` / `>` dashboard keys.
 func (m *model) adjustPaneSplit(step int) {
-	pct := settings.ClampPaneListPct(m.settings.PaneListPct + step)
-	next, err := settings.Set(m.ctx, m.store, m.settings, "pane_list_pct", pct)
+	r := m.settings.Ratio().MoveList(step)
+	next, err := settings.Set(m.ctx, m.store, m.settings, "pane_ratio", r.String())
 	if err != nil {
 		m.err = err
 		return
 	}
 	m.settings = next
-	m.flash = fmt.Sprintf("session list %d%% · work pane %d%%", pct, 100-pct)
+	m.flash = fmt.Sprintf("panes: list %d%% · work %d%% · tasks %d%%", r.List, r.Work, r.Tasks)
 }
 
 func (m *model) renderSessionsBody(height int) string {
@@ -3982,7 +3982,7 @@ func (m *model) renderSessionsBodyVertical(height int) string {
 // panes in vertical layout. Extracted so the mouse handler can compute
 // the same top/bottom boundary without re-rendering anything.
 func (m *model) verticalSplit(height int) (listH, rightH int) {
-	listH = height * settings.ClampPaneListPct(m.settings.PaneListPct) / 100
+	listH = height * m.settings.Ratio().ListShare() / 100
 	if listH < 5 {
 		listH = 5
 	}

@@ -6,7 +6,9 @@ package settings
 
 import (
 	"context"
+	"fmt"
 	"strconv"
+	"strings"
 )
 
 // Store is the minimal capability Load/Set/ActionFunc need: read/write raw
@@ -65,16 +67,15 @@ type Settings struct {
 	// before starting claude there (internal/claudecfg). Empty = off.
 	TrustedDirs string
 
-	// PaneListPct is the session list's share of the body, in percent:
-	// its width in the horizontal layout, its height in the vertical one.
-	// The right (work) pane gets the rest. Clamped to
-	// [MinPaneListPct, MaxPaneListPct] so neither pane can vanish.
-	PaneListPct int
-	// TasksPane shows the to-do list as a third column (w); PaneTasksPct
-	// is its width in percent of the terminal. ListCollapsed folds the
-	// session list to a strip of numbers (b).
+	// PaneRatio is "list:work:tasks" — how the dashboard's three columns
+	// share the width (ParsePaneRatio normalizes it). Without the task
+	// pane, list:work share it; in the vertical layout list:work splits
+	// the height. Replaces pane_list_pct / pane_tasks_pct (folded in once
+	// by Load).
+	PaneRatio string
+	// TasksPane shows the to-do list as a third column (w). ListCollapsed
+	// folds the session list to a strip of numbers (b).
 	TasksPane     bool
-	PaneTasksPct  int
 	ListCollapsed bool
 	// InvertListScroll flips the mouse wheel over the session list: wheel
 	// down moves the selection up and vice versa. The right pane keeps
@@ -127,10 +128,13 @@ const (
 	keyRefreshIntervalMs = "refresh_interval_ms"
 	keyNewSessionDir     = "new_session_dir"
 	keyTrustedDirs       = "trusted_dirs"
-	keyPaneListPct       = "pane_list_pct"
+	keyPaneRatio         = "pane_ratio"
 	keyTasksPane         = "tasks_pane"
-	keyPaneTasksPct      = "pane_tasks_pct"
 	keyListCollapsed     = "list_collapsed"
+	// legacyKeyPaneListPct / legacyKeyPaneTasksPct were the two
+	// percentages PaneRatio replaced; Load folds them in once.
+	legacyKeyPaneListPct  = "pane_list_pct"
+	legacyKeyPaneTasksPct = "pane_tasks_pct"
 	// legacyKeyPaneSplit was the "50/50" / "30/70" enum PaneListPct
 	// replaced; Load folds it in once.
 	legacyKeyPaneSplit  = "pane_split"
@@ -163,9 +167,8 @@ func Defaults() Settings {
 		SummaryTimeoutSec: 180,
 		RefreshIntervalMs: 1000,
 
-		PaneListPct:   50,
+		PaneRatio:     "36:36:28",
 		TasksPane:     true,
-		PaneTasksPct:  28,
 		TimeFormat:    "relative",
 		UpdateChannel: "stable",
 
@@ -208,10 +211,13 @@ func loadPairs(out *Settings) []loadPair {
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
 		{keyNewSessionDir, func(v string) { out.NewSessionDir = v }},
 		{keyTrustedDirs, func(v string) { out.TrustedDirs = v }},
-		{keyPaneListPct, func(v string) { out.PaneListPct = ClampPaneListPct(parseInt(v, out.PaneListPct)) }},
+		{keyPaneRatio, func(v string) {
+			if r, err := ParsePaneRatio(v); err == nil {
+				out.PaneRatio = r.String()
+			}
+		}},
 		{keyInvertListScroll, func(v string) { out.InvertListScroll = parseBool(v, out.InvertListScroll) }},
 		{keyTasksPane, func(v string) { out.TasksPane = parseBool(v, out.TasksPane) }},
-		{keyPaneTasksPct, func(v string) { out.PaneTasksPct = ClampPaneTasksPct(parseInt(v, out.PaneTasksPct)) }},
 		{keyListCollapsed, func(v string) { out.ListCollapsed = parseBool(v, out.ListCollapsed) }},
 		{keyAutoArchiveDays, func(v string) { out.AutoArchiveDays = parseInt(v, out.AutoArchiveDays) }},
 		{keyAutoTitle, func(v string) { out.AutoTitle = parseBool(v, out.AutoTitle) }},
@@ -269,27 +275,103 @@ func Load(ctx context.Context, st Store) (Settings, error) {
 	// The local DB's AllSettings returns every row, legacy ones included,
 	// so this needs no extra round trip; a remote map omits the legacy key
 	// and the migration happens on the collector instead.
-	if all[keyPaneListPct] == "" {
-		if all[legacyKeyPaneSplit] == "30/70" {
-			out.PaneListPct = 30
-			_ = st.SetSetting(ctx, keyPaneListPct, "30")
+	if all[keyPaneRatio] == "" {
+		if r, ok := legacyPaneRatio(all); ok {
+			out.PaneRatio = r.String()
+			_ = st.SetSetting(ctx, keyPaneRatio, out.PaneRatio)
 		}
 	}
 	return out, nil
 }
 
-// Bounds for PaneListPct: either pane keeps at least 10% of the body.
-const (
-	MinPaneListPct = 10
-	MaxPaneListPct = 90
-)
+// legacyPaneRatio turns the old settings into a ratio that draws the same
+// screen: pane_list_pct was the list's share of list + work, pane_tasks_pct
+// the task pane's share of the width (and the even older pane_split enum
+// meant 30 or 50).
+func legacyPaneRatio(all map[string]string) (PaneRatio, bool) {
+	list, tasks := -1, -1
+	if v := all[legacyKeyPaneListPct]; v != "" {
+		list = parseInt(v, -1)
+	} else if all[legacyKeyPaneSplit] == "30/70" {
+		list = 30
+	} else if all[legacyKeyPaneSplit] == "50/50" {
+		list = 50
+	}
+	if v := all[legacyKeyPaneTasksPct]; v != "" {
+		tasks = parseInt(v, -1)
+	}
+	if list < 0 && tasks < 0 {
+		return PaneRatio{}, false
+	}
+	if list < 0 {
+		list = 50
+	}
+	if tasks < 0 {
+		tasks = 28
+	}
+	list = min(max(list, 10), 90)
+	tasks = min(max(tasks, 10), 60)
+	l := list * (100 - tasks) / 100
+	return PaneRatio{List: l, Work: 100 - tasks - l, Tasks: tasks}, true
+}
 
-// ClampPaneTasksPct keeps the task pane between 15% and 50% of the width.
-func ClampPaneTasksPct(pct int) int { return min(max(pct, 15), 50) }
+// PaneRatio is the three column shares, in percent of their sum.
+type PaneRatio struct{ List, Work, Tasks int }
 
-// ClampPaneListPct forces pct into [MinPaneListPct, MaxPaneListPct].
-func ClampPaneListPct(pct int) int {
-	return min(max(pct, MinPaneListPct), MaxPaneListPct)
+// Pane share bounds: each column keeps at least MinPaneShare.
+const MinPaneShare = 10
+
+// ParsePaneRatio reads "list:work:tasks" (any positive numbers; ":" or
+// "/" or spaces between them) and scales it to sum to 100, each part at
+// least MinPaneShare.
+func ParsePaneRatio(v string) (PaneRatio, error) {
+	f := strings.FieldsFunc(v, func(r rune) bool { return r == ':' || r == '/' || r == ' ' || r == ',' })
+	if len(f) != 3 {
+		return PaneRatio{}, fmt.Errorf("pane ratio is list:work:tasks, e.g. 25:50:25")
+	}
+	var n [3]int
+	sum := 0
+	for i, x := range f {
+		v, err := strconv.Atoi(strings.TrimSpace(x))
+		if err != nil || v <= 0 {
+			return PaneRatio{}, fmt.Errorf("pane ratio is three positive numbers, e.g. 25:50:25")
+		}
+		n[i] = v
+		sum += v
+	}
+	for i := range n {
+		n[i] = max(n[i]*100/sum, MinPaneShare)
+	}
+	// Give the rounding remainder (or take the excess) from the work pane.
+	n[1] += 100 - n[0] - n[1] - n[2]
+	if n[1] < MinPaneShare {
+		return PaneRatio{}, fmt.Errorf("pane ratio leaves no room for the work pane")
+	}
+	return PaneRatio{List: n[0], Work: n[1], Tasks: n[2]}, nil
+}
+
+// Ratio parses s.PaneRatio (falling back to the default).
+func (s Settings) Ratio() PaneRatio {
+	if r, err := ParsePaneRatio(s.PaneRatio); err == nil {
+		return r
+	}
+	r, _ := ParsePaneRatio(Defaults().PaneRatio)
+	return r
+}
+
+func (r PaneRatio) String() string { return fmt.Sprintf("%d:%d:%d", r.List, r.Work, r.Tasks) }
+
+// ListShare is the list's percent of list + work (the width without the
+// task pane, the height in the vertical layout).
+func (r PaneRatio) ListShare() int { return r.List * 100 / max(1, r.List+r.Work) }
+
+// MoveList moves step percent from the work pane to the list (negative:
+// back), keeping both above MinPaneShare.
+func (r PaneRatio) MoveList(step int) PaneRatio {
+	step = min(max(step, MinPaneShare-r.List), r.Work-MinPaneShare)
+	r.List += step
+	r.Work -= step
+	return r
 }
 
 func SetAutoRepoTabs(ctx context.Context, st Store, v bool) error {
@@ -373,9 +455,8 @@ func AllSpecs() []Spec {
 		{Key: keyNewestAtBottom, Label: "Newest at bottom", Help: "Show the newest session at the bottom of the list (matches the transcript tail orientation)", Kind: KindBool},
 		{Key: keyWorkAnim, Label: "Working animation", Help: "Run a light round the edge of sessions that are working — list rows and grid tiles (the spinner stays either way)", Kind: KindBool},
 		{Key: keyLayoutMode, Label: "Vertical layout", Help: "Auto = pick from terminal width (vertical when narrow). On = always vertical. Off = always horizontal (side-by-side).", Kind: KindEnum, Options: []string{"auto", "on", "off"}},
-		{Key: keyPaneListPct, Label: "Session list size (%)", Help: "Share of the screen the session list takes (width side-by-side, height when vertical); the work pane gets the rest. 30 = compact list, wide work pane. Also adjustable with < / > on the dashboard.", Kind: KindInt, Min: MinPaneListPct, Max: MaxPaneListPct},
+		{Key: keyPaneRatio, Label: "Pane widths (list:work:tasks)", Help: "How the session list, the work pane and the task pane share the width, e.g. 25:50:25 (any numbers; each keeps at least 10%). Without the task pane the list and work pane share it in the same proportion; in the vertical layout that proportion splits the height. < / > on the dashboard move 5% between the list and the work pane.", Kind: KindString},
 		{Key: keyTasksPane, Label: "Task pane", Help: "Show the to-do list as a column on the right of the dashboard and the grid (also w).", Kind: KindBool},
-		{Key: keyPaneTasksPct, Label: "Task pane size (%)", Help: "Width of the task pane in percent of the terminal.", Kind: KindInt, Min: 15, Max: 50},
 		{Key: keyListCollapsed, Label: "Collapse session list", Help: "Fold the session list to a strip of session numbers (also b); j/k still move the selection.", Kind: KindBool},
 		{Key: keyInvertListScroll, Label: "Invert list scroll", Help: "Reverse the mouse wheel over the session list (wheel down moves the selection up). The right pane is unaffected.", Kind: KindBool},
 		{Key: keyTimeFormat, Label: "Session time", Help: "How the session list shows each session's last prompt time: relative (4m, 2h) or absolute (09/30 18:45).", Kind: KindEnum, Options: []string{"relative", "absolute"}},
@@ -432,8 +513,6 @@ func Get(s Settings, key string) any {
 		return s.WorkAnim
 	case keyTasksPane:
 		return s.TasksPane
-	case keyPaneTasksPct:
-		return s.PaneTasksPct
 	case keyListCollapsed:
 		return s.ListCollapsed
 	case keyLayoutMode:
@@ -470,8 +549,8 @@ func Get(s Settings, key string) any {
 		return s.NewSessionDir
 	case keyTrustedDirs:
 		return s.TrustedDirs
-	case keyPaneListPct:
-		return s.PaneListPct
+	case keyPaneRatio:
+		return s.PaneRatio
 	case keyTimeFormat:
 		return s.TimeFormat
 	case keyUpdateChannel:
@@ -500,9 +579,6 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.WorkAnim = value.(bool)
 	case keyTasksPane:
 		s.TasksPane = value.(bool)
-	case keyPaneTasksPct:
-		value = ClampPaneTasksPct(value.(int))
-		s.PaneTasksPct = value.(int)
 	case keyListCollapsed:
 		s.ListCollapsed = value.(bool)
 	case keyLayoutMode:
@@ -539,9 +615,13 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.NewSessionDir = value.(string)
 	case keyTrustedDirs:
 		s.TrustedDirs = value.(string)
-	case keyPaneListPct:
-		value = ClampPaneListPct(value.(int))
-		s.PaneListPct = value.(int)
+	case keyPaneRatio:
+		r, err := ParsePaneRatio(value.(string))
+		if err != nil {
+			return s, err
+		}
+		value = r.String()
+		s.PaneRatio = r.String()
 	case keyTimeFormat:
 		s.TimeFormat = value.(string)
 	case keyUpdateChannel:

@@ -49,7 +49,7 @@ func (m *model) tasksPaneW() int {
 	if !m.gridOpen && m.useVerticalLayout() {
 		return 0
 	}
-	w := max(m.width*settings.ClampPaneTasksPct(m.settings.PaneTasksPct)/100, taskMinW)
+	w := max(m.width*m.settings.Ratio().Tasks/100, taskMinW)
 	if m.width-w-taskSepW < 50 {
 		return 0
 	}

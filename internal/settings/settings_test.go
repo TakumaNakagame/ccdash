@@ -91,26 +91,54 @@ func TestLoadUsesAllSettings(t *testing.T) {
 	}
 }
 
-// TestPaneListPct: the legacy "30/70" enum migrates to 30 once, and
-// out-of-range stored values are clamped so neither pane can vanish.
-func TestPaneListPct(t *testing.T) {
+// TestPaneRatio: the old pane_list_pct / pane_tasks_pct (and the older
+// pane_split enum) fold into a ratio that draws the same screen, once;
+// ratios parse loosely, normalize to 100 and keep every column ≥ 10%.
+func TestPaneRatio(t *testing.T) {
 	ctx := context.Background()
-	st := mapStore{"pane_split": "30/70"}
-	s, _ := Load(ctx, st)
-	if s.PaneListPct != 30 || st["pane_list_pct"] != "30" {
-		t.Fatalf("legacy 30/70: pct=%d stored=%q", s.PaneListPct, st["pane_list_pct"])
-	}
-	if s, _ := Load(ctx, mapStore{"pane_split": "50/50"}); s.PaneListPct != 50 {
-		t.Fatalf("legacy 50/50: pct=%d", s.PaneListPct)
-	}
-	for v, want := range map[string]int{"3": 10, "99": 90, "junk": 50, "40": 40} {
-		if s, _ := Load(ctx, mapStore{"pane_list_pct": v}); s.PaneListPct != want {
-			t.Errorf("stored %q: pct=%d, want %d", v, s.PaneListPct, want)
+	for _, c := range []struct {
+		stored map[string]string
+		want   string
+	}{
+		{map[string]string{}, "36:36:28"}, // fresh install: the default, nothing written
+		{map[string]string{"pane_list_pct": "30"}, "21:51:28"},
+		{map[string]string{"pane_list_pct": "50", "pane_tasks_pct": "25"}, "37:38:25"},
+		{map[string]string{"pane_split": "30/70"}, "21:51:28"},
+		{map[string]string{"pane_list_pct": "40", "pane_ratio": "20:60:20"}, "20:60:20"},
+	} {
+		st := mapStore(c.stored)
+		s, _ := Load(ctx, st)
+		if s.PaneRatio != c.want {
+			t.Errorf("%v: ratio %q, want %q", c.stored, s.PaneRatio, c.want)
+		}
+		if _, had := c.stored["pane_ratio"]; !had && len(c.stored) > 0 && st["pane_ratio"] != c.want {
+			t.Errorf("%v: not persisted (%q)", c.stored, st["pane_ratio"])
 		}
 	}
-	st = mapStore{}
-	s, _ = Set(ctx, st, Defaults(), "pane_list_pct", 0)
-	if s.PaneListPct != 10 || st["pane_list_pct"] != "10" {
-		t.Fatalf("Set(0): pct=%d stored=%q", s.PaneListPct, st["pane_list_pct"])
+	// The migrated ratio keeps the old list share of list + work.
+	if s, _ := Load(ctx, mapStore{"pane_list_pct": "30"}); s.Ratio().ListShare() != 29 {
+		t.Errorf("list share = %d", s.Ratio().ListShare())
+	}
+	for in, want := range map[string]string{"1:2:1": "25:50:25", "30 / 40 / 30": "30:40:30", "1:100:1": "10:80:10", "50:50:50": "33:34:33"} {
+		r, err := ParsePaneRatio(in)
+		if err != nil || r.String() != want {
+			t.Errorf("parse %q = %v %v, want %s", in, r, err, want)
+		}
+	}
+	for _, bad := range []string{"", "1:2", "a:b:c", "0:1:1", "100:1:100"} {
+		if _, err := ParsePaneRatio(bad); err == nil {
+			t.Errorf("parse %q: want an error", bad)
+		}
+	}
+	st := mapStore{}
+	if _, err := Set(ctx, st, Defaults(), "pane_ratio", "x"); err == nil || st["pane_ratio"] != "" {
+		t.Fatal("Set accepted a bad ratio")
+	}
+	s, _ := Set(ctx, st, Defaults(), "pane_ratio", "1:2:1")
+	if s.PaneRatio != "25:50:25" || st["pane_ratio"] != "25:50:25" {
+		t.Fatalf("Set: %q stored %q", s.PaneRatio, st["pane_ratio"])
+	}
+	if r := (PaneRatio{List: 12, Work: 60, Tasks: 28}).MoveList(-5); r.List != 10 || r.Work != 62 {
+		t.Errorf("MoveList stops at the floor: %v", r)
 	}
 }

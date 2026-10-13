@@ -16,8 +16,7 @@ func taskTestModel() *model {
 	m.width, m.height = 200, 40
 	m.settings.LayoutMode = "horizontal"
 	m.settings.TasksPane = true
-	m.settings.PaneTasksPct = 25
-	m.settings.PaneListPct = 30
+	m.settings.PaneRatio = "22:53:25" // the list takes ~30% of list + work
 	m.sessions = []mdl.Session{{SessionID: "s1", Num: 1, Project: "web"}, {SessionID: "s2", Num: 2}}
 	m.allSessions = m.sessions
 	m.tasks = mdl.TaskList{Today: "2026-10-13",

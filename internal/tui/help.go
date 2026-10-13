@@ -25,7 +25,7 @@ var helpSections = []helpSection{
 		{"g/G", "top / end"},
 		{"h/l tab", "previous / next tab"},
 		{"J/K pgup/pgdn", "scroll the right pane"},
-		{"< / >", "resize the panes"},
+		{"< / >", "move 5% between list and work (all three: settings , → Pane widths)"},
 		{"/", "search"},
 		{"@", "cycle account filter"},
 		{"!", "needs-you / unseen only"},

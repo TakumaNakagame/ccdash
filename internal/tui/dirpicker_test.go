@@ -242,10 +242,11 @@ func TestPaneSplitCompact(t *testing.T) {
 	m.settings.LayoutMode = "horizontal"
 	m.settings.TasksPane = false                  // TestTasksPaneLayout covers three columns
 	m.sessions = []mdl.Session{{SessionID: "s1"}} // rightPaneGeom needs a selection
+	m.settings.PaneRatio = "40:40:20"
 	if got := m.leftPaneWidth(); got != 100 {
 		t.Fatalf("50/50: left = %d", got)
 	}
-	m.settings.PaneListPct = 30
+	m.settings.PaneRatio = "24:56:20"
 	if got := m.leftPaneWidth(); got != 60 {
 		t.Fatalf("30/70: left = %d", got)
 	}
@@ -264,42 +265,47 @@ func TestPaneSplitCompact(t *testing.T) {
 	}
 }
 
-// TestPaneListPctBounds: whatever the stored value, neither pane drops
-// below 10% (or the 30-col list / 20-col right / 5-line minimums).
-func TestPaneListPctBounds(t *testing.T) {
+// TestPaneRatioBounds: whatever the ratio, no column drops below its
+// minimum, in every layout, and < / > move 5% between list and work.
+func TestPaneRatioBounds(t *testing.T) {
 	m := newModel(context.Background(), nil, RemoteInfo{})
 	m.store = &memStore{kv: map[string]string{}}
 	m.width, m.height = 200, 40
-
-	for _, pct := range []int{-50, 0, 5, 95, 100, 1000} {
-		m.settings.PaneListPct = pct
-		left := m.leftPaneWidth()
-		if right := m.width - left - 3; left < 30 || right < 20 || left < m.width/10 || right < m.width/10-3 {
-			t.Errorf("pct %d: left %d right %d", pct, left, right)
+	m.sessions = []mdl.Session{{SessionID: "s1"}}
+	m.settings.LayoutMode = "horizontal"
+	for _, ratio := range []string{"1:1:1", "10:80:10", "80:10:10", "10:10:80", "junk"} {
+		for _, tasksOn := range []bool{true, false} {
+			for _, folded := range []bool{true, false} {
+				m.settings.PaneRatio, m.settings.TasksPane, m.settings.ListCollapsed = ratio, tasksOn, folded
+				left, work, tw := m.leftPaneWidth(), m.workWidth(), m.tasksPaneW()
+				right := work - left - 3
+				if right < 20 || (!folded && left < 30) || (tw > 0 && (tw < taskMinW || work+tw+taskSepW != m.width)) {
+					t.Errorf("%s tasks=%v folded=%v: left %d right %d tasks %d", ratio, tasksOn, folded, left, right, tw)
+				}
+			}
 		}
 		listH, rightH := m.verticalSplit(30)
 		if listH < 5 || rightH < 5 || listH+rightH+1 != 30 {
-			t.Errorf("pct %d: vertical %d/%d", pct, listH, rightH)
+			t.Errorf("%s: vertical %d/%d", ratio, listH, rightH)
 		}
 	}
 
-	// < / > step by 5 and stop at the bounds, persisting each change.
-	m.settings.PaneListPct = 50
+	m.settings.PaneRatio = "30:42:28"
 	for range 20 {
 		m.adjustPaneSplit(-5)
 	}
-	if m.settings.PaneListPct != settings.MinPaneListPct {
-		t.Fatalf("shrunk to %d, want %d", m.settings.PaneListPct, settings.MinPaneListPct)
+	if r := m.settings.Ratio(); r.List != settings.MinPaneShare || r.Tasks != 28 {
+		t.Fatalf("shrunk to %v", r)
 	}
 	m.adjustPaneSplit(5)
-	if got := m.store.(*memStore).kv["pane_list_pct"]; got != "15" {
-		t.Fatalf("persisted %q, want 15", got)
+	if got := m.store.(*memStore).kv["pane_ratio"]; got != "15:57:28" {
+		t.Fatalf("persisted %q", got)
 	}
 	for range 20 {
 		m.adjustPaneSplit(5)
 	}
-	if m.settings.PaneListPct != settings.MaxPaneListPct {
-		t.Fatalf("grew to %d, want %d", m.settings.PaneListPct, settings.MaxPaneListPct)
+	if r := m.settings.Ratio(); r.Work != settings.MinPaneShare || r.Tasks != 28 {
+		t.Fatalf("grew to %v", r)
 	}
 }
 
