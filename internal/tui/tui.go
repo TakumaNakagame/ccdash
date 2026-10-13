@@ -106,6 +106,18 @@ type model struct {
 	flash       string
 	lastTick    time.Time
 
+	// The task pane (tasks.go): the list, its selection and scroll, whether
+	// it has the keyboard, the detail view, and the project-only filter.
+	tasks            mdl.TaskList
+	tasksLoaded      bool
+	tasksErr         error
+	taskSel          int
+	taskScroll       int
+	tasksFocus       bool
+	taskDetail       bool
+	taskDetailScroll int
+	tasksProjectOnly bool
+
 	// pending-approval alert state
 	lastPendingTotal int
 	bellPrimed       bool // skip bell on the very first refresh
@@ -760,10 +772,22 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.lastTick = time.Time(msg)
 		m.usageTicks++
+		cmds := []tea.Cmd{m.refresh(), tickCmd(m.tickInterval())}
 		if m.usageTicks%usageEvery == 1 {
-			return m, tea.Batch(m.refresh(), tickCmd(m.tickInterval()), m.usageCmd())
+			cmds = append(cmds, m.usageCmd())
 		}
-		return m, tea.Batch(m.refresh(), tickCmd(m.tickInterval()))
+		if m.tasksWanted() && m.usageTicks%taskEvery == 1 {
+			cmds = append(cmds, m.loadTasksCmd())
+		}
+		return m, tea.Batch(cmds...)
+	case tasksMsg:
+		m.applyTasks(msg)
+	case taskEditedMsg:
+		if msg.err != nil {
+			m.flash = "task: " + msg.err.Error()
+		} else if msg.flash != "" {
+			m.flash = msg.flash
+		}
 	case usageMsg:
 		t := msg.today
 		m.usageToday = &t
@@ -957,6 +981,12 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modalOpen() && m.pane == paneSessions {
 			return m, nil // a picker / confirmation owns input
 		}
+		if msg.Button == tea.MouseLeft && m.mouseInTasksPane(msg.Mouse()) {
+			return m, m.clickTasks(msg.Mouse())
+		}
+		if msg.Button == tea.MouseLeft && m.tasksFocus && m.pane == paneSessions {
+			m.setTasksFocus(false)
+		}
 		if msg.Button == tea.MouseLeft && m.gridOpen && m.pane == paneSessions {
 			return m, m.clickGrid(msg.Mouse())
 		}
@@ -1130,6 +1160,10 @@ func (m *model) handleMouse(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	mm := msg.Mouse()
+	if m.mouseInTasksPane(mm) {
+		m.wheelTasks(msg.Button == tea.MouseWheelUp)
+		return m, nil
+	}
 	if m.pane == paneSessions && m.gridOpen {
 		m.gridWheel(mm)
 		return m, nil
@@ -1243,6 +1277,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if m.tasksFocus && m.pane == paneSessions {
+		if cmd, ok := m.handleTasksKey(msg); ok {
+			return m, cmd
+		}
+	}
 	if m.gridOpen {
 		if cmd, ok := m.handleKeyGrid(msg); ok {
 			return m, cmd
@@ -1251,6 +1290,17 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, m.quit()
+	case "w":
+		return m, m.toggleTasksPane()
+	case "W":
+		if !m.settings.TasksPane && !m.useVerticalLayout() {
+			cmd := m.toggleTasksPane()
+			return m, tea.Batch(cmd, m.setTasksFocus(true))
+		}
+		return m, m.setTasksFocus(!m.tasksFocus)
+	case "b":
+		m.toggleListCollapsed()
+		return m, nil
 	case "j", "down":
 		return m, m.moveWrap(1, msg.IsRepeat)
 	case "k", "up":
@@ -1981,7 +2031,7 @@ func (m *model) mouseInRightPane(mm tea.Mouse) bool {
 		// +1 for the separator row between the list and the transcript.
 		return mm.Y >= bodyTop+listH+1
 	}
-	return mm.X >= m.leftPaneWidth()+3 // 3-col vertical separator
+	return mm.X >= m.leftPaneWidth()+3 && mm.X < m.workWidth() // 3-col vertical separator
 }
 
 // tailHalfPage approximates half the right pane's visible height. We don't
@@ -3287,6 +3337,12 @@ func (m *model) renderFooter() string {
 	} else if m.pane == paneSessions && m.gridOpen {
 		keys = "hjkl/tab move  enter type / open  space choose  V/esc close  e ! cmd  a/A/d allow/keep/deny  o transcript  ? help  q quit"
 	}
+	if m.pane == paneSessions && m.tasksFocus {
+		keys = "j/k select  space done  s status  c cancel  1-4/0 plan  [ ] order  enter detail  y copy #N  n new session  f project  x archive  esc back  ? help  q quit"
+		if m.taskDetail {
+			keys = "j/k scroll  y copy #N  esc back  ? help  q quit"
+		}
+	}
 	if m.showArchived {
 		keys = "↑/↓ select  enter attach  x unarchive  X back to active  o transcript  ? help  q quit"
 	}
@@ -3458,7 +3514,7 @@ func (m *model) renderBody(height int) string {
 		return m.renderReleaseNotesBody(height)
 	default:
 		if m.gridOpen {
-			return m.renderGridBody(height)
+			return m.withTasksPane(m.renderGridBody(height), height)
 		}
 		return m.renderSessionsBody(height)
 	}
@@ -3832,8 +3888,12 @@ func (m *model) renderSettingsBody(height int) string {
 // The list keeps 30 cols and the right pane 20 (after the 3-col
 // separator); on a terminal too narrow for both, the list wins.
 func (m *model) leftPaneWidth() int {
-	w := m.width * settings.ClampPaneListPct(m.settings.PaneListPct) / 100
-	w = min(w, m.width-3-20)
+	if m.settings.ListCollapsed {
+		return collapsedListW
+	}
+	work := m.workWidth()
+	w := work * settings.ClampPaneListPct(m.settings.PaneListPct) / 100
+	w = min(w, work-3-20)
 	return max(w, 30)
 }
 
@@ -3857,11 +3917,16 @@ func (m *model) renderSessionsBody(height int) string {
 	// Reserve 3 cols for " │ " separator.
 	const sepW = 3
 	leftWidth := m.leftPaneWidth()
-	rightWidth := m.width - leftWidth - sepW
+	rightWidth := m.workWidth() - leftWidth - sepW
 	if rightWidth < 20 {
 		rightWidth = 20
 	}
-	left := m.renderSessionsList(leftWidth, height)
+	var left string
+	if m.settings.ListCollapsed {
+		left = m.renderCollapsedList(leftWidth, height)
+	} else {
+		left = m.renderSessionsList(leftWidth, height)
+	}
 	right := m.renderEventsList(rightWidth, height)
 	// Build a vertical separator: " │ " repeated per row, joined with \n.
 	sepLine := " " + subtitleStyle.Render("│") + " "
@@ -3870,7 +3935,7 @@ func (m *model) renderSessionsBody(height int) string {
 		sepLines[i] = sepLine
 	}
 	sep := strings.Join(sepLines, "\n")
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, sep, right)
+	return m.withTasksPane(lipgloss.JoinHorizontal(lipgloss.Top, left, sep, right), height)
 }
 
 // useVerticalLayout returns true when the body should stack vertically.
@@ -3897,7 +3962,12 @@ func (m *model) useVerticalLayout() bool {
 // or tall terminals where horizontal width is the scarce resource.
 func (m *model) renderSessionsBodyVertical(height int) string {
 	listH, rightH := m.verticalSplit(height)
-	list := m.renderSessionsList(m.width, listH)
+	var list string
+	if m.tasksInListSlot() {
+		list = m.renderTasksPane(m.width, listH)
+	} else {
+		list = m.renderSessionsList(m.width, listH)
+	}
 	right := m.renderEventsList(m.width, rightH)
 	// Use ASCII '-' rather than the box-drawing '─' so we don't get bitten
 	// by terminals that disagree with runewidth on the East-Asian

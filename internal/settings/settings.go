@@ -70,6 +70,12 @@ type Settings struct {
 	// The right (work) pane gets the rest. Clamped to
 	// [MinPaneListPct, MaxPaneListPct] so neither pane can vanish.
 	PaneListPct int
+	// TasksPane shows the to-do list as a third column (w); PaneTasksPct
+	// is its width in percent of the terminal. ListCollapsed folds the
+	// session list to a strip of numbers (b).
+	TasksPane     bool
+	PaneTasksPct  int
+	ListCollapsed bool
 	// InvertListScroll flips the mouse wheel over the session list: wheel
 	// down moves the selection up and vice versa. The right pane keeps
 	// its normal direction.
@@ -122,6 +128,9 @@ const (
 	keyNewSessionDir     = "new_session_dir"
 	keyTrustedDirs       = "trusted_dirs"
 	keyPaneListPct       = "pane_list_pct"
+	keyTasksPane         = "tasks_pane"
+	keyPaneTasksPct      = "pane_tasks_pct"
+	keyListCollapsed     = "list_collapsed"
 	// legacyKeyPaneSplit was the "50/50" / "30/70" enum PaneListPct
 	// replaced; Load folds it in once.
 	legacyKeyPaneSplit  = "pane_split"
@@ -155,6 +164,8 @@ func Defaults() Settings {
 		RefreshIntervalMs: 1000,
 
 		PaneListPct:   50,
+		TasksPane:     true,
+		PaneTasksPct:  28,
 		TimeFormat:    "relative",
 		UpdateChannel: "stable",
 
@@ -199,6 +210,9 @@ func loadPairs(out *Settings) []loadPair {
 		{keyTrustedDirs, func(v string) { out.TrustedDirs = v }},
 		{keyPaneListPct, func(v string) { out.PaneListPct = ClampPaneListPct(parseInt(v, out.PaneListPct)) }},
 		{keyInvertListScroll, func(v string) { out.InvertListScroll = parseBool(v, out.InvertListScroll) }},
+		{keyTasksPane, func(v string) { out.TasksPane = parseBool(v, out.TasksPane) }},
+		{keyPaneTasksPct, func(v string) { out.PaneTasksPct = ClampPaneTasksPct(parseInt(v, out.PaneTasksPct)) }},
+		{keyListCollapsed, func(v string) { out.ListCollapsed = parseBool(v, out.ListCollapsed) }},
 		{keyAutoArchiveDays, func(v string) { out.AutoArchiveDays = parseInt(v, out.AutoArchiveDays) }},
 		{keyAutoTitle, func(v string) { out.AutoTitle = parseBool(v, out.AutoTitle) }},
 		{keyTimeFormat, func(v string) {
@@ -269,6 +283,9 @@ const (
 	MinPaneListPct = 10
 	MaxPaneListPct = 90
 )
+
+// ClampPaneTasksPct keeps the task pane between 15% and 50% of the width.
+func ClampPaneTasksPct(pct int) int { return min(max(pct, 15), 50) }
 
 // ClampPaneListPct forces pct into [MinPaneListPct, MaxPaneListPct].
 func ClampPaneListPct(pct int) int {
@@ -357,6 +374,9 @@ func AllSpecs() []Spec {
 		{Key: keyWorkAnim, Label: "Working animation", Help: "Run a light round the edge of sessions that are working — list rows and grid tiles (the spinner stays either way)", Kind: KindBool},
 		{Key: keyLayoutMode, Label: "Vertical layout", Help: "Auto = pick from terminal width (vertical when narrow). On = always vertical. Off = always horizontal (side-by-side).", Kind: KindEnum, Options: []string{"auto", "on", "off"}},
 		{Key: keyPaneListPct, Label: "Session list size (%)", Help: "Share of the screen the session list takes (width side-by-side, height when vertical); the work pane gets the rest. 30 = compact list, wide work pane. Also adjustable with < / > on the dashboard.", Kind: KindInt, Min: MinPaneListPct, Max: MaxPaneListPct},
+		{Key: keyTasksPane, Label: "Task pane", Help: "Show the to-do list as a column on the right of the dashboard and the grid (also w).", Kind: KindBool},
+		{Key: keyPaneTasksPct, Label: "Task pane size (%)", Help: "Width of the task pane in percent of the terminal.", Kind: KindInt, Min: 15, Max: 50},
+		{Key: keyListCollapsed, Label: "Collapse session list", Help: "Fold the session list to a strip of session numbers (also b); j/k still move the selection.", Kind: KindBool},
 		{Key: keyInvertListScroll, Label: "Invert list scroll", Help: "Reverse the mouse wheel over the session list (wheel down moves the selection up). The right pane is unaffected.", Kind: KindBool},
 		{Key: keyTimeFormat, Label: "Session time", Help: "How the session list shows each session's last prompt time: relative (4m, 2h) or absolute (09/30 18:45).", Kind: KindEnum, Options: []string{"relative", "absolute"}},
 		{Key: keyUpdateChannel, Label: "Update channel", Help: "What the update check, u and `ccdash update` follow: stable = tagged releases only, dev = pre-releases (rc) too.", Kind: KindEnum, Options: []string{"stable", "dev"}},
@@ -410,6 +430,12 @@ func Get(s Settings, key string) any {
 		return s.NewestAtBottom
 	case keyWorkAnim:
 		return s.WorkAnim
+	case keyTasksPane:
+		return s.TasksPane
+	case keyPaneTasksPct:
+		return s.PaneTasksPct
+	case keyListCollapsed:
+		return s.ListCollapsed
 	case keyLayoutMode:
 		// Surface the field as the user-facing label ("on"/"off") even
 		// though we store "vertical"/"horizontal" internally. The Set
@@ -472,6 +498,13 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.NewestAtBottom = value.(bool)
 	case keyWorkAnim:
 		s.WorkAnim = value.(bool)
+	case keyTasksPane:
+		s.TasksPane = value.(bool)
+	case keyPaneTasksPct:
+		value = ClampPaneTasksPct(value.(int))
+		s.PaneTasksPct = value.(int)
+	case keyListCollapsed:
+		s.ListCollapsed = value.(bool)
 	case keyLayoutMode:
 		mode := value.(string)
 		// Translate the user-facing labels to the canonical storage form.

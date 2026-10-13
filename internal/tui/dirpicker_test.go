@@ -240,6 +240,7 @@ func TestPaneSplitCompact(t *testing.T) {
 	m := newModel(context.Background(), nil, RemoteInfo{})
 	m.width, m.height = 200, 40
 	m.settings.LayoutMode = "horizontal"
+	m.settings.TasksPane = false                  // TestTasksPaneLayout covers three columns
 	m.sessions = []mdl.Session{{SessionID: "s1"}} // rightPaneGeom needs a selection
 	if got := m.leftPaneWidth(); got != 100 {
 		t.Fatalf("50/50: left = %d", got)

@@ -149,7 +149,7 @@ func gridBelow(rects []rect, i, dir int) int {
 // working, finished unseen) — capped to what fits.
 func (m *model) gridSessions() []int {
 	_, bodyH := m.bodyLayout()
-	limit := gridCapacity(m.width, bodyH)
+	limit := gridCapacity(m.workWidth(), bodyH)
 	var out []int
 	for i, s := range m.sessions {
 		if s.Grid {
@@ -250,7 +250,7 @@ func (m *model) handleKeyGrid(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		return nil, false
 	}
 	_, bodyH := m.bodyLayout()
-	rects := gridRects(len(tiles), m.width, bodyH)
+	rects := gridRects(len(tiles), m.workWidth(), bodyH)
 	cur := max(0, indexOf(tiles, m.selSess))
 	next := cur
 	switch msg.String() {
@@ -365,10 +365,10 @@ func (m *model) applyGridTail(msg gridTailMsg) {
 // renderGridBody draws the tiles over the whole body.
 func (m *model) renderGridBody(height int) string {
 	tiles := m.gridSessions()
-	rects := gridRects(len(tiles), m.width, height)
+	rects := gridRects(len(tiles), m.workWidth(), height)
 	canvas := make([]string, height)
 	for i := range canvas {
-		canvas[i] = strings.Repeat(" ", m.width)
+		canvas[i] = strings.Repeat(" ", m.workWidth())
 	}
 	for i, r := range rects {
 		s := m.sessions[tiles[i]]
@@ -378,7 +378,7 @@ func (m *model) renderGridBody(height int) string {
 				break
 			}
 			row := canvas[r.y+j]
-			canvas[r.y+j] = ansi.Cut(row, 0, r.x) + line + ansi.Cut(row, r.x+ansi.StringWidth(line), m.width)
+			canvas[r.y+j] = ansi.Cut(row, 0, r.x) + line + ansi.Cut(row, r.x+ansi.StringWidth(line), m.workWidth())
 		}
 	}
 	return strings.Join(canvas, "\n")

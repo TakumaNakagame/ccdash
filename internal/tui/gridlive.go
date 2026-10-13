@@ -64,7 +64,7 @@ func (m *model) gridWant() map[string]paneGeom {
 	}
 	_, bodyH := m.bodyLayout()
 	tiles := m.gridSessions()
-	for i, r := range gridRects(len(tiles), m.width, bodyH) {
+	for i, r := range gridRects(len(tiles), m.workWidth(), bodyH) {
 		key := m.gridLiveKey(m.sessions[tiles[i]])
 		if key == "" {
 			continue
@@ -247,7 +247,7 @@ func (m *model) handleGridTypingKey(msg tea.KeyPressMsg) tea.Cmd {
 func (m *model) gridTileAt(mm tea.Mouse) (int, rect, bool) {
 	bodyTop, bodyH := m.bodyLayout()
 	tiles := m.gridSessions()
-	for i, r := range gridRects(len(tiles), m.width, bodyH) {
+	for i, r := range gridRects(len(tiles), m.workWidth(), bodyH) {
 		if mm.X >= r.x && mm.X < r.x+r.w && mm.Y >= bodyTop+r.y && mm.Y < bodyTop+r.y+r.h {
 			return i, r, true
 		}
@@ -289,7 +289,7 @@ func (m *model) gridCursor() *tea.Cursor {
 	bodyTop, bodyH := m.bodyLayout()
 	tiles := m.gridSessions()
 	i := indexOf(tiles, m.selSess)
-	rects := gridRects(len(tiles), m.width, bodyH)
+	rects := gridRects(len(tiles), m.workWidth(), bodyH)
 	if i < 0 || i >= len(rects) {
 		return nil
 	}

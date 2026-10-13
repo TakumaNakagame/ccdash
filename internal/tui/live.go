@@ -160,7 +160,7 @@ func (m *model) rightPaneGeom() (g paneGeom, ok bool) {
 		return paneGeom{x: 0, y: bodyTop + listH + 1, w: m.width, h: rightH}, true
 	}
 	leftW := m.leftPaneWidth()
-	rightW := m.width - leftW - 3
+	rightW := m.workWidth() - leftW - 3
 	if rightW < 20 {
 		rightW = 20
 	}
@@ -436,6 +436,9 @@ func (m *model) closeLive() {
 // setLiveFocus routes keystrokes to claude (true) or the dashboard (false).
 func (m *model) setLiveFocus(on bool) {
 	m.liveFocus = on
+	if on {
+		m.tasksFocus = false
+	}
 }
 
 // handleLiveKey forwards a key press to the focused live session, except
