@@ -54,7 +54,7 @@ func TestTaskRoutesThroughRemote(t *testing.T) {
 	if err != nil || len(res.Added) != 1 {
 		t.Fatalf("sync = %+v %v", res, err)
 	}
-	if c, err := r.TaskContext(ctx); err != nil || len(c.Tasks) != 1 || c.Tasks[0].Key != "K-2" {
+	if c, err := r.TaskContext(ctx); err != nil || len(c.Tasks) != 1 || c.Tasks[0].Key != "K-2" || len(c.Projects) != 1 {
 		t.Fatalf("context = %+v %v", c, err)
 	}
 	if err := r.OrderTasks(ctx, []int64{2}); err != nil {

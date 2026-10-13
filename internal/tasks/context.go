@@ -20,6 +20,9 @@ type Context struct {
 	Now   string        `json:"now"`
 	Today string        `json:"today"`
 	Tasks []ContextTask `json:"tasks"`
+	// Projects are the ccdash projects a new task may name (a sync drops
+	// any other project).
+	Projects []string `json:"projects"`
 }
 
 // ContextTask is one open task in a Context.
@@ -78,7 +81,7 @@ func BuildContext(all []model.Task, lastSync string, now time.Time) Context {
 		since = Stamp(now.Add(-24 * time.Hour))
 	}
 	today := DateString(Day(now))
-	out := Context{Since: since, Now: Stamp(now), Today: today, Tasks: []ContextTask{}}
+	out := Context{Since: since, Now: Stamp(now), Today: today, Tasks: []ContextTask{}, Projects: []string{}}
 	for _, t := range all {
 		if t.Finished() || t.Archived {
 			continue

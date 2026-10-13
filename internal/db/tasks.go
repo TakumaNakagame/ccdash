@@ -534,5 +534,15 @@ func (d *DB) TaskContext(ctx context.Context) (tasks.Context, error) {
 	if err != nil {
 		return tasks.Context{}, err
 	}
-	return tasks.BuildContext(ts, last, time.Now()), nil
+	c := tasks.BuildContext(ts, last, time.Now())
+	ps, err := d.ListProjects(ctx)
+	if err != nil {
+		return c, err
+	}
+	for _, p := range ps {
+		if p.Name != "" {
+			c.Projects = append(c.Projects, p.Name)
+		}
+	}
+	return c, nil
 }
