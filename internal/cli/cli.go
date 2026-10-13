@@ -643,7 +643,8 @@ It never stops claude or answers approvals; --read-only keeps only the viewing t
 
 (append -r to read the remote collector configured with 'ccdash remote set').
 When this machine is joined to a hub ('ccdash hub join'), sessions carry a "url" that
-opens their chat in the hub portal; --hub-url sets or overrides that origin.`,
+opens their chat in the hub portal — or, failing that, in a running 'ccdash web';
+--hub-url sets or overrides that origin.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// stdout carries the protocol; keep logs off it.
 			log.SetOutput(os.Stderr)
@@ -656,6 +657,9 @@ opens their chat in the hub portal; --hub-url sets or overrides that origin.`,
 				if hc, err := hubcfg.Load(); err == nil {
 					hubURL = hc.URL
 				}
+			}
+			if hubURL == "" {
+				hubURL = localPortalURL() // a machine on 'ccdash web' only
 			}
 			return mcpserver.New(st, version, readOnly).WithHubURL(hubURL).Serve(cmd.Context(), os.Stdin, os.Stdout)
 		},

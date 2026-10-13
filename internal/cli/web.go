@@ -84,6 +84,29 @@ func webLoginFile() (string, error) {
 	return filepath.Join(sd, "web-login"), nil
 }
 
+// webURLFile holds the running local portal's origin, so `ccdash mcp` on a
+// machine that never joined a hub can still hand out session links.
+func webURLFile() (string, error) {
+	sd, err := paths.StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(sd, "web-url"), nil
+}
+
+// localPortalURL is the origin of a running `ccdash web`, or "".
+func localPortalURL() string {
+	f, err := webURLFile()
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(f)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
 func runWeb(parent context.Context, port int, collector string, openIt bool) error {
 	sd, err := paths.StateDir()
 	if err != nil {
@@ -114,6 +137,10 @@ func runWeb(parent context.Context, port int, collector string, openIt bool) err
 	defer h.Close()
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- h.Serve(ctx, ln) }()
+
+	if f, err := webURLFile(); err == nil && os.WriteFile(f, []byte("http://"+listen+"\n"), 0o600) == nil {
+		defer os.Remove(f)
+	}
 
 	log.Printf("ccdash web %s on http://%s (loopback only)", buildinfo.Version, listen)
 	if openIt {

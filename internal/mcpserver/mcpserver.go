@@ -47,8 +47,9 @@ set_grid, set_pinned, set_color, mark_seen, set_archived, archive_finished) chan
 projects are just names, created on first use.
 start_session opens a new claude session in a directory (optionally in a project, with a
 first prompt); the operator sees and drives it in ccdash.
-When this machine is joined to a ccdash hub, each session carries "url": a link that opens
-that session's chat in the hub portal (browser or installed app). Put it next to a session
+When this machine is joined to a ccdash hub (or runs the local portal, ccdash web), each
+session carries "url": a link that opens that session's chat in the portal (browser or
+installed app). Put it next to a session
 whenever you list sessions for the operator, e.g. the ones that need them.
 
 Status rule — follow it in every session that has these tools: the operator juggles many
