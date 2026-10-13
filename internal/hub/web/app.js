@@ -1219,8 +1219,13 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
 }
 
 function renderApprovals(el, id, aps, sessions) {
-  if (!aps?.length) { el.replaceChildren(); return; }
   const byId = new Map(sessions.map((s) => [s.session_id, s]));
+  // Polled: redraw only when the list changes, so a scrolled tool input or
+  // a selection in it stays put.
+  const sig = JSON.stringify((aps || []).map((a) => [a.id, byId.has(a.session_id) ? sessionTitle(byId.get(a.session_id)) : ""]));
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  if (!aps?.length) { el.replaceChildren(); return; }
   el.replaceChildren(h("h2", {}, `承認待ち (${aps.length})`), ...aps.map((a) => {
     const s = byId.get(a.session_id);
     let input = "";
@@ -3158,24 +3163,70 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     }
   }
 
+  // render runs on every poll, so it must not rebuild what didn't change:
+  // a rebuilt node closes the <details> the operator opened, drops the
+  // focus / IME composition of an input in it and jumps the scroll. Nodes
+  // are kept by a signature of what they show and reused while it holds;
+  // a tool card rebuilt for its result keeps the open state it had.
+  let shown = new Map(); // signature → nodes drawn by the last render
+  const sigs = new WeakMap(); // item → JSON (items are only mutated inside parseTranscript)
+  const toolOpen = new Map(); // tool_use id → open, as the operator left it
+  log.addEventListener("toggle", (e) => {
+    const k = e.target.dataset?.tool;
+    if (k) toolOpen.set(k, e.target.open);
+  }, true);
+  const sigOf = (it) => {
+    let s = sigs.get(it);
+    if (s == null) { s = JSON.stringify(it); sigs.set(it, s); }
+    // A subagent's record button appears once its files are found.
+    return (it.name === "Agent" || it.name === "Task") && askCtx.agentFor(it.id) ? s + "\0agent" : s;
+  };
   const render = (stick) => {
     if (deferWhileSelecting(log, () => render(atBottom()))) return;
-    const nodes = items.map((it) => renderItem(it, askCtx)).filter(Boolean);
+    const next = new Map();
+    const keep = (sig, build) => {
+      const node = shown.get(sig)?.shift() || build();
+      if (!node) return null;
+      if (!next.has(sig)) next.set(sig, []);
+      next.get(sig).push(node);
+      return node;
+    };
+    const nodes = items.map((it) => {
+      // A pending question's card is cached by askCard itself (its picks
+      // and typed text live in it); renderItem refreshes its button.
+      if (it.kind === "tool" && it.name === "AskUserQuestion" && it.result == null) return renderItem(it, askCtx);
+      return keep("i" + sigOf(it), () => {
+        const el = renderItem(it, askCtx);
+        if (el?.tagName === "DETAILS" && it.kind === "tool" && it.id) {
+          el.dataset.tool = it.id;
+          if (toolOpen.has(it.id)) el.open = toolOpen.get(it.id);
+        }
+        return el;
+      });
+    }).filter(Boolean);
     if (hasOlder && nodes.length) {
-      nodes.unshift(h("button", { class: "btn older", disabled: loadingOlder, onclick: loadOlder },
-        loadingOlder ? "読み込み中…" : "↑ 古い履歴を読み込む"));
+      nodes.unshift(keep("o" + loadingOlder, () => h("button", { class: "btn older", disabled: loadingOlder, onclick: loadOlder },
+        loadingOlder ? "読み込み中…" : "↑ 古い履歴を読み込む")));
     }
     pendingSends = pendingSends.filter((p) => Date.now() - p.at < 120000);
-    for (const p of pendingSends) nodes.push(h("div", { class: "bubble user pending" }, p.text));
-    if (!nodes.length) nodes.push(h("div", { class: "empty" }, ptyKey && !sid ? "claude を起動しました。メッセージを送って始めましょう。" : "まだメッセージがありません。"));
+    for (const p of pendingSends) nodes.push(keep("p" + p.at + p.text, () => h("div", { class: "bubble user pending" }, p.text)));
+    if (!nodes.length) {
+      const msg = ptyKey && !sid ? "claude を起動しました。メッセージを送って始めましょう。" : "まだメッセージがありません。";
+      nodes.push(keep("e" + msg, () => h("div", { class: "empty" }, msg)));
+    }
     if (session?.status === "active") {
       // Working: the dots, and the tool running right now (a long tool call
       // otherwise looks like nothing is happening).
       const last = items.filter((x) => x.kind === "tool").pop();
-      nodes.push(h("div", { class: "working-line" }, h("div", { class: "typing" }, h("span"), h("span"), h("span")),
-        last && last.result == null ? h("span", { class: "muted small mono" }, "実行中: " + toolLabel(last)) : null));
+      const running = last && last.result == null ? "実行中: " + toolLabel(last) : "";
+      nodes.push(keep("w" + running, () => h("div", { class: "working-line" }, h("div", { class: "typing" }, h("span"), h("span"), h("span")),
+        running ? h("span", { class: "muted small mono" }, running) : null)));
     }
-    log.replaceChildren(...nodes);
+    shown = next;
+    // Put each node in place, moving only what is out of place (moving a
+    // node blurs an input inside it), then drop what is left over.
+    nodes.forEach((n, i) => { if (log.children[i] !== n) log.insertBefore(n, log.children[i] || null); });
+    while (log.children.length > nodes.length) log.lastElementChild.remove();
     if (stick) scroller.scrollTop = scroller.scrollHeight;
   };
 
@@ -3375,15 +3426,26 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
       const scr = await d.get(`/pty/${encodeURIComponent(ptyKey)}/text`).catch(() => null);
       const askPending = items.some((x) => x.kind === "tool" && x.name === "AskUserQuestion" && x.result == null);
       const pr = scr && !askPending && screenPrompt(scr.rows);
-      if (!pr) promptEl.replaceChildren();
-      else if (promptEl.dataset.key !== pr.key) {
+      if (!scr) {
+        // The screen read failed (a blip): keep the card, and whatever is
+        // being typed into it, until a read says the dialog is gone.
+      } else if (!pr) {
+        promptEl.replaceChildren();
+        delete promptEl.dataset.key;
+      } else if (promptEl.dataset.key !== pr.key) {
         promptEl.dataset.key = pr.key;
+        // The same dialog redrawn (a multi-select tick, a tab marked done):
+        // carry the free-text answer and its focus over to the new card.
+        const prev = promptEl.querySelector(".ask-other");
+        const typed = prev?.value || "", focused = !!prev && document.activeElement === prev;
         promptEl.replaceChildren(pr.kind === "ask" ? askScreenCard(pr, keys, d, ptyKey) : h("div", { class: "approval" },
           h("div", { class: "row" }, h("b", { class: "grow" }, pr.title), h("button", { class: "btn small", onclick: () => keys("\x1b") }, "Esc")),
           (() => { const pre = h("pre", { class: "mono screen" }, pr.context); requestAnimationFrame(() => (pre.scrollTop = pre.scrollHeight)); return pre; })(),
           h("div", { class: "opts" }, pr.options.map((o) => h("button", { class: "btn", onclick: () => keys(o.keys) }, o.label)))));
+        const nextOther = promptEl.querySelector(".ask-other");
+        if (nextOther && typed) nextOther.value = typed;
+        if (nextOther && focused) nextOther.focus();
       }
-      if (!pr) delete promptEl.dataset.key;
     } else {
       promptEl.replaceChildren();
     }
