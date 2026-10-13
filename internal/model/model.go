@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,28 +18,34 @@ const (
 )
 
 type Session struct {
-	SessionID      string    `json:"session_id"`
-	Cwd            string    `json:"cwd"`
-	Repo           string    `json:"repo,omitempty"`
-	Branch         string    `json:"branch,omitempty"`
-	Commit         string    `json:"commit,omitempty"`
-	WrapperPID     int       `json:"wrapper_pid,omitempty"`
-	ProcPID        int       `json:"proc_pid,omitempty"`
-	Pane           string    `json:"pane,omitempty"`
-	TmuxPane       string    `json:"tmux_pane,omitempty"`
-	TmuxSession    string    `json:"tmux_session,omitempty"`
-	TranscriptPath string    `json:"transcript_path,omitempty"`
-	Model          string    `json:"model,omitempty"`
-	Num            int64     `json:"num,omitempty"`       // short sequential ID shown as "#N"; unique, assigned on insert
-	Title          string    `json:"title,omitempty"`     // auto-derived from transcript (first prompt)
-	GenTitle       string    `json:"gen_title,omitempty"` // claude -p generated title (ctrl+t); beats Title
-	GenTitleAt     time.Time `json:"gen_title_at,omitempty"`
-	TitleStatus    string    `json:"title_status,omitempty"` // "", "running", "done", "error" for title generation
-	CustomTitle    string    `json:"custom_title,omitempty"` // operator override; takes precedence
-	UserGroup      string    `json:"user_group,omitempty"`   // operator-named group; overrides repo-based grouping. Rendered as a tab in the strip.
-	Account        string    `json:"account,omitempty"`      // account name from accounts.json (e.g. "personal", "enterprise")
-	Archived       bool      `json:"archived,omitempty"`
-	Favorite       bool      `json:"favorite,omitempty"` // shown as "pinned" in the UIs
+	SessionID      string `json:"session_id"`
+	Cwd            string `json:"cwd"`
+	Repo           string `json:"repo,omitempty"`
+	Branch         string `json:"branch,omitempty"`
+	Commit         string `json:"commit,omitempty"`
+	WrapperPID     int    `json:"wrapper_pid,omitempty"`
+	ProcPID        int    `json:"proc_pid,omitempty"`
+	Pane           string `json:"pane,omitempty"`
+	TmuxPane       string `json:"tmux_pane,omitempty"`
+	TmuxSession    string `json:"tmux_session,omitempty"`
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	Model          string `json:"model,omitempty"`
+	// Entrypoint is how claude was last started: "cli" for an interactive
+	// session, "sdk-cli" etc. for `claude -p` (see Headless).
+	Entrypoint string `json:"entrypoint,omitempty"`
+	// HideHeadless is an upsert input, not a column: file the row as
+	// auto-archived when it is first seen to be headless.
+	HideHeadless bool      `json:"-"`
+	Num          int64     `json:"num,omitempty"`       // short sequential ID shown as "#N"; unique, assigned on insert
+	Title        string    `json:"title,omitempty"`     // auto-derived from transcript (first prompt)
+	GenTitle     string    `json:"gen_title,omitempty"` // claude -p generated title (ctrl+t); beats Title
+	GenTitleAt   time.Time `json:"gen_title_at,omitempty"`
+	TitleStatus  string    `json:"title_status,omitempty"` // "", "running", "done", "error" for title generation
+	CustomTitle  string    `json:"custom_title,omitempty"` // operator override; takes precedence
+	UserGroup    string    `json:"user_group,omitempty"`   // operator-named group; overrides repo-based grouping. Rendered as a tab in the strip.
+	Account      string    `json:"account,omitempty"`      // account name from accounts.json (e.g. "personal", "enterprise")
+	Archived     bool      `json:"archived,omitempty"`
+	Favorite     bool      `json:"favorite,omitempty"` // shown as "pinned" in the UIs
 	// PinnedAt is when the session was pinned; pins sort most recent first.
 	PinnedAt      time.Time `json:"pinned_at,omitzero"`
 	ColorOverride string    `json:"color,omitempty"`         // operator-picked "#rrggbb"; see Color
@@ -149,6 +156,12 @@ func (s Session) RecentReply(now time.Time) bool {
 
 // DisplayTitle returns the operator-set title when present, then the
 // generated one (ctrl+t), then the auto-derived first prompt.
+// Headless reports whether an entrypoint is a non-interactive run
+// (`claude -p`, the Agent SDK): "sdk-cli", "sdk-ts", "sdk-py" ….
+func Headless(entrypoint string) bool {
+	return strings.HasPrefix(entrypoint, "sdk-")
+}
+
 func (s Session) DisplayTitle() string {
 	if s.CustomTitle != "" {
 		return s.CustomTitle

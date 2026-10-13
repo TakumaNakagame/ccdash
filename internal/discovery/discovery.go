@@ -34,6 +34,9 @@ type Discovered struct {
 	// adding entries, so merely opening a session would bump it. Drives
 	// the active/idle status.
 	LastModified time.Time
+	// Entrypoint is how claude last ran on this transcript: "cli"
+	// (interactive) or "sdk-cli" etc. (`claude -p`); "" if unrecorded.
+	Entrypoint string
 	// LastPrompt is when the operator last typed a prompt (falls back to
 	// LastModified). This is the session's time in the list.
 	LastPrompt time.Time
@@ -103,7 +106,7 @@ func readTranscript(path string) (Discovered, error) {
 	if err != nil {
 		return d, err
 	}
-	d.LastModified, d.LastPrompt = tailTimes(path, info)
+	d.LastModified, d.LastPrompt, d.Entrypoint = tailTimes(path, info)
 	d.Prompts = countPrompts(path, info.Size())
 
 	f, err := os.Open(path)
@@ -162,20 +165,21 @@ type tailEntry struct {
 	mtime      time.Time
 	lastEntry  time.Time
 	lastPrompt time.Time
+	entrypoint string
 }
 
 // tailTimes returns the newest entry timestamp and the newest real user
 // prompt timestamp in the transcript, reading only its tail (transcripts
 // can be tens of MB). lastEntry falls back to the mtime, lastPrompt to
 // lastEntry, when not found.
-func tailTimes(path string, info os.FileInfo) (lastEntry, lastPrompt time.Time) {
+func tailTimes(path string, info os.FileInfo) (lastEntry, lastPrompt time.Time, entrypoint string) {
 	tailMu.Lock()
 	c, ok := tailCache[path]
 	tailMu.Unlock()
 	if ok && c.size == info.Size() && c.mtime.Equal(info.ModTime()) {
-		return c.lastEntry, c.lastPrompt
+		return c.lastEntry, c.lastPrompt, c.entrypoint
 	}
-	lastEntry, lastPrompt = scanTail(path, info.Size())
+	lastEntry, lastPrompt, entrypoint = scanTail(path, info.Size())
 	if lastEntry.IsZero() {
 		lastEntry = info.ModTime()
 	}
@@ -183,9 +187,9 @@ func tailTimes(path string, info os.FileInfo) (lastEntry, lastPrompt time.Time) 
 		lastPrompt = lastEntry
 	}
 	tailMu.Lock()
-	tailCache[path] = tailEntry{size: info.Size(), mtime: info.ModTime(), lastEntry: lastEntry, lastPrompt: lastPrompt}
+	tailCache[path] = tailEntry{size: info.Size(), mtime: info.ModTime(), lastEntry: lastEntry, lastPrompt: lastPrompt, entrypoint: entrypoint}
 	tailMu.Unlock()
-	return lastEntry, lastPrompt
+	return lastEntry, lastPrompt, entrypoint
 }
 
 // promptCache remembers, per transcript, how far countPrompts has read and
@@ -239,7 +243,7 @@ func countPrompts(path string, size int64) int {
 // scanTail reads growing windows from the end of the file until it has
 // seen both an entry timestamp and a real prompt (a long tool run after
 // the last prompt can be megabytes). Capped at 16 MiB.
-func scanTail(path string, size int64) (lastEntry, lastPrompt time.Time) {
+func scanTail(path string, size int64) (lastEntry, lastPrompt time.Time, entrypoint string) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -259,6 +263,9 @@ func scanTail(path string, size int64) (lastEntry, lastPrompt time.Time) {
 			lines = lines[1:] // first line is likely cut mid-way
 		}
 		for i := len(lines) - 1; i >= 0 && lastPrompt.IsZero(); i-- {
+			if entrypoint == "" {
+				entrypoint = entrypointOf(lines[i])
+			}
 			ts, prompt := lineTimes([]byte(lines[i]))
 			if ts.IsZero() {
 				continue
@@ -274,6 +281,21 @@ func scanTail(path string, size int64) (lastEntry, lastPrompt time.Time) {
 			return
 		}
 	}
+}
+
+// entrypointOf pulls the "entrypoint" field out of a transcript line
+// without decoding the rest of it.
+func entrypointOf(line string) string {
+	const key = `"entrypoint":"`
+	i := strings.Index(line, key)
+	if i < 0 {
+		return ""
+	}
+	v := line[i+len(key):]
+	if j := strings.IndexByte(v, '"'); j >= 0 {
+		return v[:j]
+	}
+	return ""
 }
 
 // lineTimes parses one transcript line: its timestamp, and whether it is

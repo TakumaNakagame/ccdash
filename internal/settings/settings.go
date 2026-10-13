@@ -94,6 +94,10 @@ type Settings struct {
 	// AutoTitle titles a session with claude -p by itself after its first
 	// exchange or two (needs SummaryEnabled).
 	AutoTitle bool
+	// HideHeadless files a new `claude -p` session (a script, a scheduled
+	// job) as archived the moment it appears; it comes back when someone
+	// resumes it interactively.
+	HideHeadless bool
 }
 
 const (
@@ -143,6 +147,7 @@ const (
 	keyInvertListScroll = "invert_list_scroll"
 	keyAutoArchiveDays  = "auto_archive_days"
 	keyAutoTitle        = "auto_title"
+	keyHideHeadless     = "hide_headless"
 	// KeyAutoArchiveLast is bookkeeping, not a preference: the local date
 	// (YYYY-MM-DD) the daily auto-archive last ran. Not in AllSpecs.
 	KeyAutoArchiveLast = "auto_archive_last"
@@ -174,6 +179,7 @@ func Defaults() Settings {
 
 		AutoArchiveDays: 7,
 		AutoTitle:       true,
+		HideHeadless:    true,
 	}
 }
 
@@ -221,6 +227,7 @@ func loadPairs(out *Settings) []loadPair {
 		{keyListCollapsed, func(v string) { out.ListCollapsed = parseBool(v, out.ListCollapsed) }},
 		{keyAutoArchiveDays, func(v string) { out.AutoArchiveDays = parseInt(v, out.AutoArchiveDays) }},
 		{keyAutoTitle, func(v string) { out.AutoTitle = parseBool(v, out.AutoTitle) }},
+		{keyHideHeadless, func(v string) { out.HideHeadless = parseBool(v, out.HideHeadless) }},
 		{keyTimeFormat, func(v string) {
 			if v == "relative" || v == "absolute" {
 				out.TimeFormat = v
@@ -466,6 +473,7 @@ func AllSpecs() []Spec {
 		{Key: keyApproveEnabled, Label: "Approval blocking", Help: "When OFF, ccdash never holds PermissionRequest hooks — Claude prompts you in the terminal as it would without ccdash, and the a/A/d shortcuts are disabled", Kind: KindBool},
 		{Key: keySummaryEnabled, Label: "Title generation via claude -p", Help: "When OFF, ctrl+t (generate titles) is disabled and ccdash never spawns claude -p (no transcript digests sent over the network)", Kind: KindBool},
 		{Key: keyAutoTitle, Label: "Auto-generate titles", Help: "Title each session with claude -p by itself after its first exchange or two (needs title generation ON). ctrl+t still re-generates on demand.", Kind: KindBool},
+		{Key: keyHideHeadless, Label: "Hide headless sessions", Help: "File each new claude -p session (scripts, scheduled jobs) as archived right away. Resuming one interactively brings it back.", Kind: KindBool},
 		{Key: keyAttachEnabled, Label: "Attach (enter)", Help: "When OFF, Enter only shows session info — ccdash never spawns claude --resume or runs tmux switch-client", Kind: KindBool},
 		{Key: keyAutoInstallSync, Label: "Auto-rewrite settings.json", Help: "When OFF, server start does NOT silently rewrite ~/.claude/settings.json when the token rotates; you'll need to run install-hooks manually", Kind: KindBool},
 		{Key: keyHubEnabled, Label: "Hub connection", Help: "When OFF, the collector does not connect to the hub joined via `ccdash hub join`, so this machine is unreachable from the web portal", Kind: KindBool},
@@ -561,6 +569,8 @@ func Get(s Settings, key string) any {
 		return s.AutoArchiveDays
 	case keyAutoTitle:
 		return s.AutoTitle
+	case keyHideHeadless:
+		return s.HideHeadless
 	}
 	return nil
 }
@@ -632,6 +642,8 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.AutoArchiveDays = value.(int)
 	case keyAutoTitle:
 		s.AutoTitle = value.(bool)
+	case keyHideHeadless:
+		s.HideHeadless = value.(bool)
 	}
 	return s, persist(ctx, st, key, value)
 }

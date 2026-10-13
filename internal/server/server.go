@@ -402,6 +402,7 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 		}
 		procs, _ := procmap.Snapshot(ctx, acc.Dir)
 		s.aliasPTYsByParent(ctx, procs)
+		hideHeadless := s.hideHeadless(ctx)
 
 		for _, d := range discovered {
 			s.titler.note(d)
@@ -416,9 +417,14 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 				LastActivity: d.LastModified,
 				Status:       classifyStatus(d.LastModified, now, ""),
 				Account:      acc.Name,
+				Entrypoint:   d.Entrypoint,
+				HideHeadless: hideHeadless,
 			}
 			if entry, ok := procs[d.SessionID]; ok {
 				sess.ProcPID = entry.PID
+				if entry.Entrypoint != "" { // the live process beats the transcript
+					sess.Entrypoint = entry.Entrypoint
+				}
 				sess.Pane = entry.Pane
 				if entry.TmuxSession != "" {
 					sess.TmuxSession = entry.TmuxSession
@@ -592,7 +598,11 @@ func (s *Server) ensureSessionAt(r *http.Request, p *hookPayload, status model.S
 		TmuxSession:    headerVal(r, "X-Ccdash-Tmux-Session"),
 		TranscriptPath: p.TranscriptPath,
 		Model:          p.Model,
+		Entrypoint:     headerVal(r, "X-Ccdash-Entrypoint"),
 		Status:         status,
+	}
+	if model.Headless(sess.Entrypoint) {
+		sess.HideHeadless = s.hideHeadless(r.Context())
 	}
 	if activity {
 		// The session is doing something right now.
@@ -609,6 +619,12 @@ func (s *Server) ensureSessionAt(r *http.Request, p *hookPayload, status model.S
 		return s.db.UpsertSessionKeepLastSeen(r.Context(), sess)
 	}
 	return s.db.UpsertSession(r.Context(), sess)
+}
+
+// hideHeadless is the hide_headless setting (its default when unreadable).
+func (s *Server) hideHeadless(ctx context.Context) bool {
+	cfg, _ := settings.Load(ctx, s.db)
+	return cfg.HideHeadless
 }
 
 func (s *Server) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
@@ -893,8 +909,11 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		Summary:   "stop",
 		Payload:   raw,
 	})
-	kind, reason := stopAttention(wait, note)
-	_ = s.db.SetAttention(r.Context(), p.SessionID, kind, reason)
+	// A `claude -p` run finishing isn't a reply anyone waits for.
+	if !model.Headless(headerVal(r, "X-Ccdash-Entrypoint")) {
+		kind, reason := stopAttention(wait, note)
+		_ = s.db.SetAttention(r.Context(), p.SessionID, kind, reason)
+	}
 	writeOK(w, nil)
 }
 

@@ -139,6 +139,7 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN wait_note TEXT`,
 		`ALTER TABLE sessions ADD COLUMN wait_at INTEGER`,
 		`ALTER TABLE sessions ADD COLUMN wait_stopped INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE sessions ADD COLUMN entrypoint TEXT`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -246,6 +247,11 @@ func (d *DB) UpsertDiscoveredSession(ctx context.Context, s *model.Session) erro
 	return d.upsertSession(ctx, s, lastSeenSet)
 }
 
+// headlessClassifyWindow bounds which existing rows a late headless
+// classification may still file away: ones made this recently (by a hook
+// that didn't know the entrypoint), not rows from before the rule.
+const headlessClassifyWindow = time.Hour
+
 // lastSeenMode picks how an upsert treats an existing row's last_seen.
 type lastSeenMode int
 
@@ -263,15 +269,20 @@ func (d *DB) upsertSession(ctx context.Context, s *model.Session, mode lastSeenM
 	if s.LastSeen.IsZero() {
 		s.LastSeen = now
 	}
+	hide := 0
+	if s.HideHeadless && model.Headless(s.Entrypoint) {
+		hide = 1
+	}
+	recent := now.Add(-headlessClassifyWindow).Unix()
 	_, err := d.sql.ExecContext(ctx, `
 		INSERT INTO sessions (session_id, cwd, repo, branch, commit_hash,
 		                     wrapper_pid, proc_pid, pane,
 		                     tmux_pane, tmux_session, transcript_path, model, title,
 		                     first_seen, last_seen, status, account, num,
-		                     last_activity, seen_at)
+		                     last_activity, seen_at, entrypoint, archived, auto_archived)
 		VALUES (?, ?, ?, ?, ?,  ?, ?, ?,  ?, ?, ?, ?, ?,  ?, ?, ?, ?,
 		        (SELECT COALESCE(MAX(num), 0) + 1 FROM sessions),
-		        NULLIF(?, 0), ?)
+		        NULLIF(?, 0), ?, NULLIF(?, ''), ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			cwd = COALESCE(NULLIF(excluded.cwd,''), sessions.cwd),
 			repo = COALESCE(NULLIF(excluded.repo,''), sessions.repo),
@@ -289,19 +300,35 @@ func (d *DB) upsertSession(ctx context.Context, s *model.Session, mode lastSeenM
 			status = excluded.status,
 			account = COALESCE(NULLIF(excluded.account,''), sessions.account),
 			last_activity = MAX(COALESCE(excluded.last_activity,0), COALESCE(sessions.last_activity,0)),
-			archived = CASE WHEN COALESCE(sessions.auto_archived,0) = 1
-			                 AND (excluded.status IN ('active','idle') OR excluded.last_seen > sessions.last_seen)
-			                THEN 0 ELSE sessions.archived END,
-			auto_archived = CASE WHEN COALESCE(sessions.auto_archived,0) = 1
-			                 AND (excluded.status IN ('active','idle') OR excluded.last_seen > sessions.last_seen)
-			                THEN 0 ELSE sessions.auto_archived END
+			entrypoint = COALESCE(NULLIF(excluded.entrypoint,''), sessions.entrypoint),
+			-- Headless (claude -p): filed as auto-archived when first seen to
+			-- be headless — at insert, or here for a row a hook made before
+			-- the entrypoint was known (an older hook.sh). Recent rows only,
+			-- so rows from before this rule stay as they are. While it stays
+			-- headless, running doesn't unarchive it; an interactive resume
+			-- (entrypoint "cli") does, like any auto-archived row.
+			archived = CASE
+			    WHEN ? = 1 AND COALESCE(sessions.entrypoint,'') = '' AND sessions.archived = 0
+			         AND sessions.first_seen >= ? THEN 1
+			    WHEN COALESCE(sessions.auto_archived,0) = 1
+			         AND COALESCE(NULLIF(excluded.entrypoint,''), sessions.entrypoint, '') NOT LIKE 'sdk-%'
+			         AND (excluded.status IN ('active','idle') OR excluded.last_seen > sessions.last_seen)
+			        THEN 0 ELSE sessions.archived END,
+			auto_archived = CASE
+			    WHEN ? = 1 AND COALESCE(sessions.entrypoint,'') = '' AND sessions.archived = 0
+			         AND sessions.first_seen >= ? THEN 1
+			    WHEN COALESCE(sessions.auto_archived,0) = 1
+			         AND COALESCE(NULLIF(excluded.entrypoint,''), sessions.entrypoint, '') NOT LIKE 'sdk-%'
+			         AND (excluded.status IN ('active','idle') OR excluded.last_seen > sessions.last_seen)
+			        THEN 0 ELSE sessions.auto_archived END
 	`,
 		s.SessionID, s.Cwd, s.Repo, s.Branch, s.Commit,
 		s.WrapperPID, s.ProcPID, s.Pane,
 		s.TmuxPane, s.TmuxSession, s.TranscriptPath, s.Model, s.Title,
 		s.FirstSeen.Unix(), s.LastSeen.Unix(), string(s.Status), s.Account,
-		unixOrZero(s.LastActivity), now.Unix(),
+		unixOrZero(s.LastActivity), now.Unix(), s.Entrypoint, hide, hide,
 		int(mode),
+		hide, recent, hide, recent,
 	)
 	return err
 }

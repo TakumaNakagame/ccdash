@@ -21,6 +21,7 @@ type Entry struct {
 	PID          int
 	Cwd          string
 	Kind         string // "interactive", etc.
+	Entrypoint   string // "cli", or "sdk-cli" for `claude -p`
 	ClaudeStatus string // "idle", "busy"
 	TTY          string // e.g. "/dev/pts/14"
 	Pane         string // e.g. "0:1.0" — tmux pane address
@@ -82,11 +83,12 @@ func readEntry(path string) (Entry, bool) {
 		return Entry{}, false
 	}
 	var raw struct {
-		PID       int    `json:"pid"`
-		SessionID string `json:"sessionId"`
-		Cwd       string `json:"cwd"`
-		Kind      string `json:"kind"`
-		Status    string `json:"status"`
+		PID        int    `json:"pid"`
+		SessionID  string `json:"sessionId"`
+		Cwd        string `json:"cwd"`
+		Kind       string `json:"kind"`
+		Entrypoint string `json:"entrypoint"`
+		Status     string `json:"status"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return Entry{}, false
@@ -99,6 +101,7 @@ func readEntry(path string) (Entry, bool) {
 		PID:          raw.PID,
 		Cwd:          raw.Cwd,
 		Kind:         raw.Kind,
+		Entrypoint:   raw.Entrypoint,
 		ClaudeStatus: raw.Status,
 	}, true
 }
