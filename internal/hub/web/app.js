@@ -149,7 +149,7 @@ function haptic(ms = 8) { try { navigator.vibrate?.(ms); } catch {} }
 function paintShell(parts) {
   const detail = parts[0] === "d" && (parts[2] === "s" || parts[2] === "p");
   document.body.classList.toggle("detail", detail);
-  const tab = parts[0] === "grid" ? "grid" : parts[0] === "d" ? "sessions" : "home";
+  const tab = parts[0] === "grid" ? "grid" : parts[0] === "tasks" ? "tasks" : parts[0] === "d" ? "sessions" : "home";
   for (const a of document.querySelectorAll("#tabbar a")) a.classList.toggle("on", a.dataset.tab === tab);
   let lastDev = "";
   try { lastDev = localStorage.getItem("ccdash.lastDevice") || ""; } catch {}
@@ -267,6 +267,7 @@ const ICONS = {
   settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
   search: '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>',
+  tasks: '<path d="M13 5h8"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/>',
   sidebar: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/>',
   expand: '<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/>',
   eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
@@ -373,8 +374,10 @@ function route() {
     gl.title = "セッションをまとめて表示（グリッド）";
   }
   const inDevice = parts[0] === "d" && parts[1];
+  paintTaskScope();
   if (inDevice && wideQuery.matches) {
     if (split?.dev !== parts[1]) openSplit(parts[1]);
+    paintListFold();
     split.right.replaceChildren();
     mainMount = split.right;
     split.left.querySelectorAll(".item.selected").forEach((e) => e.classList.remove("selected"));
@@ -390,9 +393,11 @@ function route() {
     return;
   }
   closeSplit();
+  paintListFold();
   view.replaceChildren();
   mainMount = view;
   if (parts[0] === "grid") return gridPage();
+  if (parts[0] === "tasks") return tasksPage(parts[1]);
   if (inDevice) {
     if (parts[2] === "s" && parts[3] && parts[4] === "diff") return diffPage(parts[1], parts[3]);
     if (parts[2] === "s" && parts[3]) return sessionPage(parts[1], parts[3], parts[4]);
@@ -527,7 +532,11 @@ function devicesPage() {
   const list = h("div", { class: "list" }, h("div", { class: "empty" }, "読み込み中…"));
   const board = h("div", { class: "board" });
   const local = !!me?.local;
+  const todo = h("div", { class: "task-body" });
+  const todoHead = h("div", { class: "row todo-head" }, h("h2", { class: "grow" }, "やること"),
+    h("a", { class: "btn small", href: "#/tasks", onclick: (e) => { if (wideQuery.matches) { e.preventDefault(); setTaskPane(true); } } }, "すべて"));
   view.append(h("div", { class: "page" },
+    h("section", { class: "todo" }, todoHead, todo),
     board,
     h("div", { class: "row" },
       h("h1", { class: "grow" }, local ? "このマシン" : "端末"),
@@ -537,6 +546,7 @@ function devicesPage() {
     local ? null : h("p", { class: "muted small" },
       "端末側で ", h("span", { class: "mono" }, "ccdash hub join"), " を実行すると、その端末の collector がこのハブへ接続します。端末にポートを開ける必要はありません。")));
 
+  taskList(todo, { only: "", buckets: ["today", "tomorrow"], compact: true });
   // Empty columns say what that means (docs/design.md: empty states guide).
   const BOARD_EMPTY = { needs_you: "あなたを待っているセッションはありません", working: "作業中のセッションはありません", done: "未確認の完了はありません" };
   every(4000, async () => {
@@ -3743,6 +3753,239 @@ function updateBadge(b) {
   el.classList.toggle("needs", needs > 0);
 }
 
+// ---------- tasks (docs/decisions/0006-tasks.md) ----------
+
+// The to-do list each device's collector keeps. Claude edits it through
+// ccdash mcp; here the operator ticks things off, picks the day and reads
+// the progress. Buckets and their headings come from the device, so the
+// date rules live in Go only. Inside a device the list is that device's;
+// on the home page and the grid it is every online device's, merged.
+const TASK_STATUS = { todo: "未着手", doing: "進行中", waiting: "待ち", done: "完了", cancelled: "中止" };
+const TASK_PLAN = [["today", "今日"], ["tomorrow", "明日"], ["week", "今週"], ["nextweek", "来週"], ["none", "未定"]];
+const taskFinished = (t) => t.status === "done" || t.status === "cancelled";
+const shortDay = (d) => { const m = /^\d{4}-(\d\d)-(\d\d)$/.exec(d || ""); return m ? `${+m[1]}/${+m[2]}` : d; };
+
+// taskScope: the device the current page is about, "" for all of them.
+function taskScope() {
+  const p = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  return p[0] === "d" && p[1] ? p[1] : p[0] === "tasks" && p[1] ? p[1] : "";
+}
+
+// loadTaskLists fetches the lists ({dev, list}) of one device or of every
+// online one; a device whose collector has no task routes is left out.
+async function loadTaskLists(only) {
+  let devs;
+  if (only) devs = [{ id: only, name: deviceCache.get(only)?.name || "" }];
+  else {
+    const ds = await api("/api/devices");
+    ds.forEach((d) => deviceCache.set(d.id, d));
+    devs = ds.filter((d) => d.online);
+  }
+  const got = await Promise.all(devs.map((d) => dev(d.id).get("/api/tasks").then((list) => ({ dev: d, list })).catch(() => null)));
+  return got.filter(Boolean);
+}
+
+// mergeTasks lays several devices' lists out by bucket. One device keeps
+// its own order (manual order first); across devices a bucket is ordered
+// by priority, then due date.
+function mergeTasks(lists, buckets) {
+  const out = [];
+  const keys = lists[0]?.list.buckets.map((b) => b.key) || [];
+  for (const k of keys) {
+    if (buckets && !buckets.includes(k)) continue;
+    if (k === "finished") continue;
+    const heading = lists[0].list.buckets.find((b) => b.key === k)?.heading || k;
+    let rows = [];
+    for (const { dev: d, list } of lists) for (const t of list.tasks || []) if (t.bucket === k) rows.push({ dev: d, t, today: list.today });
+    if (lists.length > 1) rows.sort((a, b) => (a.t.priority || 4) - (b.t.priority || 4) || (a.t.due || "9999").localeCompare(b.t.due || "9999"));
+    if (rows.length) out.push({ key: k, heading, rows });
+  }
+  return out;
+}
+
+async function editTask(d, t, patch, done) {
+  try {
+    await dev(d.id).post(`/api/tasks/${t.id}`, patch);
+    haptic();
+    if (done) toast(done);
+  } catch (e) { toast(e.message); }
+}
+
+// taskNewSession opens the new-session sheet in the task's project
+// directory with "#N について、" as the first message.
+async function taskNewSession(d, t) {
+  let cwd = "";
+  if (t.project) {
+    try {
+      const ss = await dev(d.id).get("/api/sessions?archived=0");
+      cwd = ss.filter((s) => s.project === t.project && s.cwd).sort((a, b) => (b.last_seen || "").localeCompare(a.last_seen || ""))[0]?.cwd || "";
+    } catch {}
+  }
+  newSession(d.id, { cwd, project: t.project || "", prompt: `#${t.id} について、` });
+}
+
+function taskRow({ dev: d, t, today }, ctx) {
+  const key = d.id + ":" + t.id;
+  const open = ctx.open.has(key);
+  const fin = taskFinished(t);
+  const meta = [];
+  if (t.status === "doing" || t.status === "waiting") meta.push(h("span", { class: "tstat " + t.status }, TASK_STATUS[t.status]));
+  if (!fin && t.plan && t.plan < today) meta.push(h("span", { class: "tcarried" }, shortDay(t.plan) + " から持ち越し"));
+  else if (!fin && t.plan && ["week", "nextweek", "later"].includes(t.bucket)) meta.push(h("span", {}, shortDay(t.plan)));
+  if (!fin && t.due) meta.push(h("span", { class: t.due <= today ? "tdue over" : "tdue" }, "期限 " + shortDay(t.due)));
+  if (t.project) meta.push(h("span", { class: "tproj" }, h("i", { style: `background:${projectColorOf(t.project)}` }), t.project));
+  if (ctx.multi) meta.push(h("span", { class: "chip" }, d.name || d.id));
+  const check = h("button", { class: "task-check" + (fin ? " on" : ""), title: fin ? "未着手に戻す" : "完了にする", "aria-label": fin ? "未着手に戻す" : "完了にする",
+    onclick: async (e) => { e.stopPropagation(); await editTask(d, t, { status: fin ? "todo" : "done" }); ctx.refresh(); } }, fin ? icon("check") : null);
+  const head = h("div", { class: "task-main", role: "button", tabindex: "0",
+    onclick: () => { open ? ctx.open.delete(key) : ctx.open.add(key); ctx.paint(); },
+    onkeydown: (e) => { if (e.key === "Enter") e.currentTarget.click(); } },
+    h("div", { class: "task-title" + (fin ? " fin" : "") + (t.priority === 1 && !fin ? " p1" : "") }, h("span", { class: "num mono" }, "#" + t.id), " ", t.title),
+    meta.length ? h("div", { class: "task-meta" }, ...meta) : null);
+  return h("div", { class: "task" + (open ? " open" : "") }, check, head, open ? taskDetail(d, t, ctx) : null);
+}
+
+function taskDetail(d, t, ctx) {
+  const act = (patch, msg) => async () => { await editTask(d, t, patch, msg); ctx.refresh(); };
+  const plans = h("div", { class: "seg" }, ...TASK_PLAN.map(([v, label]) => {
+    const on = v === "none" ? !t.plan : t.bucket === v || (v === "today" && t.bucket === "today");
+    return h("button", { class: "btn small" + (on ? " on" : ""), onclick: act({ plan: v }, `#${t.id} のやる日: ${label}`) }, label);
+  }));
+  const statuses = h("div", { class: "seg" }, ...["todo", "doing", "waiting", "cancelled"].map((s) =>
+    h("button", { class: "btn small" + (t.status === s ? " on" : ""), onclick: act({ status: s }) }, TASK_STATUS[s])));
+  const links = (t.links || []).map((l) => /^https?:\/\//.test(l)
+    ? h("a", { href: l, target: "_blank", rel: "noopener noreferrer", class: "tlink" }, l.replace(/^https?:\/\//, ""))
+    : h("span", { class: "tlink mono" }, l));
+  const tl = [...(t.timeline || [])].reverse().slice(0, ctx.compact ? 5 : 20);
+  const fmt = (at) => { const x = new Date(at); return isNaN(x) ? at : `${x.getMonth() + 1}/${x.getDate()} ${String(x.getHours()).padStart(2, "0")}:${String(x.getMinutes()).padStart(2, "0")}`; };
+  const SRC = { slack: "Slack", jira: "Jira", github: "GitHub", manual: "手書き", auto: "自動", claude: "Claude" };
+  return h("div", { class: "task-detail" },
+    h("div", { class: "row wrap" }, h("span", { class: "muted small" }, "やる日"), plans),
+    h("div", { class: "row wrap" }, h("span", { class: "muted small" }, "状態"), statuses),
+    t.note ? h("div", { class: "task-note" }, t.note) : null,
+    links.length ? h("div", { class: "task-links" }, ...links) : null,
+    h("div", { class: "row wrap" },
+      h("button", { class: "btn small", onclick: () => copy(`#${t.id} について、`) }, "「#" + t.id + " について、」をコピー"),
+      h("button", { class: "btn small", onclick: () => taskNewSession(d, t) }, icon("plus"), "このタスクで新規セッション"),
+      taskFinished(t) ? h("button", { class: "btn small", onclick: act({ archived: true }, `#${t.id} をアーカイブしました`) }, "アーカイブ") : null),
+    h("div", { class: "task-tl" },
+      tl.length ? null : h("div", { class: "muted small" }, "進捗はまだありません"),
+      ...tl.map((e) => h("div", { class: "tl-row" },
+        h("span", { class: "muted small mono" }, fmt(e.at)), h("span", { class: "muted small" }, SRC[e.source] || e.source),
+        h("div", { class: "tl-text" }, e.text, e.link ? h("a", { href: e.link, target: "_blank", rel: "noopener noreferrer", class: "small" }, " リンク") : null)))));
+}
+
+// taskList renders a list into el and keeps it fresh. opts: only (device
+// id, "" = all), buckets (keys to show), compact, bucket (cleanup list).
+function taskList(el, opts = {}) {
+  const ctx = { open: new Set(), multi: false, compact: !!opts.compact, lists: [] };
+  ctx.paint = () => {
+    if (deferWhileSelecting(el, ctx.paint)) return;
+    const groups = mergeTasks(ctx.lists, opts.buckets);
+    ctx.multi = ctx.lists.length > 1;
+    if (!ctx.lists.length) { el.replaceChildren(h("div", { class: "muted small task-empty" }, "タスクを返す端末がありません（ccdash を更新すると使えます）")); return; }
+    if (!groups.length) { el.replaceChildren(h("div", { class: "muted small task-empty" }, opts.buckets ? "今日・明日のタスクはありません" : "タスクはありません。Claude に「タスクにして」と頼むと増えます")); return; }
+    el.replaceChildren(...groups.map((g) => h("section", { class: "task-group" },
+      h("h3", {}, g.heading, h("span", { class: "count" }, g.rows.length)),
+      ...g.rows.map((r) => taskRow(r, ctx)))));
+    opts.onCount?.(groups.reduce((n, g) => n + g.rows.filter((r) => !taskFinished(r.t)).length, 0));
+  };
+  ctx.refresh = async () => {
+    try { ctx.lists = await loadTaskLists(opts.only ?? taskScope()); } catch (e) { if (e.status !== 401) console.warn(e); return; }
+    ctx.paint();
+  };
+  el.replaceChildren(h("div", { class: "muted small task-empty" }, "読み込み中…"));
+  every(5000, ctx.refresh, opts.bucket || cleanup);
+  return ctx;
+}
+
+// The side pane (wide screens): docked right like the preview sidebar, on
+// every page including the grid; the header button opens / closes it and
+// the choice is kept per browser.
+let taskPane = null;
+const tasksOpenKey = "ccdash.tasksOpen";
+function setTaskPane(on) {
+  try { localStorage.setItem(tasksOpenKey, on ? "1" : "0"); } catch {}
+  $("#taskstoggle")?.classList.toggle("on", on);
+  if (!on) {
+    taskPane?.stop.forEach((f) => f());
+    taskPane?.el.remove();
+    taskPane = null;
+    document.body.classList.remove("tasks-open");
+    requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    return;
+  }
+  if (taskPane) return taskPane.list.refresh();
+  const body = h("div", { class: "task-body" });
+  const title = h("span", { class: "grow" }, "タスク");
+  const scope = h("span", { class: "muted small" });
+  const el = h("aside", { id: "taskpane", "aria-label": "タスク" },
+    h("div", { class: "task-bar" }, title, scope,
+      h("button", { class: "btn small icon", title: "更新", "aria-label": "更新", onclick: () => taskPane?.list.refresh() }, icon("restart")),
+      h("button", { class: "btn small icon", title: "閉じる", "aria-label": "閉じる", onclick: () => setTaskPane(false) }, icon("x"))),
+    body);
+  document.body.append(el);
+  document.body.classList.add("tasks-open");
+  const stop = [];
+  taskPane = { el, stop, scopeEl: scope, titleEl: title, only: null, list: null };
+  taskPane.list = taskList(body, { only: null, bucket: stop, onCount: (n) => { title.textContent = `タスク ${n}`; } });
+  paintTaskScope();
+  requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+}
+
+// paintTaskScope follows the route: a device's own list inside it, all of
+// them elsewhere.
+function paintTaskScope() {
+  if (!taskPane) return;
+  const only = taskScope();
+  taskPane.scopeEl.textContent = only ? (deviceCache.get(only)?.name || "") : (me?.local ? "" : "すべての端末");
+  if (taskPane.only !== only) { taskPane.only = only; taskPane.list.refresh(); }
+}
+
+function installTaskPane() {
+  const btn = $("#taskstoggle");
+  if (!btn) return;
+  btn.prepend(icon("tasks"));
+  btn.addEventListener("click", () => {
+    if (!wideQuery.matches) { location.hash = "#/tasks"; return; }
+    setTaskPane(!taskPane);
+  });
+  let on = true;
+  try { on = localStorage.getItem(tasksOpenKey) !== "0"; } catch {}
+  if (on && wideQuery.matches) setTaskPane(true);
+  wideQuery.addEventListener("change", () => { if (!wideQuery.matches) setTaskPane(false); else if (localStorage.getItem(tasksOpenKey) !== "0") setTaskPane(true); });
+}
+
+// tasksPage is the full-page list (phones: the タスク tab).
+function tasksPage(only) {
+  crumbs({ text: "端末", href: "#/" }, { text: "タスク" });
+  const list = h("div", { class: "task-body" });
+  view.append(h("div", { class: "page" }, h("h1", {}, "タスク"), list));
+  taskList(list, { only: only || "" });
+}
+
+// The session list folds away on wide screens (the header's sidebar
+// button), leaving the session and the tasks.
+const listFoldKey = "ccdash.listFolded";
+function paintListFold() {
+  let folded = false;
+  try { folded = localStorage.getItem(listFoldKey) === "1"; } catch {}
+  document.querySelector(".split")?.classList.toggle("folded", folded);
+  const b = $("#listtoggle");
+  if (b) { b.hidden = !split; b.classList.toggle("on", !folded); b.title = folded ? "セッション一覧を出す" : "セッション一覧をたたむ"; }
+}
+function installListFold() {
+  const b = $("#listtoggle");
+  if (!b) return;
+  b.append(icon("sidebar"));
+  b.addEventListener("click", () => {
+    let folded = false;
+    try { folded = localStorage.getItem(listFoldKey) === "1"; localStorage.setItem(listFoldKey, folded ? "0" : "1"); } catch {}
+    paintListFold();
+    requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+  });
+}
+
 // ---------- boot ----------
 
 (async function boot() {
@@ -3794,6 +4037,8 @@ function updateBadge(b) {
   $("#tabbar").addEventListener("click", () => haptic());
   document.addEventListener("click", followPortalLink);
   installSwipeBack();
+  installTaskPane();
+  installListFold();
   wideQuery.addEventListener("change", () => { closeSplit(); route(); });
   route();
 })();
