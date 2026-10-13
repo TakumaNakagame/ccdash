@@ -2,8 +2,9 @@ package tui
 
 // "Restart ccdash" (settings page action): a confirmation window drawn
 // over the screen like the `n` picker, listing what a restart breaks,
-// then — on y — quitting with ErrRestart so the CLI stops the collector
-// and re-execs the (possibly newly installed) binary.
+// then — on y — quitting with ErrRestart so the CLI restarts the collector
+// (POST /api/restart, else stops it) and re-execs the (possibly newly
+// installed) binary.
 
 import (
 	"errors"
@@ -21,7 +22,7 @@ import (
 )
 
 // ErrRestart is returned by Run when the operator confirmed a restart.
-// The caller stops the collector (local mode) and re-execs ccdash.
+// The caller restarts or stops the collector (local mode) and re-execs ccdash.
 var ErrRestart = errors.New("ccdash: restart requested")
 
 // liveSessionTitles lists the sessions whose claude runs under the ccdash

@@ -551,8 +551,9 @@ func (s *Server) handlePTYClose(w http.ResponseWriter, r *http.Request, id strin
 }
 
 // handleShutdown triggers a graceful server shutdown. With ?resume=1 the
-// hosted sessions are saved first, for the next collector to resume (the
-// TUI's "Restart ccdash"; see restart.go).
+// hosted sessions are saved first, for the next collector to resume (`ccdash
+// web stop --resume`, and the TUI's "Restart ccdash" against a collector
+// that can't restart itself; see restart.go).
 func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)

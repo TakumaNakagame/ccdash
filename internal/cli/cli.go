@@ -15,7 +15,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -507,6 +506,9 @@ talk to loopback, remote clients use the --listen address.`,
 			defer cancel()
 			s := server.New(d, bindAddr)
 			s.CanRestart = true
+			// server.pid: lets a TUI stop this server if it ever stops
+			// answering /shutdown (killStaleServer).
+			s.OnListening = func() { saveServerPID(os.Getpid(), bindAddr) }
 			err = s.ListenAndServe(ctx)
 			if errors.Is(err, server.ErrRestart) {
 				// POST /api/restart: the hosted sessions are saved and their
@@ -515,6 +517,7 @@ talk to loopback, remote clients use the --listen address.`,
 				_ = d.Close()
 				return reexecSelf()
 			}
+			removeServerPID(os.Getpid())
 			return err
 		},
 	}
@@ -1031,11 +1034,56 @@ func runTUI(ctx context.Context, _ bool, lockGroup string, rf *remoteFlags) erro
 
 	err = tui.Run(ctx, store.NewLocal(d), lockGroup, srvMode, tui.RemoteInfo{})
 	if errors.Is(err, tui.ErrRestart) {
-		// Take the collector (and the claude PTYs it hosts) down so the
-		// re-exec'd ccdash spawns a fresh one from the current binary.
-		stopServer(addr)
+		// Bring the collector (and the claude PTYs it hosts) back from the
+		// current binary. One that can re-exec itself (`ccdash server`, the
+		// collector `ccdash web` runs — the portal comes back with it) does
+		// so and resumes its sessions; anything else is stopped with its
+		// sessions saved, and the re-exec'd ccdash spawns a fresh one.
+		if !restartCollector(addr) {
+			stopServer(addr)
+		}
 	}
 	return err
+}
+
+// restartCollector asks the collector on addr to restart itself (POST
+// /api/restart: it saves its hosted sessions, re-execs, and resumes them)
+// and waits for it to answer again. false when it can't (an older
+// collector, 404; one that can't re-exec, 501) or didn't come back — the
+// caller then stops it the old way.
+func restartCollector(addr string) bool {
+	if !pingServer(addr) {
+		return false
+	}
+	tok, err := loadToken()
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/api/restart", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("X-Ccdash-Token", tok)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		log.Printf("ccdash: %s/api/restart: %s; stopping it instead", addr, resp.Status)
+		return false
+	}
+	// It goes away ~300 ms after answering, then re-execs and binds again.
+	waitServerGone(addr, 5*time.Second)
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if alive, hasPTY := serverCapabilities(addr); alive && hasPTY {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	log.Printf("ccdash: the collector on %s didn't come back within 20s after /api/restart", addr)
+	return false
 }
 
 // restartIfAsked re-execs ccdash with the same arguments when the TUI
@@ -1084,12 +1132,8 @@ func stopServer(addr string) {
 			}
 		}
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if !pingServer(addr) {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	if waitServerGone(addr, 3*time.Second) {
+		return
 	}
 	killStaleServer(addr)
 }
@@ -1117,8 +1161,9 @@ func spawnDetachedServer(addr string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// Save PID so we can kill a stale server on the next startup.
-	saveServerPID(cmd.Process.Pid)
+	// Save PID so we can stop a server that stops answering later (the
+	// server writes the same record itself once it starts).
+	saveServerPID(cmd.Process.Pid, addr)
 	// Detach: don't Wait. Release the child's process handle so the OS can
 	// reap it on its own once it eventually exits.
 	_ = cmd.Process.Release()
@@ -1192,20 +1237,10 @@ func pingServer(addr string) bool {
 	return alive
 }
 
-// saveServerPID writes the PID of the spawned server to state dir so we can
-// kill a stale server on the next startup.
-func saveServerPID(pid int) {
-	stateDir, err := paths.StateDir()
-	if err != nil {
-		return
-	}
-	_ = os.WriteFile(filepath.Join(stateDir, "server.pid"),
-		[]byte(strconv.Itoa(pid)), 0o600)
-}
-
-// killStaleServer terminates an existing server that doesn't support PTY.
-// It tries a graceful shutdown first, then falls back to SIGTERM via the PID
-// file. Waits up to 2s for the port to free before returning.
+// killStaleServer stops the collector on addr: POST /shutdown first, and
+// only if it still answers after that, SIGTERM to the process server.pid
+// names — once signalServerPID has checked that process is that collector.
+// Waits up to 2s for the port to free each time.
 func killStaleServer(addr string) {
 	tok, _ := loadToken()
 	if tok != "" {
@@ -1219,25 +1254,24 @@ func killStaleServer(addr string) {
 			}
 		}
 	}
-	// Fallback: kill via PID file.
-	stateDir, err := paths.StateDir()
-	if err == nil {
-		data, err := os.ReadFile(filepath.Join(stateDir, "server.pid"))
-		if err == nil {
-			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-				if proc, err := os.FindProcess(pid); err == nil {
-					_ = proc.Signal(syscall.SIGTERM)
-				}
-			}
-		}
+	if waitServerGone(addr, 2*time.Second) {
+		return
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	if signalServerPID(addr) {
+		waitServerGone(addr, 2*time.Second)
+	}
+}
+
+// waitServerGone polls addr until nothing answers there (true) or d passes.
+func waitServerGone(addr string, d time.Duration) bool {
+	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
 		if !pingServer(addr) {
-			return
+			return true
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	return !pingServer(addr)
 }
 
 func loadToken() (string, error) {

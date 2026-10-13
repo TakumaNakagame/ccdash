@@ -60,8 +60,8 @@ systemd unit runs in the foreground by itself.
 The portal talks to this machine's collector in-process: if one is already
 running (ccdash server, ccdash -k, a TUI's) it links to that; otherwise it
 runs the collector itself, like 'ccdash server'. A collector run here stops
-with the portal, and POST /shutdown to it (the TUI's "Restart ccdash")
-stops the whole portal. Nothing listens beyond loopback and nothing
+with the portal, and POST /shutdown to it stops the whole portal; the TUI's
+"Restart ccdash" restarts it (portal included) with its sessions resumed. Nothing listens beyond loopback and nothing
 connects out, apart from Web Push notifications once you turn them on in
 the portal (the browser's push service).
 
@@ -212,7 +212,13 @@ func linkCollector(ctx context.Context, h *hub.Hub, addr string, mode func(strin
 			err := linkRunning(ctx, h, addr, host, hasPTY)
 			if err == nil {
 				lastErr = ""
-				continue // unlinked: look again (it may have restarted)
+				// Unlinked. A collector that restarts itself (POST
+				// /api/restart) leaves the port free for a moment while it
+				// re-execs; give it relinkGrace to come back before running
+				// one here, or the portal takes the port — and the saved
+				// sessions — from it.
+				waitCollectorBack(ctx, addr, relinkGrace)
+				continue
 			}
 			note(err)
 			sleepCtx(ctx, 5*time.Second)
@@ -232,6 +238,21 @@ func linkCollector(ctx context.Context, h *hub.Hub, addr string, mode func(strin
 		}
 	}
 	return nil
+}
+
+// relinkGrace is how long a portal whose link dropped waits for the
+// collector to answer again before running its own (linkCollector).
+const relinkGrace = 10 * time.Second
+
+// waitCollectorBack polls addr until a collector answers there or d passes.
+func waitCollectorBack(ctx context.Context, addr string, d time.Duration) {
+	deadline := time.Now().Add(d)
+	for ctx.Err() == nil && time.Now().Before(deadline) {
+		if pingServer(addr) {
+			return
+		}
+		sleepCtx(ctx, 200*time.Millisecond)
+	}
 }
 
 // linkRunning links to the collector already serving addr until the link

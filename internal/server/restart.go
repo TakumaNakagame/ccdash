@@ -6,10 +6,11 @@ package server
 //     `claude --resume <session>` in its place (same key, cwd and size).
 //   - POST /api/restart saves the hosted sessions to resume-on-start.json and
 //     stops the server with ErrRestart, on which `ccdash server` or
-//     `ccdash web` (the ones that set CanRestart) re-execs itself; the
-//     TUI's "Restart ccdash" and `ccdash web stop --resume` do the same
-//     save via POST /shutdown?resume=1, which stops the collector for good
-//     (and with it a `ccdash web` that runs it) — the next start resumes.
+//     `ccdash web` (the ones that set CanRestart) re-execs itself — the
+//     TUI's "Restart ccdash" uses it. `ccdash web stop --resume`, and the
+//     TUI against a collector without /api/restart, do the same save via
+//     POST /shutdown?resume=1, which stops the collector for good (and with
+//     it a `ccdash web` that runs it) — the next start resumes.
 //   - Whichever way the server stops, its hosted claudes are closed
 //     (ListenAndServe), so a resumed claude never runs next to the old one.
 //   - On start, resumeSaved brings back what a recent save lists. The file

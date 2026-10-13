@@ -68,6 +68,10 @@ type Server struct {
 	// only by `ccdash server`, which re-execs itself on that error.
 	CanRestart   bool
 	restartAsked atomic.Bool
+	// OnListening, when set, runs once every listener is bound (`ccdash
+	// server` records its PID then — not before, or a server that loses
+	// the port would overwrite the record of the one that has it).
+	OnListening func()
 
 	// statusLines: latest relayed statusLine JSON per session (statusline.go).
 	statusMu    sync.Mutex
@@ -251,6 +255,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	for _, ln := range lns {
 		log.Printf("ccdash server listening on http://%s", ln.Addr())
+	}
+	if s.OnListening != nil {
+		s.OnListening()
 	}
 	if len(lns) > 1 {
 		log.Printf("ccdash: loopback listener added alongside %s — Claude Code hooks and the local TUI always talk to 127.0.0.1; remote clients use the --listen address", s.addr)
