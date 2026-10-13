@@ -117,6 +117,10 @@ func readTranscript(path string) (Discovered, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
 
+	// A session started with a slash command or skill ("/new-project
+	// #31 …") has no plain typed prompt until later — maybe never. Its
+	// first invocation is the title when no typed prompt turns up.
+	var cmdTitle string
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
@@ -128,9 +132,15 @@ func readTranscript(path string) (Discovered, error) {
 		if d.SessionID != "" && d.Title != "" {
 			break
 		}
+		if cmdTitle == "" {
+			cmdTitle = commandTitle(line)
+		}
 	}
 	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
 		return d, fmt.Errorf("scan %s: %w", path, err)
+	}
+	if d.Title == "" {
+		d.Title = cmdTitle
 	}
 	if d.SessionID == "" {
 		// Fall back to filename — Claude names transcripts <session_id>.jsonl.
@@ -320,6 +330,10 @@ func applyLine(line []byte, d *Discovered) {
 		Cwd       string          `json:"cwd"`
 		GitBranch string          `json:"gitBranch"`
 		Message   json.RawMessage `json:"message"`
+		// Injected turns (a skill's body, a subagent's prompt) aren't
+		// what the operator typed.
+		IsMeta      bool `json:"isMeta"`
+		IsSidechain bool `json:"isSidechain"`
 	}
 	if err := json.Unmarshal(line, &meta); err != nil {
 		return
@@ -333,7 +347,7 @@ func applyLine(line []byte, d *Discovered) {
 	if meta.GitBranch != "" && d.GitBranch == "" {
 		d.GitBranch = meta.GitBranch
 	}
-	if meta.Type == "user" && d.Title == "" && len(meta.Message) > 0 {
+	if meta.Type == "user" && !meta.IsMeta && !meta.IsSidechain && d.Title == "" && len(meta.Message) > 0 {
 		d.Title = extractUserText(meta.Message)
 	}
 }
@@ -361,6 +375,52 @@ func extractUserText(msg json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+var (
+	commandName = regexp.MustCompile(`<command-name>([^<]*)</command-name>`)
+	commandArgs = regexp.MustCompile(`(?s)<command-args>(.*?)</command-args>`)
+)
+
+// commandTitle returns "/name args" for a main-thread user turn that is a
+// slash-command or skill invocation, as the portal's chat shows it; "" for
+// anything else.
+func commandTitle(line []byte) string {
+	var e struct {
+		Type        string `json:"type"`
+		IsMeta      bool   `json:"isMeta"`
+		IsSidechain bool   `json:"isSidechain"`
+		Message     struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(line, &e) != nil || e.Type != "user" || e.IsMeta || e.IsSidechain ||
+		e.Message.Role != "user" || len(e.Message.Content) == 0 || e.Message.Content[0] != '"' {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(e.Message.Content, &s) != nil {
+		return ""
+	}
+	m := commandName.FindStringSubmatch(s)
+	if m == nil || strings.TrimSpace(m[1]) == "" {
+		return ""
+	}
+	name := strings.TrimSpace(m[1])
+	if !strings.HasPrefix(name, "/") {
+		name = "/" + name
+	}
+	if a := commandArgs.FindStringSubmatch(s); a != nil {
+		if args := strings.TrimSpace(a[1]); args != "" {
+			name += " " + args
+		}
+	}
+	// First line only, secrets masked — like a typed prompt's title.
+	if i := strings.IndexByte(name, '\n'); i >= 0 {
+		name = name[:i]
+	}
+	return redact.String(strings.TrimSpace(name))
 }
 
 var pastedMarker = regexp.MustCompile(`</?pasted_content id="[^"]*">`)

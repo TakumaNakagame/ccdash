@@ -113,6 +113,32 @@ func TestCleanTitlePasted(t *testing.T) {
 	}
 }
 
+// TestCommandTitleFallback: a session started with a slash command or
+// skill is titled "/name args" — unless a typed prompt follows, which wins.
+func TestCommandTitleFallback(t *testing.T) {
+	dir := t.TempDir()
+	cmd := `{"type":"user","sessionId":"s","message":{"role":"user","content":"<command-message>new-project</command-message>\n<command-name>/new-project</command-name>\n<command-args>#31 のタスク</command-args>"}}` + "\n"
+	meta := `{"type":"user","sessionId":"s","isMeta":true,"message":{"role":"user","content":"Base directory for this skill"}}` + "\n"
+	cases := []struct{ name, content, want string }{
+		{"skill-only", cmd + meta, "/new-project #31 のタスク"},
+		{"typed-later", cmd + meta + `{"type":"user","sessionId":"s","message":{"role":"user","content":"real prompt"}}` + "\n", "real prompt"},
+		{"no-args", `{"type":"user","sessionId":"s","message":{"role":"user","content":"<command-name>/work-status-check</command-name>\n<command-args></command-args>"}}` + "\n", "/work-status-check"},
+	}
+	for _, c := range cases {
+		path := filepath.Join(dir, c.name+".jsonl")
+		if err := os.WriteFile(path, []byte(c.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		d, err := readTranscript(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Title != c.want {
+			t.Errorf("%s: title = %q, want %q", c.name, d.Title, c.want)
+		}
+	}
+}
+
 // TestCountPrompts: typed prompts are counted incrementally up to
 // PromptCap; tool results and a partial last line don't count.
 func TestCountPrompts(t *testing.T) {
