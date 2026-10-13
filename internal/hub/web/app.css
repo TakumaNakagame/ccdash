@@ -840,8 +840,8 @@ aside.viewer.side .doc { padding: 22px 22px 40px; }
 
 /* The side pane: docked right; the page makes room. The preview sidebar
    (z 30) covers it while open. */
-/* Its width: --tasks-pick (dragged, in vw; the TUI's 15–50%) or about
-   the TUI's default 28%, never under 240px and never so wide that the
+/* Its width: --tasks-pick (dragged, else the device pane_ratio tasks share; in vw) or
+   the TUI default 28%, never under 240px and never so wide that the
    list and the chat lose their minimum (640px). */
 :root { --tasks-w: clamp(240px, var(--tasks-pick, clamp(280px, 28vw, 480px)), max(240px, calc(100vw - 640px))); }
 #taskpane { position: fixed; z-index: 25; top: 0; right: 0; bottom: 0; width: var(--tasks-w); display: flex; flex-direction: column;

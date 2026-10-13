@@ -306,18 +306,15 @@ function openSplit(id) {
   const handle = h("div", { class: "split-handle", title: "ドラッグで幅を変更（ダブルクリックで初期値、← → キーでも調整）", tabindex: "0", role: "separator", "aria-orientation": "vertical" });
   const box = h("div", { class: "split" }, left, handle, right);
   // Width of the list in percent: what the operator dragged to, else the
-  // device's own TUI preference (Session list size %), else 34.
+  // device's own TUI pane_ratio (the list's share of list + work, as the
+  // TUI draws it beside the task pane or without it), else 34.
   let w = 34, saved = null, fallback = 34;
   try { saved = +localStorage.getItem("ccdash.listWidth") || null; } catch {}
   const setW = (v) => { w = Math.min(75, Math.max(15, v)); box.style.setProperty("--list-w", w + "%"); handle.setAttribute("aria-valuenow", String(Math.round(w))); };
   const save = () => { try { localStorage.setItem("ccdash.listWidth", String(Math.round(w))); } catch {} };
   setW(saved || fallback);
-  if (!saved) {
-    dev(id).get("/hub/settings").then((rows) => {
-      const pct = rows?.find?.((r) => r.key === "pane_list_pct")?.value;
-      if (typeof pct === "number" && pct > 0) { fallback = pct; if (!saved) setW(pct); }
-    }).catch(() => {});
-  }
+  // Read it even with a stored width: a double-click goes back to it.
+  paneRatio(id).then((r) => { if (r) { fallback = r.listShare; if (!saved) setW(fallback); } });
   handle.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     handle.setPointerCapture(e.pointerId);
@@ -354,6 +351,32 @@ function openSplit(id) {
   view.append(box);
   split = { dev: id, left, right, cleanup: [] };
   devicePage(id, { mount: left, bucket: split.cleanup, compact: true });
+}
+
+// parsePaneRatio mirrors settings.ParsePaneRatio: "list:work:tasks", any
+// positive numbers, scaled to 100 with every column ≥ 10% (the work pane
+// takes the rounding). listShare is the list's percent of list + work.
+function parsePaneRatio(v) {
+  const f = String(v ?? "").split(/[:/ ,]+/).filter(Boolean);
+  if (f.length !== 3 || !f.every((x) => /^\d+$/.test(x) && +x > 0)) return null;
+  const sum = f.reduce((a, x) => a + +x, 0);
+  const n = f.map((x) => Math.max(Math.floor((+x * 100) / sum), 10));
+  n[1] += 100 - n[0] - n[1] - n[2];
+  if (n[1] < 10) return null;
+  return { list: n[0], work: n[1], tasks: n[2], listShare: Math.floor((n[0] * 100) / Math.max(1, n[0] + n[1])) };
+}
+
+// paneRatio reads a device's pane_ratio (the TUI's column widths) from its
+// settings view; a minute's memo keeps route changes cheap.
+const ratioMemo = new Map(); // device id → { at, p }
+function paneRatio(id) {
+  const m = ratioMemo.get(id);
+  if (m && Date.now() - m.at < 60000) return m.p;
+  const p = dev(id).get("/hub/settings")
+    .then((rows) => parsePaneRatio(rows?.find?.((r) => r.key === "pane_ratio")?.value))
+    .catch(() => null);
+  ratioMemo.set(id, { at: Date.now(), p });
+  return p;
 }
 
 let beforeGrid = "#/";
@@ -4001,17 +4024,30 @@ function setTaskPane(on) {
 // The task pane's width: dragged on its left edge, kept per browser in
 // localStorage like the list width (ccdash.listWidth) — it suits this
 // screen, not the person's phone or another monitor, so it isn't a hub
-// pref. Stored in percent of the window, bounded like the TUI's
-// pane_tasks_pct (15–50); the CSS adds the pixel minimums.
+// pref. Stored in percent of the window (10–50; pane_ratio keeps each
+// column ≥ 10%); the CSS adds the pixel minimums. Without a stored width
+// it is the tasks share of the device's pane_ratio — the route's device,
+// or the local portal's one — else the CSS default (the TUI's 28%).
 const tasksWidthKey = "ccdash.tasksWidth";
+let tasksDefault = null; // pane_ratio's tasks %, when known
 function setTasksPick(pct) {
   if (pct == null) document.documentElement.style.removeProperty("--tasks-pick");
-  else document.documentElement.style.setProperty("--tasks-pick", Math.min(50, Math.max(15, pct)).toFixed(1) + "vw");
+  else document.documentElement.style.setProperty("--tasks-pick", Math.min(50, Math.max(10, pct)).toFixed(1) + "vw");
 }
 function loadTasksPick() {
   let v = null;
   try { v = +localStorage.getItem(tasksWidthKey) || null; } catch {}
-  setTasksPick(v);
+  setTasksPick(v ?? tasksDefault);
+}
+function followTasksRatio() {
+  const id = taskScope() || (me?.local ? "local" : "");
+  if (!id) return;
+  paneRatio(id).then((r) => {
+    if (!r || r.tasks === tasksDefault) return;
+    tasksDefault = r.tasks;
+    loadTasksPick();
+    window.dispatchEvent(new Event("resize"));
+  });
 }
 function taskHandle() {
   const handle = h("div", { class: "split-handle task-handle", title: "ドラッグで幅を変更（ダブルクリックで初期値、← → キーでも調整）", tabindex: "0", role: "separator", "aria-orientation": "vertical" });
@@ -4037,7 +4073,7 @@ function taskHandle() {
   });
   handle.addEventListener("dblclick", () => {
     try { localStorage.removeItem(tasksWidthKey); } catch {}
-    setTasksPick(null);
+    setTasksPick(tasksDefault);
     relayout();
   });
   handle.addEventListener("keydown", (e) => {
@@ -4054,6 +4090,7 @@ function taskHandle() {
 // them elsewhere.
 function paintTaskScope() {
   if (!taskPane) return;
+  followTasksRatio();
   const only = taskScope();
   taskPane.scopeEl.textContent = only ? (deviceCache.get(only)?.name || "") : (me?.local ? "" : "すべての端末");
   if (taskPane.only !== only) { taskPane.only = only; taskPane.list.refresh(); }
