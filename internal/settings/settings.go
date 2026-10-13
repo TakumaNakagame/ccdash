@@ -77,6 +77,8 @@ type Settings struct {
 	// folds the session list to a strip of numbers (b).
 	TasksPane     bool
 	ListCollapsed bool
+	// TaskSpacing puts a blank line between tasks in the task pane.
+	TaskSpacing bool
 	// InvertListScroll flips the mouse wheel over the session list: wheel
 	// down moves the selection up and vice versa. The right pane keeps
 	// its normal direction.
@@ -135,6 +137,7 @@ const (
 	keyPaneRatio         = "pane_ratio"
 	keyTasksPane         = "tasks_pane"
 	keyListCollapsed     = "list_collapsed"
+	keyTaskSpacing       = "task_spacing"
 	// legacyKeyPaneListPct / legacyKeyPaneTasksPct were the two
 	// percentages PaneRatio replaced; Load folds them in once.
 	legacyKeyPaneListPct  = "pane_list_pct"
@@ -225,6 +228,7 @@ func loadPairs(out *Settings) []loadPair {
 		{keyInvertListScroll, func(v string) { out.InvertListScroll = parseBool(v, out.InvertListScroll) }},
 		{keyTasksPane, func(v string) { out.TasksPane = parseBool(v, out.TasksPane) }},
 		{keyListCollapsed, func(v string) { out.ListCollapsed = parseBool(v, out.ListCollapsed) }},
+		{keyTaskSpacing, func(v string) { out.TaskSpacing = parseBool(v, out.TaskSpacing) }},
 		{keyAutoArchiveDays, func(v string) { out.AutoArchiveDays = parseInt(v, out.AutoArchiveDays) }},
 		{keyAutoTitle, func(v string) { out.AutoTitle = parseBool(v, out.AutoTitle) }},
 		{keyHideHeadless, func(v string) { out.HideHeadless = parseBool(v, out.HideHeadless) }},
@@ -464,6 +468,7 @@ func AllSpecs() []Spec {
 		{Key: keyLayoutMode, Label: "Vertical layout", Help: "Auto = pick from terminal width (vertical when narrow). On = always vertical. Off = always horizontal (side-by-side).", Kind: KindEnum, Options: []string{"auto", "on", "off"}},
 		{Key: keyPaneRatio, Label: "Pane widths (list:work:tasks)", Help: "How the session list, the work pane and the task pane share the width, e.g. 25:50:25 (any numbers; each keeps at least 10%). Without the task pane the list and work pane share it in the same proportion; in the vertical layout that proportion splits the height. < / > on the dashboard move 5% between the list and the work pane.", Kind: KindString},
 		{Key: keyTasksPane, Label: "Task pane", Help: "Show the to-do list as a column on the right of the dashboard and the grid (also w).", Kind: KindBool},
+		{Key: keyTaskSpacing, Label: "Space between tasks", Help: "Put a blank line between the tasks in the task pane (each task is two lines; every other one has a faint band either way).", Kind: KindBool},
 		{Key: keyListCollapsed, Label: "Collapse session list", Help: "Fold the session list to a strip of session numbers (also b); j/k still move the selection.", Kind: KindBool},
 		{Key: keyInvertListScroll, Label: "Invert list scroll", Help: "Reverse the mouse wheel over the session list (wheel down moves the selection up). The right pane is unaffected.", Kind: KindBool},
 		{Key: keyTimeFormat, Label: "Session time", Help: "How the session list shows each session's last prompt time: relative (4m, 2h) or absolute (09/30 18:45).", Kind: KindEnum, Options: []string{"relative", "absolute"}},
@@ -523,6 +528,8 @@ func Get(s Settings, key string) any {
 		return s.TasksPane
 	case keyListCollapsed:
 		return s.ListCollapsed
+	case keyTaskSpacing:
+		return s.TaskSpacing
 	case keyLayoutMode:
 		// Surface the field as the user-facing label ("on"/"off") even
 		// though we store "vertical"/"horizontal" internally. The Set
@@ -591,6 +598,8 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.TasksPane = value.(bool)
 	case keyListCollapsed:
 		s.ListCollapsed = value.(bool)
+	case keyTaskSpacing:
+		s.TaskSpacing = value.(bool)
 	case keyLayoutMode:
 		mode := value.(string)
 		// Translate the user-facing labels to the canonical storage form.

@@ -7,6 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	mdl "github.com/takumanakagame/ccmanage/internal/model"
 )
@@ -104,5 +106,37 @@ func TestTasksPaneKeys(t *testing.T) {
 		if lipgloss.Width(l) != 50 {
 			t.Fatalf("line width %d: %q", lipgloss.Width(l), l)
 		}
+	}
+}
+
+// TestTasksPaneBandAndSpacing: line 2 starts under the title, every other
+// task in a bucket gets the band, and task_spacing adds a blank line
+// between tasks.
+func TestTasksPaneBandAndSpacing(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256) // tests have no TTY to detect colours from
+	defer lipgloss.SetColorProfile(prev)
+	m := taskTestModel()
+	m.tasks.Tasks = append(m.tasks.Tasks[:2:2], mdl.Task{ID: 7, Title: "third", Status: "todo", Priority: 3, Bucket: "today"}, m.tasks.Tasks[2])
+	lines := m.taskListLines(50, 40)
+	plain := func(i int) string { return ansi.Strip(lines[i]) }
+	col := func(s, sub string) int { return lipgloss.Width(s[:strings.Index(s, sub)]) }
+	if !strings.HasPrefix(plain(1), " P1 待ち") || col(plain(2), "#65") != col(plain(1), "確認") {
+		t.Fatalf("line 2 not under the title:\n%q\n%q", plain(1), plain(2))
+	}
+	banded := func(i int) bool { return strings.Contains(lines[i], "48;5;234") }
+	if banded(1) || !banded(3) || !banded(4) || banded(5) {
+		t.Fatalf("band on the wrong tasks: %v %v %v %v", banded(1), banded(3), banded(4), banded(5))
+	}
+	if n := len(lines); n != 11 { // heading + 3×2, blank, heading + 2
+		t.Fatalf("%d lines", n)
+	}
+	m.settings.TaskSpacing = true
+	if n := len(m.taskListLines(50, 40)); n != 13 { // + a blank between the three
+		t.Fatalf("with spacing: %d lines", n)
+	}
+	m.lightBG = true
+	if !strings.Contains(m.taskListLines(50, 40)[4], "48;5;254") {
+		t.Fatal("light terminals get the light band")
 	}
 }

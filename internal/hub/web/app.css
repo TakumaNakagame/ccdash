@@ -901,3 +901,9 @@ body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) main
 .split-list .page.compact > .row:first-child { flex-wrap: wrap; row-gap: 6px; }
 .split-list .page.compact > .row:first-child h1 { min-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .split-list .page.compact > .row:first-child .btn { flex: none; }
+/* Tasks read as units: an inset hairline (from the title column, like the
+   app's lists) between neighbours, and a little more air inside each. */
+.task + .task > .task-main { border-top: 1px solid var(--line); }
+.task + .task > .task-check { margin-top: 9px; }
+.task-main { padding-top: 8px; padding-bottom: 8px; }
+.task.open + .task > .task-main, .task:hover + .task > .task-main { border-top-color: transparent; }

@@ -118,6 +118,10 @@ type model struct {
 	taskDetail       bool
 	taskDetailScroll int
 	tasksProjectOnly bool
+	// lightBG: the terminal answered the background-colour query with a
+	// light colour (tea.BackgroundColorMsg); colours that sit on the
+	// background (the task pane's band) pick their shade from it.
+	lightBG bool
 
 	// pending-approval alert state
 	lastPendingTotal int
@@ -519,7 +523,7 @@ func expandPath(p string) (string, error) {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.refresh(), tickCmd(m.tickInterval()), animTickCmd(1), m.checkUpdateCmd())
+	return tea.Batch(m.refresh(), tickCmd(m.tickInterval()), animTickCmd(1), m.checkUpdateCmd(), tea.RequestBackgroundColor)
 }
 
 // checkUpdateCmd asks GitHub for the latest release tag in the background
@@ -781,6 +785,8 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.loadTasksCmd())
 		}
 		return m, tea.Batch(cmds...)
+	case tea.BackgroundColorMsg:
+		m.lightBG = !msg.IsDark()
 	case tasksMsg:
 		m.applyTasks(msg)
 	case taskEditedMsg:

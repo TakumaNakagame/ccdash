@@ -617,11 +617,13 @@ func (m *model) taskListLines(w, h int) []string {
 	var lines []string
 	var owner []int
 	selTop, selBottom := 0, 0
+	stripe := 0 // tasks drawn in the current bucket, for the alternating band
 	for i, r := range rows {
 		if r.task < 0 {
 			if len(lines) > 0 {
 				lines, owner = append(lines, ""), append(owner, -1)
 			}
+			stripe = 0
 			bucket := ""
 			if i+1 < len(rows) && rows[i+1].task >= 0 {
 				bucket = m.tasks.Tasks[rows[i+1].task].Bucket
@@ -631,7 +633,15 @@ func (m *model) taskListLines(w, h int) []string {
 			continue
 		}
 		t := m.tasks.Tasks[r.task]
-		l1, l2 := m.taskRowLines(t, today, w)
+		if stripe > 0 && m.settings.TaskSpacing {
+			lines, owner = append(lines, ""), append(owner, -1)
+		}
+		var band lipgloss.TerminalColor
+		if stripe%2 == 1 {
+			band = m.taskBand()
+		}
+		stripe++
+		l1, l2 := m.taskRowLines(t, today, w, band)
 		if i == m.taskSel && m.tasksFocus {
 			selTop = len(lines)
 			l1 = taskSelBar + selectedRow.Render(padRight(ansi.Truncate(ansi.Strip(l1), w-1, ""), w-1))
@@ -679,60 +689,98 @@ var taskPriorityStyle = map[int]lipgloss.Style{
 	4: subtitleStyle,
 }
 
-// taskRowLines is one task as two lines:
+// taskBand is the faint background every other task gets, so each
+// two-line task reads as one unit: a step off the terminal's own
+// background, darker on light terminals, lighter on dark ones — and quieter
+// than the selection (selectedRow).
+func (m *model) taskBand() lipgloss.TerminalColor {
+	if m.lightBG {
+		return lipgloss.Color("254")
+	}
+	return lipgloss.Color("234")
+}
+
+// taskRowLines is one task as two lines. The first says what it is; the
+// second, dimmed and starting under the title, says when and where — so it
+// never reads as the next task's first line. Only an overdue date keeps
+// its colour. band (nil = none) is painted behind both lines, edge to edge.
 //
-//	P1 待ち   定点観測テンプレに入ったインフラ管理組合の…
-//	   #65  ⚠期限 10/6  10/6〜持ち越し  ● Alert D4U  #302
-func (m *model) taskRowLines(t mdl.Task, today string, w int) (string, string) {
+//	P1 待ち   定点観測テンプレに入ったインフラ管理組合…
+//	          #65  ⚠期限 10/6  10/6〜持ち越し  Alert D4U  #302
+func (m *model) taskRowLines(t mdl.Task, today string, w int, band lipgloss.TerminalColor) (string, string) {
+	on := func(st lipgloss.Style) lipgloss.Style {
+		if band != nil {
+			return st.Background(band)
+		}
+		return st
+	}
+	plain := on(lipgloss.NewStyle())
+	dim := on(subtitleStyle)
 	fin := t.Finished()
 	pri := t.Priority
 	if pri < 1 || pri > 4 {
 		pri = 4
 	}
-	prio := taskPriorityStyle[pri].Render(fmt.Sprintf("P%d", pri))
+	prio := on(taskPriorityStyle[pri]).Render(fmt.Sprintf("P%d", pri))
 	if fin {
-		prio = subtitleStyle.Render(fmt.Sprintf("P%d", pri))
+		prio = dim.Render(fmt.Sprintf("P%d", pri))
 	}
 	label := tasks.StatusLabel[t.Status]
 	if t.Status == mdl.TaskDone {
 		label = "✓完了"
 	}
-	status := taskStatusStyle[t.Status].Render(padRight(label, 6))
-	prefix := " " + prio + " " + status + " "
-	title := ansi.Truncate(t.Title, max(4, w-lipgloss.Width(prefix)), "…")
+	status := on(taskStatusStyle[t.Status]).Render(padRight(label, 6))
+	prefix := plain.Render(" ") + prio + plain.Render(" ") + status + plain.Render(" ")
+	indent := lipgloss.Width(prefix)
+	title := ansi.Truncate(t.Title, max(4, w-indent), "…")
 	switch {
 	case fin:
-		title = taskDoneStyle.Render(title)
+		title = on(taskDoneStyle).Render(title)
 	case pri == 1:
-		title = lipgloss.NewStyle().Bold(true).Render(title)
+		title = on(lipgloss.NewStyle().Bold(true)).Render(title)
+	default:
+		title = plain.Render(title)
 	}
 	line1 := prefix + title
 
 	var meta []string
-	meta = append(meta, refStyle.Render(fmt.Sprintf("#%d", t.ID)))
+	meta = append(meta, fmt.Sprintf("#%d", t.ID))
+	overdue := ""
 	if t.Due != "" && !fin {
 		switch {
 		case t.Due < today:
-			meta = append(meta, taskDueStyle.Bold(true).Render("⚠期限 "+shortDay(t.Due)))
+			overdue = "⚠期限 " + shortDay(t.Due)
 		case t.Due == today:
-			meta = append(meta, taskDueStyle.Render("期限 今日"))
+			meta = append(meta, "期限 今日")
 		default:
-			meta = append(meta, subtitleStyle.Render("期限 "+shortDay(t.Due)))
+			meta = append(meta, "期限 "+shortDay(t.Due))
 		}
 	}
+	var after []string
 	if !fin && t.Plan != "" && t.Plan < today {
-		meta = append(meta, taskCarriedStyle.Render(shortDay(t.Plan)+"〜持ち越し"))
+		after = append(after, shortDay(t.Plan)+"〜持ち越し")
 	} else if !fin && t.Plan != "" && t.Bucket != tasks.BucketToday && t.Bucket != tasks.BucketTomorrow {
-		meta = append(meta, subtitleStyle.Render("予定 "+shortDay(t.Plan)))
+		after = append(after, "予定 "+shortDay(t.Plan))
 	}
 	if t.Project != "" {
-		dot := lipgloss.NewStyle().Background(lipgloss.Color(mdl.ProjectColorOf(t.Project, ""))).Render(" ")
-		meta = append(meta, dot+" "+subtitleStyle.Render(t.Project))
+		after = append(after, t.Project)
 	}
 	for _, sid := range t.Sessions {
-		meta = append(meta, refStyle.Render(m.sessionRefOf(sid)))
+		after = append(after, m.sessionRefOf(sid))
 	}
-	line2 := ansi.Truncate("    "+strings.Join(meta, "  "), w, "…")
+	line2 := dim.Render(strings.Repeat(" ", indent) + strings.Join(meta, "  "))
+	if overdue != "" {
+		line2 += dim.Render("  ") + on(taskDueStyle.Bold(true)).Render(overdue)
+	}
+	if len(after) > 0 {
+		line2 += dim.Render("  " + strings.Join(after, "  "))
+	}
+	line2 = ansi.Truncate(line2, w, "…")
+	if band != nil {
+		line1 = ansi.Truncate(line1, w, "")
+		line1 += plain.Render(strings.Repeat(" ", max(0, w-lipgloss.Width(line1))))
+		line2 += plain.Render(strings.Repeat(" ", max(0, w-lipgloss.Width(line2))))
+	}
 	return line1, line2
 }
 
