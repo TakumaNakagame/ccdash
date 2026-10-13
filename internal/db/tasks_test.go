@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/takumanakagame/ccmanage/internal/model"
@@ -146,5 +147,25 @@ func TestTaskImport(t *testing.T) {
 	}
 	if _, err := d.ImportTasks(ctx, f, opt, false); err == nil {
 		t.Fatal("importing into a non-empty list must fail")
+	}
+}
+
+func TestTaskSyncDryRun(t *testing.T) {
+	ctx := context.Background()
+	d := openTest(t)
+	rev0, _ := d.TasksRev(ctx)
+	res, err := d.SyncTasks(ctx, tasks.Proposal{DryRun: true, SyncedAt: "2026-10-13T12:00:00+09:00",
+		Tasks: []tasks.ProposalTask{{Key: "K-1", Title: "x"}}})
+	if err != nil || len(res.Added) != 1 || !res.DryRun || !strings.Contains(res.String(), "（dry-run）") {
+		t.Fatalf("dry run = %+v %v", res, err)
+	}
+	if ts, _ := d.ListTasks(ctx, true); len(ts) != 0 {
+		t.Fatal("dry run saved a task")
+	}
+	if v, _ := d.LastTaskSync(ctx); v != "" {
+		t.Fatalf("dry run moved synced_at: %q", v)
+	}
+	if rev, _ := d.TasksRev(ctx); rev != rev0 {
+		t.Fatal("dry run bumped the rev")
 	}
 }

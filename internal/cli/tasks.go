@@ -205,6 +205,7 @@ proposal into 'ccdash tasks sync'.`,
 	}
 	archive.Flags().BoolVar(&undo, "undo", false, "unarchive")
 
+	var syncDry bool
 	sync := &cobra.Command{
 		Use:   "sync < proposal.json",
 		Short: "Merge an automated run's proposal from stdin (the person's edits win)",
@@ -220,6 +221,7 @@ finished task is never reopened; a new task's project is kept only if it exists.
 			if err := decodeJSON(os.Stdin, &p); err != nil {
 				return fmt.Errorf("proposal: %w", err)
 			}
+			p.DryRun = p.DryRun || syncDry
 			res, err := st.SyncTasks(ctx, p)
 			if err != nil {
 				return err
@@ -228,6 +230,8 @@ finished task is never reopened; a new task's project is kept only if it exists.
 			return nil
 		}),
 	}
+
+	sync.Flags().BoolVar(&syncDry, "dry-run", false, "show what would change, save nothing (synced_at not moved)")
 
 	contextCmd := &cobra.Command{
 		Use:   "context",

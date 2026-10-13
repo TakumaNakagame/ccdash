@@ -449,8 +449,10 @@ func (d *DB) SyncTasks(ctx context.Context, p tasks.Proposal) (tasks.SyncResult,
 				return false, err
 			}
 		}
-		return len(changed) > 0 || p.SyncedAt != "", nil
+		// A dry run rolls back: nothing saved, synced_at not moved.
+		return !p.DryRun && (len(changed) > 0 || p.SyncedAt != ""), nil
 	})
+	res.DryRun = p.DryRun
 	return res, err
 }
 

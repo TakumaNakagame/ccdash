@@ -14,6 +14,8 @@ import (
 type Proposal struct {
 	SyncedAt string         `json:"synced_at,omitempty"`
 	Tasks    []ProposalTask `json:"tasks"`
+	// DryRun reports what the merge would do and saves nothing.
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
 // ProposalTask is one task as the run saw it, matched by Key.
@@ -47,6 +49,7 @@ type SyncResult struct {
 	Updated  []string `json:"updated"`
 	Skipped  []string `json:"skipped"`
 	Warnings []string `json:"warnings,omitempty"`
+	DryRun   bool     `json:"dry_run,omitempty"`
 }
 
 // Touched reports whether the merge changed any task.
@@ -57,6 +60,10 @@ func (r SyncResult) Touched() bool {
 // String is the summary `ccdash tasks sync` prints (the old script's).
 func (r SyncResult) String() string {
 	var b strings.Builder
+	mode := ""
+	if r.DryRun {
+		mode = "（dry-run）"
+	}
 	groups := []struct {
 		label string
 		items []string
@@ -65,7 +72,7 @@ func (r SyncResult) String() string {
 	for i, g := range groups {
 		parts[i] = fmt.Sprintf("%s %d", g.label, len(g.items))
 	}
-	b.WriteString("タスクリスト: " + strings.Join(parts, " / ") + "\n")
+	b.WriteString("タスクリスト" + mode + ": " + strings.Join(parts, " / ") + "\n")
 	for _, g := range groups {
 		for _, it := range g.items {
 			fmt.Fprintf(&b, "- %s: %s\n", g.label, it)
