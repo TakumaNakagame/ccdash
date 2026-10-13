@@ -151,8 +151,11 @@ Reply with ONLY a JSON array, no prose, no code fence:
 	// too; a bare exec of the binary skipped it and hung until the timeout.
 	cmd := newClaudeCmd("--setting-sources", "project", "-p", instruction)
 	cmd.Env = attach.SafeEnv()
-	// The shell and claude share a process group so the timeout kills both.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// A new session: the shell and claude share a process group so the
+	// timeout kills both, and they have no controlling terminal. (With only
+	// Setpgid, a collector started from a terminal left `zsh -i` in a
+	// background group of that tty, where it stopped on SIGTTOU/SIGTTIN.)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Dir = os.TempDir()
 	cmd.Stdin = strings.NewReader(in.String())
 	var stdout, stderr bytes.Buffer

@@ -122,7 +122,7 @@ func TestKickoffTitlesGateAndEmpty(t *testing.T) {
 func TestRunWithContextKillsGroup(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child")
 	cmd := exec.Command("/bin/sh", "-c", "sleep 30 & echo $! > "+pidFile+"; wait")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	if err := runWithContext(ctx, cmd); !errors.Is(err, context.DeadlineExceeded) {
