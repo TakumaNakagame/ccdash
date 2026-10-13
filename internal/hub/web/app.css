@@ -443,7 +443,9 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .bar em { font-style: normal; font-size: 10px; color: var(--text); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* wide screens: TUI-style two panes (session list | session) */
-.split { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(340px, var(--list-w, 34%), 65%) 12px 1fr; }
+/* The list takes --list-w (dragged, else the TUI's list %) but never less
+   than 280px, and the chat keeps at least 360px. */
+.split { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(280px, var(--list-w, 34%), max(280px, calc(100% - 372px))) 12px minmax(0, 1fr); }
 .split-list { min-height: 0; overflow-y: auto; background: var(--bg); }
 .split-list .page { max-width: none; padding: 12px; }
 .split-list .page.compact h1 { font-size: 16px; }
@@ -838,9 +840,16 @@ aside.viewer.side .doc { padding: 22px 22px 40px; }
 
 /* The side pane: docked right; the page makes room. The preview sidebar
    (z 30) covers it while open. */
-:root { --tasks-w: clamp(300px, 26vw, 420px); }
+/* Its width: --tasks-pick (dragged, in vw; the TUI's 15–50%) or about
+   the TUI's default 28%, never under 240px and never so wide that the
+   list and the chat lose their minimum (640px). */
+:root { --tasks-w: clamp(240px, var(--tasks-pick, clamp(280px, 28vw, 480px)), max(240px, calc(100vw - 640px))); }
 #taskpane { position: fixed; z-index: 25; top: 0; right: 0; bottom: 0; width: var(--tasks-w); display: flex; flex-direction: column;
   background: var(--panel); border-left: 1px solid var(--line); }
+/* Drag handle on its left edge; looks like the list's (.split-handle). */
+#taskpane .task-handle { position: absolute; z-index: 1; top: 0; bottom: 0; left: -7px; width: 12px; }
+body.tasks-resizing { cursor: col-resize; user-select: none; }
+body.tasks-resizing .task-handle::before, body.tasks-resizing .task-handle::after { background: var(--accent); }
 body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) main#view { margin-right: var(--tasks-w); }
 .task-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 14px; min-height: 48px; border-bottom: 1px solid var(--line); font-weight: 700; }
 #taskpane .task-body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 8px 24px; }

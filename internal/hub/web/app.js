@@ -329,6 +329,9 @@ function openSplit(id) {
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
+      // Keep what is shown: the CSS minimums (list 280px, chat 360px) may
+      // have stopped the drag short of the pointer.
+      setW((left.getBoundingClientRect().width / box.getBoundingClientRect().width) * 100);
       saved = w;
       save();
     };
@@ -3981,7 +3984,7 @@ function setTaskPane(on) {
   const body = h("div", { class: "task-body" });
   const title = h("span", { class: "grow" }, "タスク");
   const scope = h("span", { class: "muted small" });
-  const el = h("aside", { id: "taskpane", "aria-label": "タスク" },
+  const el = h("aside", { id: "taskpane", "aria-label": "タスク" }, taskHandle(),
     h("div", { class: "task-bar" }, title, scope,
       h("button", { class: "btn small icon", title: "更新", "aria-label": "更新", onclick: () => taskPane?.list.refresh() }, icon("restart")),
       h("button", { class: "btn small icon", title: "閉じる", "aria-label": "閉じる", onclick: () => setTaskPane(false) }, icon("x"))),
@@ -3993,6 +3996,58 @@ function setTaskPane(on) {
   taskPane.list = taskList(body, { only: null, bucket: stop, onCount: (n) => { title.textContent = `タスク ${n}`; } });
   paintTaskScope();
   requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+}
+
+// The task pane's width: dragged on its left edge, kept per browser in
+// localStorage like the list width (ccdash.listWidth) — it suits this
+// screen, not the person's phone or another monitor, so it isn't a hub
+// pref. Stored in percent of the window, bounded like the TUI's
+// pane_tasks_pct (15–50); the CSS adds the pixel minimums.
+const tasksWidthKey = "ccdash.tasksWidth";
+function setTasksPick(pct) {
+  if (pct == null) document.documentElement.style.removeProperty("--tasks-pick");
+  else document.documentElement.style.setProperty("--tasks-pick", Math.min(50, Math.max(15, pct)).toFixed(1) + "vw");
+}
+function loadTasksPick() {
+  let v = null;
+  try { v = +localStorage.getItem(tasksWidthKey) || null; } catch {}
+  setTasksPick(v);
+}
+function taskHandle() {
+  const handle = h("div", { class: "split-handle task-handle", title: "ドラッグで幅を変更（ダブルクリックで初期値、← → キーでも調整）", tabindex: "0", role: "separator", "aria-orientation": "vertical" });
+  const cur = () => (parseFloat(getComputedStyle(handle.parentElement).width) / innerWidth) * 100;
+  const save = () => { try { localStorage.setItem(tasksWidthKey, cur().toFixed(1)); } catch {} };
+  let frame = 0;
+  const relayout = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; window.dispatchEvent(new Event("resize")); }); };
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    document.body.classList.add("tasks-resizing");
+    const move = (ev) => { setTasksPick(((innerWidth - ev.clientX) / innerWidth) * 100); relayout(); };
+    const up = () => {
+      document.body.classList.remove("tasks-resizing");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      save();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  });
+  handle.addEventListener("dblclick", () => {
+    try { localStorage.removeItem(tasksWidthKey); } catch {}
+    setTasksPick(null);
+    relayout();
+  });
+  handle.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    setTasksPick(cur() + (e.key === "ArrowLeft" ? 1 : -1));
+    save();
+    relayout();
+  });
+  return handle;
 }
 
 // paintTaskScope follows the route: a device's own list inside it, all of
@@ -4008,6 +4063,7 @@ function installTaskPane() {
   const btn = $("#taskstoggle");
   if (!btn) return;
   btn.prepend(icon("tasks"));
+  loadTasksPick();
   btn.addEventListener("click", () => {
     if (!wideQuery.matches) { location.hash = "#/tasks"; return; }
     setTaskPane(!taskPane);
