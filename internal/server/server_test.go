@@ -395,6 +395,46 @@ func TestResumeDoesNotBumpLastSeen(t *testing.T) {
 	}
 }
 
+// TestResumeKeepsSeen: restarting a session (session-end, then a resume
+// session-start — also what every hosted session goes through on a
+// collector restart) must not make a read session NEW again.
+func TestResumeKeepsSeen(t *testing.T) {
+	s, d, tok := newTestServer(t)
+	ctx := context.Background()
+	act := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := d.UpsertSession(ctx, &model.Session{
+		SessionID: "s3", Cwd: "/tmp/proj", Status: model.StatusStopped, LastActivity: act,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.MarkSeen(ctx, "s3"); err != nil {
+		t.Fatal(err)
+	}
+	get := func() model.Session {
+		t.Helper()
+		sess, ok, err := d.GetSession(ctx, "s3")
+		if err != nil || !ok {
+			t.Fatalf("GetSession: %v %v", ok, err)
+		}
+		return sess
+	}
+	do(t, s, http.MethodPost, "/hooks/session-end", tok, []byte(`{"session_id":"s3","cwd":"/tmp/proj"}`))
+	do(t, s, http.MethodPost, "/hooks/session-start", tok, []byte(`{"session_id":"s3","source":"resume","cwd":"/tmp/proj"}`))
+	do(t, s, http.MethodPost, "/hooks/session-end", tok, []byte(`{"session_id":"s3","cwd":"/tmp/proj"}`))
+	got := get()
+	if !got.LastActivity.Equal(act) {
+		t.Errorf("restart moved last_activity to %v, want %v", got.LastActivity, act)
+	}
+	if got.Unseen {
+		t.Errorf("restart made a read session unseen (last_activity %v, seen_at %v)", got.LastActivity, got.SeenAt)
+	}
+	// A real hook is still activity.
+	do(t, s, http.MethodPost, "/hooks/stop", tok, []byte(`{"session_id":"s3","cwd":"/tmp/proj"}`))
+	if got := get(); !got.LastActivity.After(act) {
+		t.Errorf("stop did not move last_activity (%v)", got.LastActivity)
+	}
+}
+
 // TestOnlyPromptsBumpLastSeen: tool traffic keeps a session's time; a
 // prompt moves it.
 func TestOnlyPromptsBumpLastSeen(t *testing.T) {

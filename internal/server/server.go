@@ -528,8 +528,11 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Resuming only opens the session — don't let that move it to the
-	// top of the list. Fresh starts and clears are real activity.
-	if err := s.ensureSessionAt(r, p, model.StatusActive, p.Source != "resume"); err != nil {
+	// top of the list or mark it NEW (a restarted session, or every hosted
+	// one after a collector restart, would come back unread). Fresh starts
+	// and clears are real activity.
+	fresh := p.Source != "resume"
+	if err := s.ensureSessionAt(r, p, model.StatusActive, fresh, fresh); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -554,14 +557,16 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 // its last prompt (handleUserPrompt, and discovery from the transcript),
 // not tool traffic or notifications.
 func (s *Server) ensureSession(r *http.Request, p *hookPayload, status model.SessionStatus) error {
-	return s.ensureSessionAt(r, p, status, false)
+	return s.ensureSessionAt(r, p, status, false, true)
 }
 
 // ensureSessionAt is ensureSession with control over last_seen: bump=true
 // moves it to now; bump=false leaves an existing row's timestamp alone (a
 // brand-new row starts at now, and discovery then sets it to the
-// transcript's last prompt time).
-func (s *Server) ensureSessionAt(r *http.Request, p *hookPayload, status model.SessionStatus, bump bool) error {
+// transcript's last prompt time). activity=true stamps last_activity
+// (what makes a session NEW past seen_at); opening and closing a session
+// pass false.
+func (s *Server) ensureSessionAt(r *http.Request, p *hookPayload, status model.SessionStatus, bump, activity bool) error {
 	if p.SessionID == "" {
 		return nil
 	}
@@ -584,8 +589,10 @@ func (s *Server) ensureSessionAt(r *http.Request, p *hookPayload, status model.S
 		TranscriptPath: p.TranscriptPath,
 		Model:          p.Model,
 		Status:         status,
-		// Any hook means the session is doing something right now.
-		LastActivity: time.Now(),
+	}
+	if activity {
+		// The session is doing something right now.
+		sess.LastActivity = time.Now()
 	}
 
 	if sess.Repo == "" && sess.Branch == "" && sess.Commit == "" && sess.Cwd != "" {
@@ -608,7 +615,7 @@ func (s *Server) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 	}
 	// Closing a session isn't activity either (often it was only opened
 	// to look at it).
-	s.ensureSessionAt(r, p, model.StatusStopped, false)
+	s.ensureSessionAt(r, p, model.StatusStopped, false, false)
 	_, _ = s.db.AppendEvent(r.Context(), &model.Event{
 		SessionID: p.SessionID,
 		EventType: model.EventSessionEnd,
@@ -624,7 +631,7 @@ func (s *Server) handleUserPrompt(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	s.ensureSessionAt(r, p, model.StatusActive, true) // a prompt is what moves last_seen
+	s.ensureSessionAt(r, p, model.StatusActive, true, true) // a prompt is what moves last_seen
 	_ = s.db.ClearAttention(r.Context(), p.SessionID, "")
 	_ = s.db.SetWait(r.Context(), p.SessionID, "", "") // the declaration answered
 	summary := truncate(strings.TrimSpace(p.Prompt), 200)
