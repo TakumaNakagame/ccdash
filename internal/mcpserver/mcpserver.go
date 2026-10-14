@@ -588,6 +588,9 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
 	if err != nil {
+		if strings.Contains(err.Error(), "not available through the hub") && !strings.Contains(err.Error(), "update ccdash there") {
+			err = fmt.Errorf("%w (the other host's ccdash is probably older than this tool — update ccdash there)", err)
+		}
 		return "", err
 	}
 	b, err := json.MarshalIndent(v, "", " ")
@@ -807,9 +810,9 @@ func (s *Server) listProjects(ctx context.Context, hostArg string) (any, error) 
 		rows, err := s.projectsOn(ctx, h)
 		if err != nil {
 			if len(hs) == 1 {
-				return nil, err
+				return nil, h.explain(err)
 			}
-			errs[hostLabel(h)] = err.Error()
+			errs[hostLabel(h)] = h.explain(err).Error()
 			continue
 		}
 		out = append(out, rows...)
