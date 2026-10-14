@@ -44,12 +44,12 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	j := func(v any) { _ = json.NewEncoder(w).Encode(v) }
 	switch p := r.URL.Path; {
 	case p == "/api/peer/self":
-		j(map[string]any{"id": "A", "name": "laptop", "peer_access": "control"})
+		j(map[string]any{"id": "A", "name": "laptop", "peer_access": "control", "letter": "A"})
 	case p == "/api/devices":
 		j([]map[string]any{
-			{"id": "A", "name": "laptop", "online": true},
-			{"id": "B", "name": "server", "online": true},
-			{"id": "C", "name": "old", "online": false, "last_seen": time.Now().Add(-3 * time.Hour)},
+			{"id": "A", "name": "laptop", "online": true, "letter": "A"},
+			{"id": "B", "name": "server", "online": true, "letter": "B"},
+			{"id": "C", "name": "old", "online": false, "letter": "C", "last_seen": time.Now().Add(-3 * time.Hour)},
 		})
 	case p == "/api/d/B/api/sessions":
 		if r.URL.Query().Get("archived") == "1" {
@@ -57,8 +57,8 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		j([]model.Session{
-			{SessionID: "srv-1", Num: 1, Cwd: "/srv/infra", Title: "k8s upgrade", CustomTitle: f.titles["srv-1"], Status: model.StatusIdle, LastSeen: time.Now()},
-			{SessionID: "srv-2", Num: 2, Cwd: "/srv/x", Title: "old", Status: model.StatusStopped, LastSeen: time.Now().Add(-time.Hour)},
+			{SessionID: "srv-1", Num: 1, HostLetter: "B", Cwd: "/srv/infra", Title: "k8s upgrade", CustomTitle: f.titles["srv-1"], Status: model.StatusIdle, LastSeen: time.Now()},
+			{SessionID: "srv-2", Num: 2, HostLetter: "B", Cwd: "/srv/x", Title: "old", Status: model.StatusStopped, LastSeen: time.Now().Add(-time.Hour)},
 		})
 	case strings.HasPrefix(p, "/api/d/B/api/sessions/") && strings.HasSuffix(p, "/title"):
 		var b struct{ Title string }
@@ -86,6 +86,7 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func multiHostServer(t *testing.T, peer bool) (*Server, *fakeHub, *db.DB) {
 	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir()) // no real hub.json (hubcfg.Letter)
 	ctx := context.Background()
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.sqlite"))
 	if err != nil {
@@ -104,6 +105,7 @@ func multiHostServer(t *testing.T, peer bool) (*Server, *fakeHub, *db.DB) {
 	t.Cleanup(hs.Close)
 	s := New(store.NewLocal(d), "test", false).WithHubURL(hs.URL).WithFleet(NewFleet(hs.URL, "ccdh_tok"))
 	s.self = func() string { return "" }
+	s.letter = func() string { return "A" }
 	return s, f, d
 }
 
@@ -135,7 +137,7 @@ func TestMultiHost(t *testing.T) {
 	}
 	// Every host by default; another host's rows carry host and <host>#N.
 	out = call(t, s, "list_sessions", `{}`)
-	for _, want := range []string{`"matched": 3`, `"ref": "#1"`, `"ref": "server#1"`, `"host": "laptop"`, `"host": "server"`, `"offline_hosts"`, `"old"`} {
+	for _, want := range []string{`"matched": 3`, `"ref": "A1"`, `"ref": "B1"`, `"host": "laptop"`, `"host": "server"`, `"offline_hosts"`, `"old"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list_sessions lacks %s: %s", want, out)
 		}
@@ -158,8 +160,20 @@ func TestMultiHost(t *testing.T) {
 	if f.titles["srv-1"] != "there" || f.titles["srv-2"] != "by id" {
 		t.Errorf("remote titles %v", f.titles)
 	}
-	if out := call(t, s, "get_session", `{"session":"server#1"}`); !strings.Contains(out, `"ref": "server#1"`) {
+	if out := call(t, s, "get_session", `{"session":"server#1"}`); !strings.Contains(out, `"ref": "B1"`) {
 		t.Errorf("get_session: %s", out)
+	}
+	// Letter refs: B2 is server's #2, a1 is this machine's #1.
+	call(t, s, "set_title", `{"session":"B2","title":"by letter"}`)
+	if f.titles["srv-2"] != "by letter" {
+		t.Errorf("B2 title %v", f.titles)
+	}
+	call(t, s, "set_title", `{"session":"a1","title":"here again"}`)
+	if x, _, _ := d.GetSession(ctx, "lap-1"); x.CustomTitle != "here again" {
+		t.Errorf("a1 title %q", x.CustomTitle)
+	}
+	if e := callErr(t, s, "set_title", `{"session":"B1","host":"laptop","title":"x"}`); !strings.Contains(e, "host B") {
+		t.Errorf("letter/host conflict: %s", e)
 	}
 
 	// Start on another host; the default stays this machine.

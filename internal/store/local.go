@@ -15,6 +15,7 @@ import (
 
 	"github.com/takumanakagame/ccmanage/internal/auth"
 	"github.com/takumanakagame/ccmanage/internal/db"
+	"github.com/takumanakagame/ccmanage/internal/hubcfg"
 	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/redact"
@@ -39,7 +40,8 @@ func NewLocal(d *db.DB) *Local {
 }
 
 func (l *Local) ListSessions(ctx context.Context, archived bool) ([]model.Session, error) {
-	return l.db.ListSessions(ctx, archived)
+	ss, err := l.db.ListSessions(ctx, archived)
+	return hubcfg.WithLetter(ss), err
 }
 
 func (l *Local) ListPendingApprovals(ctx context.Context) ([]model.Approval, error) {

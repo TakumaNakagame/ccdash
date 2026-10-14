@@ -89,12 +89,19 @@ func (s *Server) hubServeOnce(ctx context.Context, cfg hubcfg.Config) error {
 	hdr := http.Header{}
 	hdr.Set(tunnel.HeaderDeviceVersion, buildinfo.Version)
 	hdr.Set(tunnel.HeaderDeviceHost, host)
-	sess, err := tunnel.Dial(dialCtx, cfg.URL, cfg.Token, hdr)
+	sess, rh, err := tunnel.DialHeader(dialCtx, cfg.URL, cfg.Token, hdr)
 	cancel()
 	if err != nil {
 		return err
 	}
 	log.Printf("hub: connected to %s", cfg.URL)
+	// What the hub calls this machine; its letter prefixes session numbers.
+	// An older hub sends neither: keep what we had.
+	if l := rh.Get(tunnel.HeaderDeviceLetter); l != "" {
+		if err := hubcfg.SetIdentity(l, rh.Get(tunnel.HeaderDeviceName)); err != nil {
+			log.Printf("hub: save identity: %v", err)
+		}
+	}
 	hs := &http.Server{Handler: s.hubHandler(), ReadHeaderTimeout: 10 * time.Second}
 	stop := make(chan struct{})
 	go s.hubWatch(ctx, sess, cfg, stop)

@@ -101,7 +101,7 @@ func (h *Hub) servePeer(w http.ResponseWriter, r *http.Request, tok string, api 
 		return
 	}
 	if r.URL.Path == "/api/peer/self" {
-		writeJSON(w, map[string]any{"id": d.ID, "name": d.Name, "peer_access": d.PeerAccess})
+		writeJSON(w, map[string]any{"id": d.ID, "name": d.Name, "peer_access": d.PeerAccess, "letter": d.Letter})
 		return
 	}
 	if r.Method != http.MethodGet {

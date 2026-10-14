@@ -25,6 +25,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/discovery"
 	"github.com/takumanakagame/ccmanage/internal/gitinfo"
 	"github.com/takumanakagame/ccmanage/internal/hookcfg"
+	"github.com/takumanakagame/ccmanage/internal/hubcfg"
 	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/procmap"
 	"github.com/takumanakagame/ccmanage/internal/redact"
@@ -1050,7 +1051,7 @@ func (s *Server) handleAPISessions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeOK(w, ss)
+	writeOK(w, hubcfg.WithLetter(ss))
 }
 
 func (s *Server) handleAPIApprovals(w http.ResponseWriter, r *http.Request) {

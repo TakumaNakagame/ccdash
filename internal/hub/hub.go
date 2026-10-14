@@ -300,6 +300,7 @@ func (h *Hub) Handler() http.Handler {
 		api.HandleFunc("POST /api/devices/{id}/rename", h.handleRenameDevice)
 		api.HandleFunc("DELETE /api/devices/{id}", h.handleDeleteDevice)
 		api.HandleFunc("POST /api/devices/{id}/peer", h.handlePeerAccess)
+		api.HandleFunc("POST /api/devices/{id}/letter", h.handleSetLetter)
 	}
 	api.HandleFunc("GET /api/me", h.handleMe)
 	api.HandleFunc("GET /api/devices", h.handleListDevices)
@@ -633,6 +634,31 @@ func (h *Hub) handleRenameDevice(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleSetLetter changes a device's session-number letter. The device
+// learns it when its tunnel reconnects, so the tunnel is dropped here.
+func (h *Hub) handleSetLetter(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Letter string `json:"letter"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil || !validLetter(strings.ToUpper(strings.TrimSpace(req.Letter))) {
+		http.Error(w, "letter must be 1–2 letters A–Z", http.StatusBadRequest)
+		return
+	}
+	id := r.PathValue("id")
+	err := h.st.setLetter(r.Context(), id, strings.ToUpper(strings.TrimSpace(req.Letter)))
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		http.NotFound(w, r)
+	case errors.Is(err, ErrDuplicateLetter):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	default:
+		h.dropConn(id)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func (h *Hub) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := h.st.deleteDevice(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
@@ -700,6 +726,10 @@ func (h *Hub) handleAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown device token", http.StatusUnauthorized)
 		return
 	}
+	// Tell the device what we call it: its letter prefixes its session
+	// numbers ("A42"), its name is shown next to them.
+	w.Header().Set(tunnel.HeaderDeviceLetter, d.Letter)
+	w.Header().Set(tunnel.HeaderDeviceName, d.Name)
 	sess, err := tunnel.Accept(w, r)
 	if err != nil {
 		log.Printf("hub: tunnel accept for %s: %v", d.Name, err)

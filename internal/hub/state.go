@@ -25,6 +25,7 @@ type stateStore interface {
 	deviceByToken(ctx context.Context, tok string) (Device, error)
 	touchDevice(ctx context.Context, id, hostname, version string) error
 	setPeerAccess(ctx context.Context, id, access string) error
+	setLetter(ctx context.Context, id, letter string) error
 	ensureLocalDevice(ctx context.Context, name string) (Device, error)
 
 	addSub(ctx context.Context, email string, sub pushSub) error

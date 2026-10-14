@@ -32,6 +32,14 @@ const HeaderDeviceVersion = "X-Ccdash-Version"
 // HeaderDeviceHost carries the device's hostname on the dial.
 const HeaderDeviceHost = "X-Ccdash-Hostname"
 
+// HeaderDeviceLetter and HeaderDeviceName come back on the hub's answer to
+// the dial: what the hub calls this device (its letter prefixes session
+// numbers, "A42").
+const (
+	HeaderDeviceLetter = "X-Ccdash-Device-Letter"
+	HeaderDeviceName   = "X-Ccdash-Device-Name"
+)
+
 // maxMessage bounds one WebSocket message. yamux frames are at most its
 // receive window (256 KiB by default) plus a header, so 1 MiB is ample.
 const maxMessage = 1 << 20
@@ -53,9 +61,16 @@ func YamuxConfig() *yamux.Config {
 // without the tunnel path) and returns the device side of the tunnel: a
 // yamux session whose Accept yields one conn per hub request.
 func Dial(ctx context.Context, hubURL, token string, hdr http.Header) (*yamux.Session, error) {
+	sess, _, err := DialHeader(ctx, hubURL, token, hdr)
+	return sess, err
+}
+
+// DialHeader is Dial that also returns the hub's response headers
+// (HeaderDeviceLetter / HeaderDeviceName).
+func DialHeader(ctx context.Context, hubURL, token string, hdr http.Header) (*yamux.Session, http.Header, error) {
 	u, err := DialURL(hubURL)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	h := http.Header{}
 	for k, v := range hdr {
@@ -65,18 +80,22 @@ func Dial(ctx context.Context, hubURL, token string, hdr http.Header) (*yamux.Se
 	ws, resp, err := websocket.Dial(ctx, u, &websocket.DialOptions{HTTPHeader: h})
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
-			return nil, ErrUnauthorized
+			return nil, nil, ErrUnauthorized
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	ws.SetReadLimit(maxMessage)
 	nc := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
 	sess, err := yamux.Server(nc, YamuxConfig())
 	if err != nil {
 		_ = nc.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	return sess, nil
+	var rh http.Header
+	if resp != nil {
+		rh = resp.Header
+	}
+	return sess, rh, nil
 }
 
 // ErrUnauthorized means the hub rejected the device token — retrying won't

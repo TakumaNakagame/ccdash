@@ -15,6 +15,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/takumanakagame/ccmanage/internal/model"
 
 	"github.com/takumanakagame/ccmanage/internal/paths"
 )
@@ -23,6 +27,12 @@ import (
 type Config struct {
 	URL   string `json:"url"`   // hub origin, e.g. https://ccdash.g3.lab-dev.net
 	Token string `json:"token"` // device token issued by the hub's "Add device"
+	// Letter and Name are what the hub calls this machine, written by the
+	// collector each time its tunnel connects (the hub sends them on the
+	// dial). Letter prefixes session numbers ("A42") so they are unique
+	// across machines.
+	Letter string `json:"letter,omitempty"`
+	Name   string `json:"name,omitempty"`
 }
 
 // ErrNotFound means this machine hasn't joined a hub.
@@ -87,4 +97,61 @@ func Remove() error {
 		return err
 	}
 	return nil
+}
+
+var letterCache struct {
+	sync.Mutex
+	mtime  time.Time
+	letter string
+}
+
+// Letter is this machine's hub letter ("" when not joined or not yet told),
+// re-read only when hub.json changes — cheap enough for every list read.
+func Letter() string {
+	p, err := Path()
+	if err != nil {
+		return ""
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		return ""
+	}
+	letterCache.Lock()
+	defer letterCache.Unlock()
+	if fi.ModTime().Equal(letterCache.mtime) {
+		return letterCache.letter
+	}
+	cfg, err := Load()
+	letterCache.mtime = fi.ModTime()
+	letterCache.letter = ""
+	if err == nil {
+		letterCache.letter = cfg.Letter
+	}
+	return letterCache.letter
+}
+
+// SetIdentity records the hub's letter and name for this machine, if they
+// changed (the collector calls it on each connect).
+func SetIdentity(letter, name string) error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	if cfg.Letter == letter && cfg.Name == name {
+		return nil
+	}
+	cfg.Letter, cfg.Name = letter, name
+	return Save(cfg)
+}
+
+// WithLetter stamps this machine's hub letter on session rows.
+func WithLetter(ss []model.Session) []model.Session {
+	l := Letter()
+	if l == "" {
+		return ss
+	}
+	for i := range ss {
+		ss[i].HostLetter = l
+	}
+	return ss
 }

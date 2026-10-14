@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/takumanakagame/ccmanage/internal/hubcfg"
 	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/settings"
 	"github.com/takumanakagame/ccmanage/internal/store"
@@ -43,9 +44,9 @@ when the operator has joined several machines to a ccdash hub and allowed it, of
 machines too ("hosts"; list_hosts names them).
 Use the read tools to see the operator's projects, which sessions are running, which
 need the operator (approvals, questions), and what a session has been doing recently.
-Sessions are referred to as "#N" (their short number) or by session id. Numbers are per
-host: a bare "#N" is this machine's; another host's session is "<host>#N" (as rows show it
-in ref), or pass host. Read tools without host cover every reachable host (rows carry host);
+Sessions are referred to by their ref — the host's letter and number, e.g. "A231" (machine A's
+session 231, as rows show it in ref) — or by session id. The letter makes a ref unique across
+machines; a bare "#N" or N means this machine's session N; pass host for another machine. Read tools without host cover every reachable host (rows carry host);
 start_session, schedule_restart and the project tools act on this machine unless host says
 otherwise — start a session on another machine with host + a directory that exists there.
 The organizing tools (set_project, rename_project, order_projects, set_project_color, set_title, set_later,
@@ -70,7 +71,7 @@ change status with set_task_status (with why), and set the day with plan_task wh
 operator decides it. Edits from a session link that session to the task. There is no
 delete: done / cancelled tasks are archived. Writes to Jira, Slack or GitHub are not done
 here — use those services' own tools and keep the links on the task.
-Task ids and session numbers are both small numbers: a bare "#11" from the operator most
+Task ids are "#11"; sessions are "A231" (letter + number). A bare "#11" from the operator most
 often means a task; if both a task and a session fit and the context doesn't decide, ask.
 
 Status rule — follow it in every session that has these tools: the operator juggles many
@@ -95,6 +96,7 @@ type Server struct {
 	fleet    *Fleet // the other hosts through the hub; nil = this machine only (hosts.go)
 	now      func() time.Time
 	self     func() string // the calling claude's session id ("" = unknown); see selfSession
+	letter   func() string // this machine's hub letter (hubcfg.Letter); nil with -r
 }
 
 // WithHubURL makes every session row carry a link to its chat in that hub's
@@ -106,7 +108,7 @@ func (s *Server) WithHubURL(u string) *Server {
 
 // New returns a server over st; readOnly leaves out the organizing tools.
 func New(st store.Store, version string, readOnly bool) *Server {
-	return &Server{st: st, version: version, readOnly: readOnly, now: time.Now, self: selfSession}
+	return &Server{st: st, version: version, readOnly: readOnly, now: time.Now, self: selfSession, letter: hubcfg.Letter}
 }
 
 func (s *Server) tools() []map[string]any {
@@ -236,7 +238,7 @@ var readOnlyHint = map[string]any{"readOnlyHint": true}
 
 var writeHint = map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true}
 
-var sessionList = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": `sessions as "#N", N or session id`}
+var sessionList = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": `sessions as refs ("A231"), "#N" / N for this machine, or session ids`}
 
 func required(props map[string]any, req ...string) map[string]any {
 	m := schema(props)
@@ -459,7 +461,7 @@ var readTools = []map[string]any{
 var (
 	hostAll     = map[string]any{"type": "string", "description": `only this host (a name from list_hosts); default = every host this machine can reach`}
 	hostHere    = map[string]any{"type": "string", "description": `the host (a name from list_hosts) to act on; default = this machine`}
-	hostSession = map[string]any{"type": "string", "description": `the host of a bare "#N" (a name from list_hosts); default = this machine. A session on another host can also be written "<host>#N", or given by session id`}
+	hostSession = map[string]any{"type": "string", "description": `the host of a bare "#N" (a name or letter from list_hosts); default = this machine. Refs like "B22" already name their host`}
 )
 
 func init() {
@@ -601,6 +603,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 type sessionRow struct {
 	Ref       string  `json:"ref,omitempty"`
 	Host      string  `json:"host,omitempty"` // the hub device name of its collector (multi-host)
+	HostLetter string `json:"host_letter,omitempty"` // the hub's letter for that host (its sessions are <letter>N)
 	Title     string  `json:"title"`
 	Project   string  `json:"project,omitempty"`
 	Group     string  `json:"group,omitempty"`
@@ -634,6 +637,11 @@ func (s *Server) row(l located) sessionRow {
 	}
 	if r.Ref != "" {
 		r.Ref = l.ref()
+	}
+	if x.HostLetter == "" && l.h.letter != "" {
+		r.HostLetter = l.h.letter
+	} else {
+		r.HostLetter = x.HostLetter
 	}
 	if s.hubURL != "" {
 		r.URL = s.hubURL + "/s/" + url.PathEscape(x.SessionID)
@@ -921,7 +929,7 @@ func (s *Server) listSessions(ctx context.Context, hostArg, project, query strin
 
 func matches(l located, q string) bool {
 	x := l.x
-	if ref := x.Ref(); ref != "" && (q == strings.ToLower(ref) || q == ref[1:] || q == strings.ToLower(l.ref())) {
+	if ref := l.ref(); ref != "" && (q == strings.ToLower(ref) || model.MatchesRef(q, x.HostLetter, x.Num)) {
 		return true
 	}
 	for _, f := range []string{x.DisplayTitle(), x.Project, x.UserGroup, x.Repo, x.Cwd, x.Branch, x.SessionID, l.h.name} {
@@ -937,6 +945,9 @@ func matches(l located, q string) bool {
 // set_status). The others use locate (hosts.go).
 func (s *Server) findSession(ctx context.Context, ref string) (model.Session, error) {
 	ref = strings.TrimSpace(ref)
+	if l, n, ok := letterRef(ref); ok && strings.EqualFold(l, s.selfLetter()) {
+		ref = n
+	}
 	for _, archived := range []bool{false, true} {
 		ss, err := s.st.ListSessions(ctx, archived)
 		if err != nil {

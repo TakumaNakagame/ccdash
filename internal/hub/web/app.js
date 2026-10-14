@@ -552,7 +552,7 @@ function boardCard(c) {
   const reason = s.attention === "needs_you" ? (s.attention_reason || "要対応") : declared || (s.attention === "done" ? "完了" : "作業中");
   return h("a", { class: "card " + (s.attention || "working"), href: `#/d/${c.device_id}/s/${encodeURIComponent(s.session_id)}` },
     h("div", { class: "row" }, h("span", { class: "chip" }, c.device_name), h("span", { class: "grow" }), h("span", { class: "muted small" }, rel(s.last_seen))),
-    h("div", { class: titleClass("card-title", s) }, (s.num ? `#${s.num} ` : "") + sessionTitle(s)),
+    h("div", { class: titleClass("card-title", s) }, (s.num ? sref(s, c.device_id) + " " : "") + sessionTitle(s)),
     h("div", { class: "card-reason" }, reason),
     s.attention ? null : beamEl());
 }
@@ -609,6 +609,7 @@ function deviceRow(d) {
     : local ? "collector に接続していません（再接続を待っています）" : `オフライン${d.last_seen ? " · 最終接続 " + rel(d.last_seen) : " · 未接続"}`;
   return h("div", { class: "item", onclick: () => d.online ? (location.hash = `#/d/${d.id}`) : toast("この端末はオフラインです") },
     h("span", { class: "dot" + (d.online ? " on" : "") }),
+    d.letter ? h("span", { class: "num mono", title: "このホストのセッション番号の頭文字（例: " + d.letter + "12）" }, d.letter) : null,
     h("div", { class: "grow" }, h("div", { class: "title" }, d.name), h("div", { class: "sub" }, sub)),
     d.peer_access ? h("span", { class: "chip", title: "この端末の ccdash mcp から他の端末へアクセスできます" }, PEER_LABEL[d.peer_access]) : null,
     local ? null : h("button", { class: "btn small", onclick: (e) => { e.stopPropagation(); deviceMenu(d); } }, "管理"));
@@ -650,6 +651,7 @@ const PEER_LABEL = { "": "オフ", read: "他端末: 閲覧", control: "他端�
 function deviceMenu(d) {
   dialog((body, close) => {
     const name = h("input", { value: d.name, maxlength: 64 });
+    const letter = h("input", { value: d.letter || "", maxlength: 2, class: "mono", style: "width:4em;text-transform:uppercase" });
     const peer = h("select", { class: "mode" },
       h("option", { value: "", selected: !d.peer_access }, "オフ（この端末からは自分のセッションだけ）"),
       h("option", { value: "read", selected: d.peer_access === "read" }, "閲覧（他の端末のセッションを見る）"),
@@ -664,6 +666,7 @@ function deviceMenu(d) {
     body.append(h("h1", {}, d.name),
       h("p", { class: "muted small" }, `ID ${d.id} · 登録 ${new Date(d.created_at).toLocaleString()}`),
       h("label", {}, "名前", h("br"), name),
+      h("label", {}, "頭文字（セッション番号の前に付く。例: ", d.letter || "A", "12）", h("br"), letter),
       h("label", {}, "他の端末へのアクセス（この端末の ccdash mcp から）", h("br"), peer),
       h("p", { class: "muted small" }, "オンにすると、この端末の Claude が MCP 経由で他の端末のセッションを見たり（閲覧）、起動・停止・整理したり（操作）できます。この端末が乗っ取られると他の端末にも及ぶので、必要な端末だけに。承認の応答や端末の設定変更はどちらでもできません。"),
       h("div", { class: "actions" },
@@ -678,7 +681,12 @@ function deviceMenu(d) {
         h("span", { class: "grow" }),
         h("button", { class: "btn", value: "cancel" }, "閉じる"),
         h("button", { type: "button", class: "btn primary", onclick: async () => {
-          try { await api(`/api/devices/${d.id}/rename`, { method: "POST", json: { name: name.value.trim() } }); close(); route(); } catch (e) { toast(e.message); }
+          try {
+            if (name.value.trim() !== d.name) await api(`/api/devices/${d.id}/rename`, { method: "POST", json: { name: name.value.trim() } });
+            const l = letter.value.trim().toUpperCase();
+            if (l && l !== (d.letter || "")) await api(`/api/devices/${d.id}/letter`, { method: "POST", json: { letter: l } });
+            close(); route();
+          } catch (e) { toast(e.message); }
         } }, "保存")));
   });
 }
@@ -820,6 +828,14 @@ function projectHeader(name, color, members, onNew, onMove) {
     onMove ? h("button", { type: "button", class: "proj-new", title: "プロジェクトを上へ", "aria-label": "プロジェクトを上へ", onclick: (e) => { e.stopPropagation(); onMove(-1); } }, icon("up")) : null,
     onMove ? h("button", { type: "button", class: "proj-new", title: "プロジェクトを下へ", "aria-label": "プロジェクトを下へ", onclick: (e) => { e.stopPropagation(); onMove(1); } }, icon("down")) : null,
     onNew ? h("button", { type: "button", class: "proj-new", title: "このプロジェクトで新規セッション", "aria-label": "このプロジェクトで新規セッション", onclick: (e) => { e.stopPropagation(); onNew(); } }, icon("plus")) : null);
+}
+
+// sref is a session's handle: its host's letter and number ("A42"), unique
+// across machines (model.Session.Ref); "#42" while the host has no letter.
+function sref(s, dev) {
+  if (!s?.num) return "";
+  const l = s.host_letter || (dev && deviceCache.get(dev)?.letter) || "";
+  return l ? `${l}${s.num}` : `#${s.num}`;
 }
 
 function sessionTitle(s) {
@@ -1112,7 +1128,7 @@ async function devicePage(opts = {}) {
     const q = filter.value.trim().toLowerCase();
     const rows = sessions
       .filter((s) => !tab || groupOf(s) === tab)
-      .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${groupOf(s)} ${s.project || ""} ${s._devName}`.toLowerCase().includes(q))
+      .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${sref(s, s._dev)} ${groupOf(s)} ${s.project || ""} ${s._devName}`.toLowerCase().includes(q))
       .sort((a, b) => (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (new Date(b.last_seen) - new Date(a.last_seen)));
     const ordered = laterFirst(projectsFirst(rows));
     const out = [];
@@ -1468,7 +1484,7 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, host
     row.addEventListener("pointercancel", cancel);
   } },
     check || null,
-    h("span", { class: "num" }, s.num ? `#${s.num}` : ""),
+    h("span", { class: "num" }, sref(s, id)),
     h("div", { class: "grow" },
       h("div", { class: titleClass("title", s), title: s.title_status === "running" ? TITLING_TIP : null }, s.favorite ? h("span", { class: "pin", title: "ピン留め" }, icon("pin")) : null, sessionTitle(s)),
       h("div", { class: "sub" }, statusTag(s.status), sub),
@@ -1494,7 +1510,7 @@ function renderApprovals(el, id, aps, sessions, hostName = "") {
       catch (e) { toast(e.message); }
     };
     return h("div", { class: "approval" },
-      h("div", { class: "row" }, h("b", {}, a.tool), h("span", { class: "grow muted small" }, s ? `${s.num ? "#" + s.num + " " : ""}${sessionTitle(s)}` : a.session_id)),
+      h("div", { class: "row" }, h("b", {}, a.tool), h("span", { class: "grow muted small" }, s ? `${s.num ? sref(s, id) + " " : ""}${sessionTitle(s)}` : a.session_id)),
       h("pre", { class: "mono" }, input),
       h("div", { class: "row" },
         h("button", { class: "btn primary", onclick: () => decide("allow") }, "許可"),
@@ -2435,7 +2451,7 @@ function sessionMenu(id, s, groups, refresh) {
       try { await d.post("/api/projects/color", { project: s.project, color }); toast(done); refresh(); } catch (e) { toast(e.message); }
     };
     body.append(
-      h("h1", {}, (s.num ? `#${s.num} ` : "") + sessionTitle(s)),
+      h("h1", {}, (s.num ? sref(s, id) + " " : "") + sessionTitle(s)),
       h("datalist", { id: "group-names" }, groups.map((g) => h("option", { value: g }))),
       h("label", {}, "タイトル（空にすると自動のものに戻す）"),
       h("div", { class: "row" }, title, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/title", { title: title.value.trim() }, "タイトルを保存しました"); } }, "保存")),
@@ -2721,7 +2737,7 @@ function gridPage() {
     const list = h("div", { class: "list pick-list" });
     const draw = () => {
       const f = q.value.trim().toLowerCase();
-      const rows = rest.filter((c) => !f || `${c.device_name} #${c.session.num} ${sessionTitle(c.session)} ${c.session.cwd || ""}`.toLowerCase().includes(f));
+      const rows = rest.filter((c) => !f || `${c.device_name} #${c.session.num} ${sref(c.session, c.device_id)} ${sessionTitle(c.session)} ${c.session.cwd || ""}`.toLowerCase().includes(f));
       list.replaceChildren(...(rows.length ? rows.map((c) => h("button", { class: "pick-item", type: "button", onclick: () => {
         pinAuto();
         gridList.put(keyOf(c), true);
@@ -2732,7 +2748,7 @@ function gridPage() {
       } },
         h("div", { class: "row" }, h("span", { class: "chip dev" }, c.device_name), h("span", { class: "chip" }, gridState(c.session)),
           h("span", { class: "grow" }), h("span", { class: "muted small" }, rel(c.session.last_seen))),
-        h("div", { class: titleClass("card-title", c.session) }, (c.session.num ? `#${c.session.num} ` : "") + sessionTitle(c.session))))
+        h("div", { class: titleClass("card-title", c.session) }, (c.session.num ? sref(c.session, c.device_id) + " " : "") + sessionTitle(c.session))))
         : [h("div", { class: "muted small" }, rest.length ? "一致するセッションはありません" : "追加できるセッションはありません（すべて配置済み）")]));
     };
     q.addEventListener("input", draw);
@@ -3637,7 +3653,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     waitEl.hidden = !wc;
     if (compact) root.classList.toggle("unseen", !!session?.unseen);
 
-    const title = session ? (session.num ? `#${session.num} ` : "") + sessionTitle(session) : sid ? sid : "新規セッション";
+    const title = session ? (session.num ? sref(session, id) + " " : "") + sessionTitle(session) : sid ? sid : "新規セッション";
     titleEl.textContent = title;
     titleEl.classList.toggle("titling", session?.title_status === "running");
     titleEl.style.setProperty("--sess", session ? sessionColorOf(session) : sessionColor(sid));
