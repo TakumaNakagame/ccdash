@@ -209,6 +209,7 @@ func (h *Hub) Handler() http.Handler {
 		api.HandleFunc("POST /api/devices/{id}/rotate", h.handleRotateDevice)
 		api.HandleFunc("POST /api/devices/{id}/rename", h.handleRenameDevice)
 		api.HandleFunc("DELETE /api/devices/{id}", h.handleDeleteDevice)
+		api.HandleFunc("POST /api/devices/{id}/peer", h.handlePeerAccess)
 	}
 	api.HandleFunc("GET /api/me", h.handleMe)
 	api.HandleFunc("GET /api/devices", h.handleListDevices)

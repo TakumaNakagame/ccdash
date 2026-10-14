@@ -1,0 +1,71 @@
+# 0007 — Multi-host: sessions across collectors, host picked per session
+
+- Date: 2026-10-15
+- Status: Accepted
+
+## Context
+
+The hub (0003) already reaches every joined machine, but both of its
+clients were single-host in shape. The portal made you pick a device
+first and then worked inside it (`#/d/<dev>`: list, new session); only the
+board and the grid looked across devices. `ccdash mcp` talked to one
+`store.Store` — this machine's collector — so Claude could start or
+organize sessions only where it ran itself.
+
+We want the host to be an attribute of a session: one list of every
+host's sessions, the host chosen when a session is started (host, then a
+directory on it), and the same through MCP (`start_session` on host X,
+list / stop / resume / retitle a session on host Y).
+
+## Decision
+
+- **Route through the hub, not machine-to-machine.** Collectors bind
+  loopback and dial out to the hub; nothing else can reach them. A tool
+  call for another host goes `store.NewHubPeer(<hub>/api/d/<id>, token)`
+  → the hub's device proxy → the device's own hub allowlist
+  (`hubAllowed`, with its `attach_enabled` gate). No collector change, no
+  new port, and the device-side boundary stays the one that already
+  protects it from the portal.
+- **Credential: the caller's own device token, behind a per-device
+  switch.** `devices.peer_access` in hub.sqlite: "" (off, the default),
+  `read`, `control`; set by a logged-in operator in the portal (端末 → 管理
+  → 他の端末へのアクセス, `POST /api/devices/{id}/peer`). A bearer token
+  that starts with `ccdh_` is a device token (`apiAuth` → `servePeer`). No
+  second token to hand out; turning the switch off cuts it at the next
+  request. The trade-off is explicit in the UI: a device with `control`
+  that gets compromised can start claude on the others.
+- **Peers get a narrow surface** (`internal/hub/peer.go`,
+  `peerDeviceRoutes`): `GET /api/devices`, `GET /api/peer/self` (who am I —
+  devices don't otherwise know their hub id), and on a device: sessions,
+  a transcript tail, approvals (read), projects, usage, restart state,
+  `/pty` list, `/hub/info`, `/hub/dirs`; with `control` also the session
+  edits, `/pty/start`, `DELETE /pty/{key}` and the (scheduled) restart.
+  Never device management, push, prefs, the raw terminal, typing into a
+  PTY, deciding approvals, settings. `read` is GET-only.
+- **Hosts are named by the hub device name** (case-insensitive; the id
+  works too; `local` / `self` = this machine). Unknown → error listing the
+  names; offline → error with last seen.
+- **Defaults keep old calls working.** Read tools (`list_sessions`,
+  `overview`, `list_projects`) without `host` cover this machine plus
+  every online peer, rows carry `host`, offline / failing hosts are listed
+  instead of failing the call. Acting tools (`start_session`,
+  `schedule_restart`, the project tools, `archive_finished`) default to
+  this machine. Session numbers are per host: a bare `#N` stays this
+  machine's; another host's is `<host>#N` (that is what `ref` shows), a
+  session id is searched everywhere. Tasks and `set_status` stay local.
+  Without a hub, with peer access off, or under `-r`, nothing changes.
+- **Portal:** `#/s` is one list of every online host's sessions (host chip
+  on each row; host filter chips above; `#/d/<dev>` = the same list
+  filtered, which also shows that host's status / usage / settings /
+  restart). Selections, project bands and approvals are per host inside
+  it. 新規セッション asks for the host first (default: the project's host,
+  else the last used) and then lists directories on it.
+- **TUI stays single-host.** It is the machine's own console.
+
+## Consequences
+
+- Only the hub needs updating for the portal and the peer route; devices
+  need the new binary only where `ccdash mcp` should reach other hosts
+  (MCP servers are spawned per claude session, so no collector restart).
+- The Android app still has the device-first navigation; porting the
+  cross-host list and host picker there is separate work.

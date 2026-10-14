@@ -78,7 +78,7 @@ func TestServe(t *testing.T) {
 	if r[0].Result.ProtocolVersion != "2025-03-26" {
 		t.Errorf("initialize: %s", lines[0])
 	}
-	if len(r[1].Result.Tools) != 33 {
+	if len(r[1].Result.Tools) != 34 {
 		t.Errorf("tools/list: %s", lines[1])
 	}
 	body := func(i int) string { return r[i].Result.Content[0].Text }
@@ -147,7 +147,7 @@ func TestOrganize(t *testing.T) {
 	if _, err := ro.call(ctx, "set_project", json.RawMessage(`{"sessions":["#1"],"project":"z"}`)); err == nil {
 		t.Fatal("read-only server accepted a write")
 	}
-	if len(ro.tools()) != 8 {
+	if len(ro.tools()) != 9 {
 		t.Fatalf("read-only tools: %d", len(ro.tools()))
 	}
 }

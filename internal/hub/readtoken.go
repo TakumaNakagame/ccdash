@@ -153,6 +153,10 @@ func (h *Hub) apiAuth(api http.Handler) http.Handler {
 	cookie := h.requireUser(api, false)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, isBearer := bearerToken(r)
+		if isBearer && h.cfg.Local == nil && strings.HasPrefix(tok, deviceTokenPrefix) {
+			h.servePeer(w, r, tok, api)
+			return
+		}
 		if !isBearer || len(h.readTokens) == 0 {
 			cookie.ServeHTTP(w, r)
 			return

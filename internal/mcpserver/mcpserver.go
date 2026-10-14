@@ -23,7 +23,6 @@ import (
 	"net/url"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -39,10 +38,16 @@ const protocolVersion = "2025-06-18"
 
 var knownVersions = map[string]bool{"2024-11-05": true, "2025-03-26": true, "2025-06-18": true}
 
-const instructions = `ccdash watches the Claude Code sessions of one machine (its collector).
+const instructions = `ccdash watches the Claude Code sessions of one machine (its collector) — and,
+when the operator has joined several machines to a ccdash hub and allowed it, of the other
+machines too ("hosts"; list_hosts names them).
 Use the read tools to see the operator's projects, which sessions are running, which
 need the operator (approvals, questions), and what a session has been doing recently.
-Sessions are referred to as "#N" (their short number) or by session id.
+Sessions are referred to as "#N" (their short number) or by session id. Numbers are per
+host: a bare "#N" is this machine's; another host's session is "<host>#N" (as rows show it
+in ref), or pass host. Read tools without host cover every reachable host (rows carry host);
+start_session, schedule_restart and the project tools act on this machine unless host says
+otherwise — start a session on another machine with host + a directory that exists there.
 The organizing tools (set_project, rename_project, order_projects, set_project_color, set_title, set_later,
 set_grid, set_pinned, set_color, mark_seen, set_archived, archive_finished) change what the operator sees in ccdash;
 projects are just names, created on first use.
@@ -87,6 +92,7 @@ type Server struct {
 	version  string
 	readOnly bool
 	hubURL   string // hub origin for session links; "" = not joined, no links
+	fleet    *Fleet // the other hosts through the hub; nil = this machine only (hosts.go)
 	now      func() time.Time
 	self     func() string // the calling claude's session id ("" = unknown); see selfSession
 }
@@ -400,6 +406,12 @@ var writeTools = []map[string]any{
 
 var readTools = []map[string]any{
 	{
+		"name":        "list_hosts",
+		"description": "The machines (ccdash collectors) joined to the operator's ccdash hub that these tools can reach: name, online, which one is this machine. Pass a name as host to the other tools.",
+		"inputSchema": schema(map[string]any{}),
+		"annotations": readOnlyHint,
+	},
+	{
 		"name":        "overview",
 		"description": "What's going on right now: sessions that need the operator (approvals, questions), finished turns nobody has looked at, running sessions grouped by project, and today's API-price usage estimate.",
 		"inputSchema": schema(map[string]any{}),
@@ -441,6 +453,31 @@ var readTools = []map[string]any{
 	},
 }
 
+// Host arguments (see hosts.go). The tools that read lists cover every
+// reachable host by default; the ones that act on one host default to this
+// machine; the ones that take sessions use host only for a bare "#N".
+var (
+	hostAll     = map[string]any{"type": "string", "description": `only this host (a name from list_hosts); default = every host this machine can reach`}
+	hostHere    = map[string]any{"type": "string", "description": `the host (a name from list_hosts) to act on; default = this machine`}
+	hostSession = map[string]any{"type": "string", "description": `the host of a bare "#N" (a name from list_hosts); default = this machine. A session on another host can also be written "<host>#N", or given by session id`}
+)
+
+func init() {
+	add := func(ts []map[string]any, prop map[string]any, names ...string) {
+		for _, t := range ts {
+			for _, n := range names {
+				if t["name"] == n {
+					t["inputSchema"].(map[string]any)["properties"].(map[string]any)["host"] = prop
+				}
+			}
+		}
+	}
+	add(readTools, hostAll, "overview", "list_projects", "list_sessions")
+	add(readTools, hostSession, "get_session")
+	add(writeTools, hostHere, "start_session", "schedule_restart", "rename_project", "order_projects", "set_project_color", "archive_finished")
+	add(writeTools, hostSession, "stop_session", "resume_session", "set_project", "set_title", "set_later", "set_grid", "set_pinned", "set_color", "mark_seen", "set_archived")
+}
+
 func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	if v, ok, err := s.callTask(ctx, name, raw); ok {
 		if err != nil {
@@ -479,6 +516,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		Note            string   `json:"note"`
 		Force           bool     `json:"force"`
 		Cancel          bool     `json:"cancel"`
+		Host            string   `json:"host"`
 		TimeoutMinutes  int      `json:"timeout_minutes"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
@@ -499,64 +537,53 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 	case "set_status":
 		v, err = s.setStatus(ctx, args.Status, args.Note, args.Session)
 	case "start_session":
-		v, err = s.startSession(ctx, args.Cwd, args.Project, args.Prompt, args.PermissionMode)
+		v, err = s.startSession(ctx, args.Host, args.Cwd, args.Project, args.Prompt, args.PermissionMode)
 	case "stop_session":
-		v, err = s.stopSession(ctx, args.Session, args.Force)
+		v, err = s.stopSession(ctx, args.Session, args.Host, args.Force)
 	case "resume_session":
-		v, err = s.resumeSession(ctx, args.Session, args.Prompt, args.PermissionMode)
+		v, err = s.resumeSession(ctx, args.Session, args.Host, args.Prompt, args.PermissionMode)
 	case "schedule_restart":
-		v, err = s.scheduleRestart(ctx, args.Cancel, args.TimeoutMinutes)
+		v, err = s.scheduleRestart(ctx, args.Host, args.Cancel, args.TimeoutMinutes)
 	case "set_project":
-		v, err = s.setProject(ctx, args.Sessions, args.Project)
+		v, err = s.setProject(ctx, args.Sessions, args.Host, args.Project)
 	case "rename_project":
-		v, err = s.renameProject(ctx, args.From, args.To)
+		v, err = s.renameProject(ctx, args.Host, args.From, args.To)
 	case "order_projects":
-		if len(args.Projects) == 0 {
-			return "", fmt.Errorf("projects is required")
-		}
-		if err = s.st.SetProjectOrder(ctx, args.Projects); err == nil {
-			v, err = s.listProjects(ctx)
-		}
+		v, err = s.orderProjects(ctx, args.Host, args.Projects)
 	case "set_project_color":
-		v, err = s.setProjectColor(ctx, args.Project, args.Color)
+		v, err = s.setProjectColor(ctx, args.Host, args.Project, args.Color)
 	case "set_title":
 		if args.Title == nil {
 			return "", fmt.Errorf("title is required")
 		}
-		v, err = s.setTitle(ctx, args.Session, *args.Title)
+		v, err = s.setTitle(ctx, args.Session, args.Host, *args.Title)
 	case "set_later":
-		v, err = s.setFlag(ctx, args.Sessions, "later", "watch_later", args.Later, s.st.SetLater)
+		v, err = s.setFlag(ctx, args.Sessions, args.Host, "later", "watch_later", args.Later, func(st store.Store) func(context.Context, string, bool) error { return st.SetLater })
 	case "set_grid":
-		v, err = s.setFlag(ctx, args.Sessions, "grid", "on_grid", args.Grid, s.st.SetGrid)
+		v, err = s.setFlag(ctx, args.Sessions, args.Host, "grid", "on_grid", args.Grid, func(st store.Store) func(context.Context, string, bool) error { return st.SetGrid })
 	case "set_pinned":
-		v, err = s.setFlag(ctx, args.Sessions, "pinned", "pinned", args.Pinned, s.st.SetFavorite)
+		v, err = s.setFlag(ctx, args.Sessions, args.Host, "pinned", "pinned", args.Pinned, func(st store.Store) func(context.Context, string, bool) error { return st.SetFavorite })
 	case "set_color":
-		v, err = s.setColor(ctx, args.Sessions, args.Color)
+		v, err = s.setColor(ctx, args.Sessions, args.Host, args.Color)
 	case "mark_seen":
-		var ss []model.Session
-		if ss, err = s.resolveAll(ctx, args.Sessions); err == nil {
-			for _, x := range ss {
-				if err = s.st.MarkSeen(ctx, x.SessionID); err != nil {
-					break
-				}
-			}
-			v = map[string]any{"seen": refsOf(ss)}
-		}
+		v, err = s.markSeen(ctx, args.Sessions, args.Host)
 	case "set_archived":
 		if args.Archived == nil {
 			return "", fmt.Errorf("archived is required")
 		}
-		v, err = s.setArchived(ctx, args.Sessions, *args.Archived)
+		v, err = s.setArchived(ctx, args.Sessions, args.Host, *args.Archived)
 	case "archive_finished":
-		v, err = s.archiveFinished(ctx, args.Sessions, args.Project, args.IdleHours, args.IncludeUnread, args.DryRun)
+		v, err = s.archiveFinished(ctx, args.Sessions, args.Host, args.Project, args.IdleHours, args.IncludeUnread, args.DryRun)
 	case "overview":
-		v, err = s.overview(ctx)
+		v, err = s.overview(ctx, args.Host)
+	case "list_hosts":
+		v, err = s.listHosts(ctx)
 	case "list_projects":
-		v, err = s.listProjects(ctx)
+		v, err = s.listProjects(ctx, args.Host)
 	case "list_sessions":
-		v, err = s.listSessions(ctx, args.Project, args.Query, args.RunningOnly, args.AttentionOnly, args.GridOnly, args.IncludeArchived, args.Limit)
+		v, err = s.listSessions(ctx, args.Host, args.Project, args.Query, args.RunningOnly, args.AttentionOnly, args.GridOnly, args.IncludeArchived, args.Limit)
 	case "get_session":
-		v, err = s.getSession(ctx, args.Session, args.Messages)
+		v, err = s.getSession(ctx, args.Session, args.Host, args.Messages)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
@@ -570,6 +597,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 // sessionRow is the compact view of a session the tools return.
 type sessionRow struct {
 	Ref       string  `json:"ref,omitempty"`
+	Host      string  `json:"host,omitempty"` // the hub device name of its collector (multi-host)
 	Title     string  `json:"title"`
 	Project   string  `json:"project,omitempty"`
 	Group     string  `json:"group,omitempty"`
@@ -594,11 +622,15 @@ type sessionRow struct {
 	Tasks     []int64 `json:"tasks,omitempty"` // open tasks this session worked on
 }
 
-func (s *Server) row(x model.Session) sessionRow {
+func (s *Server) row(l located) sessionRow {
+	x := l.x
 	r := sessionRow{
-		Ref: x.Ref(), Title: x.DisplayTitle(), Project: x.Project, Group: groupOf(x),
+		Ref: l.x.Ref(), Host: l.h.name, Title: x.DisplayTitle(), Project: x.Project, Group: groupOf(x),
 		Status: string(x.Status), Attention: x.Attention, Reason: x.AttentionReason, Pending: x.PendingCount,
 		Cwd: x.Cwd, Branch: x.Branch, Pinned: x.Favorite, New: x.Unseen, Later: x.Later, Grid: x.Grid, Wait: x.Wait, WaitNote: x.WaitNote, Archived: x.Archived, SessionID: x.SessionID,
+	}
+	if r.Ref != "" {
+		r.Ref = l.ref()
 	}
 	if s.hubURL != "" {
 		r.URL = s.hubURL + "/s/" + url.PathEscape(x.SessionID)
@@ -648,24 +680,38 @@ func ago(d time.Duration) string {
 	}
 }
 
-func (s *Server) overview(ctx context.Context) (any, error) {
-	ss, err := s.st.ListSessions(ctx, false)
+// noteHosts adds what a cross-host read couldn't cover to out.
+func noteHosts(out map[string]any, offline []string, errs map[string]string) {
+	if len(offline) > 0 {
+		out["offline_hosts"] = offline
+	}
+	if len(errs) > 0 {
+		out["unreachable_hosts"] = errs
+	}
+}
+
+func (s *Server) overview(ctx context.Context, hostArg string) (any, error) {
+	hs, offline, err := s.hostsFor(ctx, hostArg)
+	if err != nil {
+		return nil, err
+	}
+	ls, errs, err := s.sessionsOn(ctx, hs, false)
 	if err != nil {
 		return nil, err
 	}
 	var needs, unseen []sessionRow
 	byProject := map[string][]sessionRow{}
-	total, run := len(ss), 0
-	for _, x := range ss {
-		switch x.Attention {
+	total, run := len(ls), 0
+	for _, l := range ls {
+		switch l.x.Attention {
 		case model.AttentionNeedsYou:
-			needs = append(needs, s.row(x))
+			needs = append(needs, s.row(l))
 		case model.AttentionDone:
-			unseen = append(unseen, s.row(x))
+			unseen = append(unseen, s.row(l))
 		}
-		if running(x) {
+		if running(l.x) {
 			run++
-			byProject[x.Project] = append(byProject[x.Project], s.row(x))
+			byProject[l.x.Project] = append(byProject[l.x.Project], s.row(l))
 		}
 	}
 	out := map[string]any{
@@ -676,25 +722,72 @@ func (s *Server) overview(ctx context.Context) (any, error) {
 		"running_by_project":      byProject,
 		"running_by_project_note": `the "" key holds running sessions that are in no project`,
 	}
-	if ws, err := s.st.WaitingSpawns(ctx); err == nil && len(ws) > 0 {
-		out["new_sessions_waiting"] = ws
+	if len(hs) > 1 {
+		out["hosts"] = hostNames(hs)
+		out["running_by_project_note"] = `the "" key holds running sessions that are in no project; projects belong to one host each (rows carry host)`
+	}
+	noteHosts(out, offline, errs)
+	var waiting []map[string]any
+	restarts := map[string]any{}
+	usage := map[string]any{}
+	for _, h := range hs {
+		if ws, err := h.st.WaitingSpawns(ctx); err == nil {
+			for _, w := range ws {
+				row := map[string]any{"key": w.Key, "cwd": w.Cwd, "prompt": w.Prompt}
+				if h.name != "" {
+					row["host"] = h.name
+				}
+				waiting = append(waiting, row)
+			}
+		}
+		if rs, err := h.st.RestartStatus(ctx); err == nil && rs.Pending {
+			restarts[hostLabel(h)] = restartView(rs)
+		}
+		if u, err := h.st.UsageSummary(ctx, 1); err == nil {
+			usage[hostLabel(h)] = map[string]any{
+				"usd_at_api_list_price": fmt.Sprintf("%.2f", u.Today.Cost),
+				"input_tokens":          u.Today.Input,
+				"output_tokens":         u.Today.Output,
+			}
+		}
+	}
+	if len(waiting) > 0 {
+		out["new_sessions_waiting"] = waiting
 		out["new_sessions_waiting_note"] = "claudes started by ccdash that stopped at a dialog (e.g. Claude Code's folder-trust question) before they have a session; the operator answers it in ccdash (TUI row / portal 起動中)"
 	}
-	if rs, err := s.st.RestartStatus(ctx); err == nil && rs.Pending {
-		out["restart_pending"] = restartView(rs)
-	}
-	if u, err := s.st.UsageSummary(ctx, 1); err == nil {
-		out["today_usage_estimate"] = map[string]any{
-			"usd_at_api_list_price": fmt.Sprintf("%.2f", u.Today.Cost),
-			"input_tokens":          u.Today.Input,
-			"output_tokens":         u.Today.Output,
+	// One host keeps the single-host shape.
+	if len(hs) == 1 {
+		for _, v := range restarts {
+			out["restart_pending"] = v
+		}
+		for _, v := range usage {
+			out["today_usage_estimate"] = v
+		}
+	} else {
+		if len(restarts) > 0 {
+			out["restart_pending"] = restarts
+		}
+		if len(usage) > 0 {
+			out["today_usage_estimate_by_host"] = usage
 		}
 	}
 	return out, nil
 }
 
+func hostNames(hs []host) []string {
+	out := make([]string, len(hs))
+	for i, h := range hs {
+		out[i] = hostLabel(h)
+		if h.self {
+			out[i] += " (this machine)"
+		}
+	}
+	return out
+}
+
 type projectRow struct {
 	Name     string `json:"name"`
+	Host     string `json:"host,omitempty"`
 	Color    string `json:"color,omitempty"`
 	Sessions int    `json:"sessions"`
 	Running  int    `json:"running"`
@@ -703,19 +796,45 @@ type projectRow struct {
 	latest   time.Time
 }
 
-func (s *Server) listProjects(ctx context.Context) (any, error) {
-	ps, err := s.st.ListProjects(ctx)
+func (s *Server) listProjects(ctx context.Context, hostArg string) (any, error) {
+	hs, offline, err := s.hostsFor(ctx, hostArg)
 	if err != nil {
 		return nil, err
 	}
-	ss, err := s.st.ListSessions(ctx, false)
+	var out []projectRow
+	errs := map[string]string{}
+	for _, h := range hs {
+		rows, err := s.projectsOn(ctx, h)
+		if err != nil {
+			if len(hs) == 1 {
+				return nil, err
+			}
+			errs[hostLabel(h)] = err.Error()
+			continue
+		}
+		out = append(out, rows...)
+	}
+	if out == nil {
+		out = []projectRow{}
+	}
+	res := map[string]any{"projects": out}
+	noteHosts(res, offline, errs)
+	return res, nil
+}
+
+func (s *Server) projectsOn(ctx context.Context, h host) ([]projectRow, error) {
+	ps, err := h.st.ListProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ss, err := h.st.ListSessions(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 	rows := map[string]*projectRow{}
 	var order []string
 	for _, p := range ps {
-		rows[p.Name] = &projectRow{Name: p.Name, Color: model.ProjectColorOf(p.Name, p.Color)}
+		rows[p.Name] = &projectRow{Name: p.Name, Host: h.name, Color: model.ProjectColorOf(p.Name, p.Color)}
 		order = append(order, p.Name)
 	}
 	for _, x := range ss {
@@ -724,7 +843,7 @@ func (s *Server) listProjects(ctx context.Context) (any, error) {
 		}
 		r := rows[x.Project]
 		if r == nil {
-			r = &projectRow{Name: x.Project, Color: model.ProjectColorOf(x.Project, x.ProjectColor)}
+			r = &projectRow{Name: x.Project, Host: h.name, Color: model.ProjectColorOf(x.Project, x.ProjectColor)}
 			rows[x.Project] = r
 			order = append(order, x.Project)
 		}
@@ -747,24 +866,21 @@ func (s *Server) listProjects(ctx context.Context) (any, error) {
 		}
 		out = append(out, *r)
 	}
-	return map[string]any{"projects": out}, nil
+	return out, nil
 }
 
-func (s *Server) listSessions(ctx context.Context, project, query string, runningOnly, attentionOnly, gridOnly, archived bool, limit int) (any, error) {
-	ss, err := s.st.ListSessions(ctx, false)
+func (s *Server) listSessions(ctx context.Context, hostArg, project, query string, runningOnly, attentionOnly, gridOnly, archived bool, limit int) (any, error) {
+	hs, offline, err := s.hostsFor(ctx, hostArg)
 	if err != nil {
 		return nil, err
 	}
-	if archived {
-		more, err := s.st.ListSessions(ctx, true)
-		if err != nil {
-			return nil, err
-		}
-		ss = append(ss, more...)
+	ls, errs, err := s.sessionsOn(ctx, hs, archived)
+	if err != nil {
+		return nil, err
 	}
-	sort.SliceStable(ss, func(i, j int) bool { return ss[i].LastSeen.After(ss[j].LastSeen) })
+	sort.SliceStable(ls, func(i, j int) bool { return ls[i].x.LastSeen.After(ls[j].x.LastSeen) })
 	if gridOnly { // tile order, as the TUI and the portal lay them out
-		sort.SliceStable(ss, func(i, j int) bool { return ss[i].GridAt.Before(ss[j].GridAt) })
+		sort.SliceStable(ls, func(i, j int) bool { return ls[i].x.GridAt.Before(ls[j].x.GridAt) })
 	}
 	if limit <= 0 {
 		limit = 30
@@ -774,29 +890,38 @@ func (s *Server) listSessions(ctx context.Context, project, query string, runnin
 	var out []sessionRow
 	matched := 0
 	byTask := s.tasksBySession(ctx)
-	for _, x := range ss {
+	for _, l := range ls {
+		x := l.x
 		if project != "" && x.Project != project ||
 			runningOnly && !running(x) ||
 			attentionOnly && x.Attention == "" ||
 			gridOnly && !x.Grid ||
-			q != "" && !matches(x, q) {
+			q != "" && !matches(l, q) {
 			continue
 		}
 		matched++
 		if len(out) < limit {
-			r := s.row(x)
-			r.Tasks = byTask[x.SessionID]
+			r := s.row(l)
+			if l.h.self {
+				r.Tasks = byTask[x.SessionID]
+			}
 			out = append(out, r)
 		}
 	}
-	return map[string]any{"matched": matched, "sessions": out}, nil
+	res := map[string]any{"matched": matched, "sessions": out}
+	if len(hs) > 1 {
+		res["hosts"] = hostNames(hs)
+	}
+	noteHosts(res, offline, errs)
+	return res, nil
 }
 
-func matches(x model.Session, q string) bool {
-	if ref := x.Ref(); ref != "" && (q == strings.ToLower(ref) || q == ref[1:]) {
+func matches(l located, q string) bool {
+	x := l.x
+	if ref := x.Ref(); ref != "" && (q == strings.ToLower(ref) || q == ref[1:] || q == strings.ToLower(l.ref())) {
 		return true
 	}
-	for _, f := range []string{x.DisplayTitle(), x.Project, x.UserGroup, x.Repo, x.Cwd, x.Branch, x.SessionID} {
+	for _, f := range []string{x.DisplayTitle(), x.Project, x.UserGroup, x.Repo, x.Cwd, x.Branch, x.SessionID, l.h.name} {
 		if f != "" && strings.Contains(strings.ToLower(f), q) {
 			return true
 		}
@@ -804,19 +929,18 @@ func matches(x model.Session, q string) bool {
 	return false
 }
 
-// findSession resolves "#N", "N" or a session id (archived ones too).
+// findSession resolves "#N", "N" or a session id (archived ones too) on
+// this machine's collector — for the tools that only work here (tasks,
+// set_status). The others use locate (hosts.go).
 func (s *Server) findSession(ctx context.Context, ref string) (model.Session, error) {
 	ref = strings.TrimSpace(ref)
-	num, numErr := strconv.ParseInt(strings.TrimPrefix(ref, "#"), 10, 64)
 	for _, archived := range []bool{false, true} {
 		ss, err := s.st.ListSessions(ctx, archived)
 		if err != nil {
 			return model.Session{}, err
 		}
-		for _, x := range ss {
-			if x.SessionID == ref || numErr == nil && x.Num == num {
-				return x, nil
-			}
+		if x, ok := findIn(ss, ref); ok {
+			return x, nil
 		}
 	}
 	return model.Session{}, fmt.Errorf("no session %q (use #N or a session id; list_sessions shows them)", ref)
@@ -828,22 +952,25 @@ type entry struct {
 	Text string `json:"text"`
 }
 
-func (s *Server) getSession(ctx context.Context, ref string, n int) (any, error) {
+func (s *Server) getSession(ctx context.Context, ref, hostArg string, n int) (any, error) {
 	if ref == "" {
 		return nil, fmt.Errorf("session is required")
 	}
-	x, err := s.findSession(ctx, ref)
+	l, err := s.locate(ctx, ref, hostArg)
 	if err != nil {
 		return nil, err
 	}
+	x, st := l.x, l.h.st
 	if n <= 0 {
 		n = 30
 	}
 	n = min(n, 200)
-	row := s.row(x)
-	row.Tasks = s.tasksBySession(ctx)[x.SessionID]
+	row := s.row(l)
+	if l.h.self {
+		row.Tasks = s.tasksBySession(ctx)[x.SessionID]
+	}
 	out := map[string]any{"session": row}
-	if aps, err := s.st.ListPendingApprovals(ctx); err == nil {
+	if aps, err := st.ListPendingApprovals(ctx); err == nil {
 		var mine []map[string]any
 		for _, a := range aps {
 			if a.SessionID == x.SessionID {
@@ -858,7 +985,7 @@ func (s *Server) getSession(ctx context.Context, ref string, n int) (any, error)
 		out["transcript"] = "no transcript recorded yet"
 		return out, nil
 	}
-	tail, err := s.st.TranscriptTail(ctx, x, 512<<10)
+	tail, err := st.TranscriptTail(ctx, x, 512<<10)
 	if err != nil {
 		out["transcript_error"] = err.Error()
 		return out, nil
@@ -903,23 +1030,6 @@ func clip(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// resolveAll turns refs into sessions, failing on the first unknown one so
-// nothing is half-applied.
-func (s *Server) resolveAll(ctx context.Context, refs []string) ([]model.Session, error) {
-	if len(refs) == 0 {
-		return nil, fmt.Errorf("sessions is required")
-	}
-	out := make([]model.Session, 0, len(refs))
-	for _, r := range refs {
-		x, err := s.findSession(ctx, r)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, x)
-	}
-	return out, nil
-}
-
 func refsOf(ss []model.Session) []string {
 	out := make([]string, len(ss))
 	for i, x := range ss {
@@ -931,29 +1041,33 @@ func refsOf(ss []model.Session) []string {
 	return out
 }
 
-func (s *Server) setProject(ctx context.Context, refs []string, project string) (any, error) {
+func (s *Server) setProject(ctx context.Context, refs []string, hostArg, project string) (any, error) {
 	project = strings.TrimSpace(project)
-	ss, err := s.resolveAll(ctx, refs)
+	ls, err := s.locateAll(ctx, refs, hostArg)
 	if err != nil {
 		return nil, err
 	}
-	for _, x := range ss {
-		if err := s.st.SetProject(ctx, x.SessionID, project); err != nil {
+	for _, l := range ls {
+		if err := l.h.st.SetProject(ctx, l.x.SessionID, project); err != nil {
 			return nil, err
 		}
 	}
 	if project == "" {
-		return map[string]any{"removed_from_project": refsOf(ss)}, nil
+		return map[string]any{"removed_from_project": refsOfLoc(ls)}, nil
 	}
-	return map[string]any{"project": project, "sessions": refsOf(ss)}, nil
+	return map[string]any{"project": project, "sessions": refsOfLoc(ls)}, nil
 }
 
-func (s *Server) renameProject(ctx context.Context, from, to string) (any, error) {
+func (s *Server) renameProject(ctx context.Context, hostArg, from, to string) (any, error) {
 	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
 	if from == "" || to == "" {
 		return nil, fmt.Errorf("from and to are required")
 	}
-	ps, err := s.st.ListProjects(ctx)
+	h, err := s.hostNamed(ctx, hostArg)
+	if err != nil {
+		return nil, err
+	}
+	ps, err := h.st.ListProjects(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -963,18 +1077,22 @@ func (s *Server) renameProject(ctx context.Context, from, to string) (any, error
 		merge = merge || p.Name == to && to != from
 	}
 	if !found {
-		return nil, fmt.Errorf("no project %q (list_projects shows them)", from)
+		return nil, fmt.Errorf("no project %q on %s (list_projects shows them)", from, hostLabel(h))
 	}
-	if err := s.st.RenameProject(ctx, from, to); err != nil {
+	if err := h.st.RenameProject(ctx, from, to); err != nil {
 		return nil, err
 	}
+	out := map[string]any{"renamed": from, "to": to}
 	if merge {
-		return map[string]any{"merged": from, "into": to}, nil
+		out = map[string]any{"merged": from, "into": to}
 	}
-	return map[string]any{"renamed": from, "to": to}, nil
+	if h.name != "" {
+		out["host"] = h.name
+	}
+	return out, nil
 }
 
-func (s *Server) setProjectColor(ctx context.Context, project, color string) (any, error) {
+func (s *Server) setProjectColor(ctx context.Context, hostArg, project, color string) (any, error) {
 	project = strings.TrimSpace(project)
 	if project == "" {
 		return nil, fmt.Errorf("project is required")
@@ -982,121 +1100,165 @@ func (s *Server) setProjectColor(ctx context.Context, project, color string) (an
 	if color != "random" && !model.ValidColor(color) {
 		return nil, fmt.Errorf(`color must be "#rrggbb" or "random"`)
 	}
-	if err := s.st.SetProjectColor(ctx, project, color); err != nil {
+	h, err := s.hostNamed(ctx, hostArg)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"project": project, "color": color}, nil
+	if err := h.st.SetProjectColor(ctx, project, color); err != nil {
+		return nil, err
+	}
+	out := map[string]any{"project": project, "color": color}
+	if h.name != "" {
+		out["host"] = h.name
+	}
+	return out, nil
 }
 
-func (s *Server) setTitle(ctx context.Context, ref, title string) (any, error) {
-	x, err := s.findSession(ctx, ref)
+func (s *Server) orderProjects(ctx context.Context, hostArg string, names []string) (any, error) {
+	if len(names) == 0 {
+		return nil, fmt.Errorf("projects is required")
+	}
+	h, err := s.hostNamed(ctx, hostArg)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.st.SetProjectOrder(ctx, names); err != nil {
+		return nil, err
+	}
+	rows, err := s.projectsOn(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"projects": rows}, nil
+}
+
+func (s *Server) setTitle(ctx context.Context, ref, hostArg, title string) (any, error) {
+	l, err := s.locate(ctx, ref, hostArg)
 	if err != nil {
 		return nil, err
 	}
 	title = strings.TrimSpace(title)
-	if err := s.st.SetCustomTitle(ctx, x.SessionID, title); err != nil {
+	if err := l.h.st.SetCustomTitle(ctx, l.x.SessionID, title); err != nil {
 		return nil, err
 	}
-	return map[string]any{"session": refsOf([]model.Session{x})[0], "title": title}, nil
+	return map[string]any{"session": l.ref(), "title": title}, nil
 }
 
 // setFlag applies one boolean store setter to every session in refs; arg
 // is the tool argument's name, key the result's.
-func (s *Server) setFlag(ctx context.Context, refs []string, arg, key string, v *bool, set func(context.Context, string, bool) error) (any, error) {
+func (s *Server) setFlag(ctx context.Context, refs []string, hostArg, arg, key string, v *bool, set func(store.Store) func(context.Context, string, bool) error) (any, error) {
 	if v == nil {
 		return nil, fmt.Errorf("%s is required", arg)
 	}
-	ss, err := s.resolveAll(ctx, refs)
+	ls, err := s.locateAll(ctx, refs, hostArg)
 	if err != nil {
 		return nil, err
 	}
-	for _, x := range ss {
-		if err := set(ctx, x.SessionID, *v); err != nil {
+	for _, l := range ls {
+		if err := set(l.h.st)(ctx, l.x.SessionID, *v); err != nil {
 			return nil, err
 		}
 	}
-	return map[string]any{key: *v, "sessions": refsOf(ss)}, nil
+	return map[string]any{key: *v, "sessions": refsOfLoc(ls)}, nil
 }
 
-func (s *Server) setColor(ctx context.Context, refs []string, color string) (any, error) {
+func (s *Server) setColor(ctx context.Context, refs []string, hostArg, color string) (any, error) {
 	color = strings.TrimSpace(color)
 	if color != "" && color != "random" && !model.ValidColor(color) {
 		return nil, fmt.Errorf(`color must be "#rrggbb", "random" or ""`)
 	}
-	ss, err := s.resolveAll(ctx, refs)
+	ls, err := s.locateAll(ctx, refs, hostArg)
 	if err != nil {
 		return nil, err
 	}
-	for _, x := range ss {
-		if err := s.st.SetColor(ctx, x.SessionID, color); err != nil {
+	for _, l := range ls {
+		if err := l.h.st.SetColor(ctx, l.x.SessionID, color); err != nil {
 			return nil, err
 		}
 	}
 	if color == "" {
 		color = "automatic"
 	}
-	return map[string]any{"color": color, "sessions": refsOf(ss)}, nil
+	return map[string]any{"color": color, "sessions": refsOfLoc(ls)}, nil
 }
 
-func (s *Server) setArchived(ctx context.Context, refs []string, archived bool) (any, error) {
-	ss, err := s.resolveAll(ctx, refs)
+func (s *Server) markSeen(ctx context.Context, refs []string, hostArg string) (any, error) {
+	ls, err := s.locateAll(ctx, refs, hostArg)
 	if err != nil {
 		return nil, err
 	}
-	for _, x := range ss {
-		if err := s.st.SetArchived(ctx, x.SessionID, archived); err != nil {
+	for _, l := range ls {
+		if err := l.h.st.MarkSeen(ctx, l.x.SessionID); err != nil {
 			return nil, err
 		}
 	}
-	return map[string]any{"archived": archived, "sessions": refsOf(ss)}, nil
+	return map[string]any{"seen": refsOfLoc(ls)}, nil
+}
+
+func (s *Server) setArchived(ctx context.Context, refs []string, hostArg string, archived bool) (any, error) {
+	ls, err := s.locateAll(ctx, refs, hostArg)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range ls {
+		if err := l.h.st.SetArchived(ctx, l.x.SessionID, archived); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{"archived": archived, "sessions": refsOfLoc(ls)}, nil
 }
 
 // archiveFinished archives exited sessions (see the tool description);
-// running ones are reported as skipped, never stopped.
-func (s *Server) archiveFinished(ctx context.Context, refs []string, project string, idleHours float64, unread, dryRun bool) (any, error) {
-	var ss []model.Session
+// running ones are reported as skipped, never stopped. Without sessions it
+// covers one host: host, else this machine.
+func (s *Server) archiveFinished(ctx context.Context, refs []string, hostArg, project string, idleHours float64, unread, dryRun bool) (any, error) {
+	var ls []located
 	var err error
 	if len(refs) > 0 {
-		ss, err = s.resolveAll(ctx, refs)
+		ls, err = s.locateAll(ctx, refs, hostArg)
 	} else {
-		ss, err = s.st.ListSessions(ctx, false)
+		var h host
+		if h, err = s.hostNamed(ctx, hostArg); err == nil {
+			ls, _, err = s.sessionsOn(ctx, []host{h}, false)
+		}
 	}
 	if err != nil {
 		return nil, err
 	}
 	project = strings.TrimSpace(project)
 	cutoff := s.now().Add(-time.Duration(idleHours * float64(time.Hour)))
-	var picked []model.Session
+	var picked []located
 	skipped := map[string][]string{}
-	skip := func(why string, x model.Session) { skipped[why] = append(skipped[why], refsOf([]model.Session{x})[0]) }
-	for _, x := range ss {
+	skip := func(why string, l located) { skipped[why] = append(skipped[why], l.ref()) }
+	for _, l := range ls {
+		x := l.x
 		switch {
 		case x.Archived, project != "" && x.Project != project:
 			continue
 		case running(x):
-			skip("running", x)
+			skip("running", l)
 		case x.Favorite:
-			skip("pinned", x)
+			skip("pinned", l)
 		case x.Later:
-			skip("watch_later", x)
+			skip("watch_later", l)
 		case !unread && (x.Unseen || x.Attention != "" || x.PendingCount > 0):
-			skip("unread_or_needs_you", x)
+			skip("unread_or_needs_you", l)
 		case idleHours > 0 && x.LastSeen.After(cutoff):
-			skip("recent_activity", x)
+			skip("recent_activity", l)
 		default:
-			picked = append(picked, x)
+			picked = append(picked, l)
 		}
 	}
 	if !dryRun {
-		for _, x := range picked {
-			if err := s.st.SetArchived(ctx, x.SessionID, true); err != nil {
+		for _, l := range picked {
+			if err := l.h.st.SetArchived(ctx, l.x.SessionID, true); err != nil {
 				return nil, err
 			}
 		}
 	}
 	rows := make([]sessionRow, len(picked))
-	for i, x := range picked {
-		rows[i] = s.row(x)
+	for i, l := range picked {
+		rows[i] = s.row(l)
 	}
 	out := map[string]any{"dry_run": dryRun, "archived": len(picked), "sessions": rows}
 	if dryRun {
@@ -1113,10 +1275,10 @@ var spawnWait = 6 * time.Second
 
 // waitFor returns the dialog the spawn key waits on, watching it for up to
 // spawnWait; "" if none showed up.
-func (s *Server) waitFor(ctx context.Context, key string) string {
+func (s *Server) waitFor(ctx context.Context, st store.Store, key string) string {
 	deadline := s.now().Add(spawnWait)
 	for {
-		if ws, err := s.st.WaitingSpawns(ctx); err == nil {
+		if ws, err := st.WaitingSpawns(ctx); err == nil {
 			for _, w := range ws {
 				if w.Key == key {
 					return w.Prompt
@@ -1134,7 +1296,7 @@ func (s *Server) waitFor(ctx context.Context, key string) string {
 	}
 }
 
-func (s *Server) startSession(ctx context.Context, cwd, project, prompt, mode string) (any, error) {
+func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt, mode string) (any, error) {
 	cwd = strings.TrimSpace(cwd)
 	if !filepath.IsAbs(cwd) {
 		return nil, fmt.Errorf("cwd must be an absolute path, got %q", cwd)
@@ -1142,22 +1304,29 @@ func (s *Server) startSession(ctx context.Context, cwd, project, prompt, mode st
 	if strings.HasPrefix(strings.TrimSpace(prompt), "-") {
 		return nil, fmt.Errorf("prompt must not start with '-'")
 	}
-	if err := s.attachOn(ctx, "starting sessions"); err != nil {
+	h, err := s.hostNamed(ctx, hostArg)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachOn(ctx, h, "starting sessions"); err != nil {
 		return nil, err
 	}
 	project = strings.TrimSpace(project)
-	key, err := s.st.StartSession(ctx, store.StartRequest{Cwd: filepath.Clean(cwd), Prompt: prompt, Project: project, PermissionMode: mode})
+	key, err := h.st.StartSession(ctx, store.StartRequest{Cwd: filepath.Clean(cwd), Prompt: prompt, Project: project, PermissionMode: mode})
 	if err != nil {
-		return nil, fmt.Errorf("start session (is the ccdash collector running?): %w", err)
+		return nil, fmt.Errorf("start session on %s (is its ccdash collector running?): %w", hostLabel(h), err)
 	}
 	out := map[string]any{
 		"started": key,
 		"cwd":     filepath.Clean(cwd),
 		"note":    "the session appears in ccdash once claude starts (a few seconds); open it there to drive it",
 	}
+	if h.name != "" {
+		out["host"] = h.name
+	}
 	// A new folder can stop claude at the folder-trust question before it
 	// registers anything; say so instead of leaving the caller guessing.
-	if w := s.waitFor(ctx, key); w != "" {
+	if w := s.waitFor(ctx, h.st, key); w != "" {
 		out["waiting_on"] = w
 		out["note"] = "claude stopped at a dialog before starting the session; the operator must answer it in ccdash (TUI row / portal 起動中). Folders under ccdash's 'Trusted folders' setting skip the trust question."
 	}
@@ -1168,8 +1337,19 @@ func (s *Server) startSession(ctx context.Context, cwd, project, prompt, mode st
 }
 
 // attachOn is the switch that keeps the TUI from spawning claude: it gates
-// every tool that starts or stops one.
-func (s *Server) attachOn(ctx context.Context, what string) error {
+// every tool that starts or stops one. Another host's switch is read from
+// its /hub/info (it enforces it on /pty itself as well).
+func (s *Server) attachOn(ctx context.Context, h host, what string) error {
+	if !h.self {
+		on, err := s.fleet.attachOn(ctx, h.id)
+		if err != nil {
+			return err
+		}
+		if !on {
+			return fmt.Errorf("%s is OFF on host %s (its ccdash settings: Attach)", what, h.name)
+		}
+		return nil
+	}
 	cfg, err := settings.Load(ctx, s.st)
 	if err != nil {
 		return err
@@ -1180,11 +1360,11 @@ func (s *Server) attachOn(ctx context.Context, what string) error {
 	return nil
 }
 
-// hosted reports whether the collector runs session id's claude in a PTY.
-func (s *Server) hosted(ctx context.Context, id string) (bool, error) {
-	keys, err := s.st.HostedSessions(ctx)
+// hosted reports whether h's collector runs session id's claude in a PTY.
+func (s *Server) hosted(ctx context.Context, h host, id string) (bool, error) {
+	keys, err := h.st.HostedSessions(ctx)
 	if err != nil {
-		return false, fmt.Errorf("ask the collector which sessions it hosts (is it running?): %w", err)
+		return false, fmt.Errorf("ask the collector on %s which sessions it hosts (is it running?): %w", hostLabel(h), err)
 	}
 	for _, k := range keys {
 		if k == id {
@@ -1196,22 +1376,22 @@ func (s *Server) hosted(ctx context.Context, id string) (bool, error) {
 
 // stopSession ends one hosted claude (see the tool description for what it
 // refuses).
-func (s *Server) stopSession(ctx context.Context, ref string, force bool) (any, error) {
+func (s *Server) stopSession(ctx context.Context, ref, hostArg string, force bool) (any, error) {
 	if strings.TrimSpace(ref) == "" {
 		return nil, fmt.Errorf("session is required")
 	}
-	if err := s.attachOn(ctx, "stopping sessions"); err != nil {
-		return nil, err
-	}
-	x, err := s.findSession(ctx, ref)
+	l, err := s.locate(ctx, ref, hostArg)
 	if err != nil {
 		return nil, err
 	}
-	name := refsOf([]model.Session{x})[0]
+	if err := s.attachOn(ctx, l.h, "stopping sessions"); err != nil {
+		return nil, err
+	}
+	x, name := l.x, l.ref()
 	if self := s.self(); self != "" && self == x.SessionID {
 		return nil, fmt.Errorf("%s is your own session; stopping it would cut off this very turn", name)
 	}
-	on, err := s.hosted(ctx, x.SessionID)
+	on, err := s.hosted(ctx, l.h, x.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -1224,7 +1404,7 @@ func (s *Server) stopSession(ctx context.Context, ref string, force bool) (any, 
 	if x.Status == model.StatusActive && !force {
 		return nil, fmt.Errorf("%s is working mid-turn; stopping it now loses that work — pass force: true only if the operator wants it stopped anyway", name)
 	}
-	if err := s.st.StopSession(ctx, x.SessionID); err != nil {
+	if err := l.h.st.StopSession(ctx, x.SessionID); err != nil {
 		return nil, fmt.Errorf("stop %s: %w", name, err)
 	}
 	return map[string]any{
@@ -1234,25 +1414,25 @@ func (s *Server) stopSession(ctx context.Context, ref string, force bool) (any, 
 	}, nil
 }
 
-// resumeSession runs `claude --resume` for a stopped session under the
-// collector, keyed by its session id (like the portal's resume and the
-// restart path).
-func (s *Server) resumeSession(ctx context.Context, ref, prompt, mode string) (any, error) {
+// resumeSession runs `claude --resume` for a stopped session under its
+// host's collector, keyed by its session id (like the portal's resume and
+// the restart path).
+func (s *Server) resumeSession(ctx context.Context, ref, hostArg, prompt, mode string) (any, error) {
 	if strings.TrimSpace(ref) == "" {
 		return nil, fmt.Errorf("session is required")
 	}
 	if strings.HasPrefix(strings.TrimSpace(prompt), "-") {
 		return nil, fmt.Errorf("prompt must not start with '-'")
 	}
-	if err := s.attachOn(ctx, "starting sessions"); err != nil {
-		return nil, err
-	}
-	x, err := s.findSession(ctx, ref)
+	l, err := s.locate(ctx, ref, hostArg)
 	if err != nil {
 		return nil, err
 	}
-	name := refsOf([]model.Session{x})[0]
-	on, err := s.hosted(ctx, x.SessionID)
+	if err := s.attachOn(ctx, l.h, "starting sessions"); err != nil {
+		return nil, err
+	}
+	x, name := l.x, l.ref()
+	on, err := s.hosted(ctx, l.h, x.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -1268,11 +1448,11 @@ func (s *Server) resumeSession(ctx context.Context, ref, prompt, mode string) (a
 		return nil, fmt.Errorf("%s has no known directory; claude --resume needs it", name)
 	}
 	if x.Archived {
-		if err := s.st.SetArchived(ctx, x.SessionID, false); err != nil {
+		if err := l.h.st.SetArchived(ctx, x.SessionID, false); err != nil {
 			return nil, err
 		}
 	}
-	key, err := s.st.StartSession(ctx, store.StartRequest{
+	key, err := l.h.st.StartSession(ctx, store.StartRequest{
 		SessionID: x.SessionID, ResumeID: x.SessionID, Cwd: x.Cwd, Prompt: prompt, PermissionMode: mode,
 	})
 	if err != nil {
@@ -1316,23 +1496,33 @@ func restartView(rs model.RestartState) map[string]any {
 	return out
 }
 
-func (s *Server) scheduleRestart(ctx context.Context, cancel bool, minutes int) (any, error) {
-	if cancel {
-		rs, err := s.st.CancelRestart(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("cancel the restart (is the ccdash collector running?): %w", err)
-		}
-		return restartView(rs), nil
+func (s *Server) scheduleRestart(ctx context.Context, hostArg string, cancel bool, minutes int) (any, error) {
+	h, err := s.hostNamed(ctx, hostArg)
+	if err != nil {
+		return nil, err
 	}
-	if err := s.attachOn(ctx, "restarting the collector"); err != nil {
+	withHost := func(m map[string]any) map[string]any {
+		if h.name != "" {
+			m["host"] = h.name
+		}
+		return m
+	}
+	if cancel {
+		rs, err := h.st.CancelRestart(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("cancel the restart on %s (is the ccdash collector running?): %w", hostLabel(h), err)
+		}
+		return withHost(restartView(rs)), nil
+	}
+	if err := s.attachOn(ctx, h, "restarting the collector"); err != nil {
 		return nil, err
 	}
 	if minutes < 0 || minutes > 1440 {
 		return nil, fmt.Errorf("timeout_minutes must be 1..1440")
 	}
-	rs, err := s.st.ScheduleRestart(ctx, "mcp", time.Duration(minutes)*time.Minute)
+	rs, err := h.st.ScheduleRestart(ctx, "mcp", time.Duration(minutes)*time.Minute)
 	if err != nil {
-		return nil, fmt.Errorf("schedule the restart (is the ccdash collector running? it must run as `ccdash server` to restart itself): %w", err)
+		return nil, fmt.Errorf("schedule the restart on %s (is the ccdash collector running? it must run as `ccdash server` to restart itself): %w", hostLabel(h), err)
 	}
-	return restartView(rs), nil
+	return withHost(restartView(rs)), nil
 }

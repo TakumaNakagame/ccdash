@@ -27,6 +27,7 @@ import (
 type Remote struct {
 	baseURL string
 	token   string
+	bearer  bool // send the token as Authorization: Bearer (a hub peer) instead of X-Ccdash-Token
 	client  *http.Client
 }
 
@@ -40,6 +41,17 @@ func NewRemote(baseURL, token string) *Remote {
 		// below, in case a caller passes a context with no deadline at all.
 		client: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// NewHubPeer builds a Remote that reaches one hub device through the hub's
+// device proxy (baseURL = <hub>/api/d/<device id>) with this machine's own
+// device token — the multi-host access `ccdash mcp` uses. The hub lets it
+// through only while the operator has turned on peer access for this
+// device, and only for its peer routes (internal/hub/peer.go).
+func NewHubPeer(baseURL, deviceToken string) *Remote {
+	r := NewRemote(baseURL, deviceToken)
+	r.bearer = true
+	return r
 }
 
 // mutationTimeout caps small write requests (archive/favorite/title/group/project/
@@ -85,7 +97,11 @@ func (r *Remote) doJSON(ctx context.Context, timeout time.Duration, method, path
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set(auth.HeaderName, r.token)
+	if r.bearer {
+		req.Header.Set("Authorization", "Bearer "+r.token)
+	} else {
+		req.Header.Set(auth.HeaderName, r.token)
+	}
 
 	resp, err := r.client.Do(req)
 	if err != nil {
