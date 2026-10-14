@@ -19,6 +19,10 @@ const (
 
 type Session struct {
 	SessionID      string `json:"session_id"`
+	// HostLetter is the hub's letter for the machine this session runs on
+	// ("A", "B" …; hubcfg.Letter), filled in when the rows are read — not
+	// stored. It makes Ref unique across machines.
+	HostLetter     string `json:"host_letter,omitempty"`
 	Cwd            string `json:"cwd"`
 	Repo           string `json:"repo,omitempty"`
 	Branch         string `json:"branch,omitempty"`
@@ -172,13 +176,37 @@ func (s Session) DisplayTitle() string {
 	return s.Title
 }
 
-// Ref is the short handle shown next to the title, e.g. "#42". Empty until
-// the row has a number (a TUI placeholder row for a fresh spawn has none).
+// Ref is the short handle shown next to the title: "A42" when the machine
+// has a hub letter (unique across the operator's machines), else "#42".
+// Empty until the row has a number (a TUI placeholder row for a fresh
+// spawn has none).
 func (s Session) Ref() string {
-	if s.Num <= 0 {
+	return RefOf(s.HostLetter, s.Num)
+}
+
+// RefOf formats a session handle from a host letter and a number.
+func RefOf(letter string, num int64) string {
+	if num <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("#%d", s.Num)
+	if letter != "" {
+		return fmt.Sprintf("%s%d", letter, num)
+	}
+	return fmt.Sprintf("#%d", num)
+}
+
+// MatchesRef reports whether q (any case) names session number num on the
+// machine with letter: "A42", "#42" or "42".
+func MatchesRef(q, letter string, num int64) bool {
+	if num <= 0 {
+		return false
+	}
+	q = strings.TrimSpace(q)
+	n := fmt.Sprintf("%d", num)
+	if q == n || q == "#"+n {
+		return true
+	}
+	return letter != "" && strings.EqualFold(q, letter+n)
 }
 
 // SessionPalette is the set of session colors: distinct hues (plus light

@@ -358,8 +358,8 @@ func sessionLabel(s model.Session) string {
 	if r := []rune(t); len(r) > 60 {
 		t = string(r[:60]) + "…"
 	}
-	if s.Num > 0 {
-		return fmt.Sprintf("#%d %s", s.Num, t)
+	if ref := s.Ref(); ref != "" {
+		return ref + " " + t
 	}
 	return t
 }
@@ -370,6 +370,11 @@ func watchOnce(ctx context.Context, c *http.Client, d Device, st *watchState) ([
 	var sessions []model.Session
 	if err := getJSON(ctx, c, "/api/sessions", &sessions); err != nil {
 		return nil, nil, err
+	}
+	for i := range sessions { // an older collector doesn't stamp its letter
+		if sessions[i].HostLetter == "" {
+			sessions[i].HostLetter = d.Letter
+		}
 	}
 	// Approvals name the tool, which makes a better "needs you" line.
 	var approvals []model.Approval
@@ -496,6 +501,13 @@ func (h *Hub) storeSnapshot(d Device, sessions []model.Session, rs *model.Restar
 	defer h.mu.Unlock()
 	if h.snapshots == nil {
 		h.snapshots = map[string]deviceSnapshot{}
+	}
+	// A collector that predates letters doesn't stamp its rows: the hub
+	// knows the device's letter.
+	for i := range sessions {
+		if sessions[i].HostLetter == "" {
+			sessions[i].HostLetter = d.Letter
+		}
 	}
 	h.snapshots[d.ID] = deviceSnapshot{Device: d, Sessions: sessions, Restart: rs, At: time.Now()}
 }

@@ -1691,7 +1691,7 @@ func projectsFirst(src []mdl.Session) []mdl.Session {
 // the human-readable fields of s. We don't search payloads or transcripts
 // to keep the per-keystroke cost predictable.
 func sessionMatchesQuery(s mdl.Session, q string) bool {
-	if ref := s.Ref(); ref != "" && (q == strings.ToLower(ref) || q == ref[1:]) {
+	if ref := s.Ref(); ref != "" && (q == strings.ToLower(ref) || mdl.MatchesRef(q, s.HostLetter, s.Num)) {
 		return true
 	}
 	for _, f := range []string{

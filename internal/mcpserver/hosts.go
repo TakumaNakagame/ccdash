@@ -60,6 +60,7 @@ type hubDevice struct {
 	Name       string    `json:"name"`
 	Hostname   string    `json:"hostname,omitempty"`
 	Version    string    `json:"version,omitempty"`
+	Letter     string    `json:"letter,omitempty"`
 	Online     bool      `json:"online"`
 	LastSeen   time.Time `json:"last_seen,omitzero"`
 	PeerAccess string    `json:"peer_access,omitempty"`
@@ -175,6 +176,8 @@ type host struct {
 	self bool
 	st   store.Store
 	ver  string // the host's ccdash version (hub device list); "" for this machine
+	// letter is the hub's letter for the host: its sessions are "<letter>N".
+	letter string
 }
 
 // explain adds a hint to an error from another host: an older ccdash there
@@ -192,12 +195,18 @@ type located struct {
 	h host
 }
 
-// ref is how the tools name a session: "#N" here, "<host>#N" elsewhere.
+// ref is how the tools name a session: "A42" (the host's letter + #N);
+// without a letter "#N" here and "<host>#N" elsewhere.
 func (l located) ref() string {
-	r := l.x.Ref()
-	if r == "" {
-		r = l.x.SessionID
-	} else if !l.h.self {
+	x := l.x
+	if x.HostLetter == "" {
+		x.HostLetter = l.h.letter
+	}
+	r := x.Ref()
+	switch {
+	case r == "":
+		r = x.SessionID
+	case x.HostLetter == "" && !l.h.self:
 		r = l.h.name + r
 	}
 	return r
@@ -213,10 +222,13 @@ func refsOfLoc(ls []located) []string {
 
 // selfHost is this machine's collector, named when the hub says who it is.
 func (s *Server) selfHost(ctx context.Context) host {
-	h := host{self: true, st: s.st}
+	h := host{self: true, st: s.st, letter: s.selfLetter()}
 	if s.fleet != nil {
 		if d, err := s.fleet.Self(ctx); err == nil {
 			h.name, h.id = d.Name, d.ID
+			if d.Letter != "" {
+				h.letter = d.Letter
+			}
 		}
 	}
 	return h
@@ -246,7 +258,8 @@ func isSelfAlias(name string) bool {
 func (s *Server) hostNamed(ctx context.Context, name string) (host, error) {
 	name = strings.TrimSpace(name)
 	self := s.selfHost(ctx)
-	if name == "" || isSelfAlias(name) || self.name != "" && (strings.EqualFold(name, self.name) || name == self.id) {
+	if name == "" || isSelfAlias(name) || self.name != "" && (strings.EqualFold(name, self.name) || name == self.id) ||
+		self.letter != "" && strings.EqualFold(name, self.letter) {
 		return self, nil
 	}
 	if ok, err := s.multiHost(ctx); !ok {
@@ -256,8 +269,24 @@ func (s *Server) hostNamed(ctx context.Context, name string) (host, error) {
 	if err != nil {
 		return host{}, err
 	}
-	for _, d := range ds {
+	// A name first, then a letter ("B" = the host whose sessions are B1, B2 …).
+	pick := -1
+	for i, d := range ds {
 		if strings.EqualFold(d.Name, name) || d.ID == name {
+			pick = i
+			break
+		}
+	}
+	if pick < 0 {
+		for i, d := range ds {
+			if d.Letter != "" && strings.EqualFold(d.Letter, name) {
+				pick = i
+				break
+			}
+		}
+	}
+	for i, d := range ds {
+		if i == pick {
 			if d.ID == self.id {
 				return self, nil
 			}
@@ -268,7 +297,7 @@ func (s *Server) hostNamed(ctx context.Context, name string) (host, error) {
 				}
 				return host{}, fmt.Errorf("host %q is offline (%s); its collector isn't connected to the hub", d.Name, seen)
 			}
-			return host{name: d.Name, id: d.ID, st: s.fleet.storeFor(d.ID), ver: d.Version}, nil
+			return host{name: d.Name, id: d.ID, st: s.fleet.storeFor(d.ID), ver: d.Version, letter: d.Letter}, nil
 		}
 	}
 	names := make([]string, 0, len(ds))
@@ -303,7 +332,7 @@ func (s *Server) hostsFor(ctx context.Context, name string) (hs []host, offline 
 		switch {
 		case d.ID == self.id:
 		case d.Online:
-			hs = append(hs, host{name: d.Name, id: d.ID, st: s.fleet.storeFor(d.ID), ver: d.Version})
+			hs = append(hs, host{name: d.Name, id: d.ID, st: s.fleet.storeFor(d.ID), ver: d.Version, letter: d.Letter})
 		default:
 			offline = append(offline, d.Name)
 		}
@@ -371,10 +400,25 @@ func splitRef(ref string) (hostName, rest string) {
 	return "", ref
 }
 
+// letterRef splits "B22" into ("B", "#22"); ok is false for anything else.
+func letterRef(ref string) (letter, num string, ok bool) {
+	i := 0
+	for i < len(ref) && i < 2 && (ref[i] >= 'A' && ref[i] <= 'Z' || ref[i] >= 'a' && ref[i] <= 'z') {
+		i++
+	}
+	if i == 0 || i == len(ref) {
+		return "", "", false
+	}
+	if _, err := strconv.ParseInt(ref[i:], 10, 64); err != nil {
+		return "", "", false
+	}
+	return strings.ToUpper(ref[:i]), "#" + ref[i:], true
+}
+
+// findIn finds "#N", "N" or a session id in ss (the rows of one host).
 func findIn(ss []model.Session, ref string) (model.Session, bool) {
-	num, numErr := strconv.ParseInt(strings.TrimPrefix(ref, "#"), 10, 64)
 	for _, x := range ss {
-		if x.SessionID == ref || numErr == nil && x.Num == num {
+		if x.SessionID == ref || model.MatchesRef(ref, "", x.Num) {
 			return x, true
 		}
 	}
@@ -386,6 +430,15 @@ func findIn(ss []model.Session, ref string) (model.Session, bool) {
 // with no host is looked for here first, then on the other hosts.
 func (s *Server) locate(ctx context.Context, ref, hostArg string) (located, error) {
 	prefix, rest := splitRef(ref)
+	// "B22": the host with letter B, its #22.
+	if l, n, ok := letterRef(rest); ok && prefix == "" {
+		if hostArg != "" {
+			if h, err := s.hostNamed(ctx, hostArg); err == nil && h.letter != "" && h.letter != l {
+				return located{}, fmt.Errorf("%q is a session of host %s, but host is %q", ref, l, hostArg)
+			}
+		}
+		prefix, rest = l, n
+	}
 	if prefix != "" && hostArg != "" && !strings.EqualFold(prefix, hostArg) {
 		return located{}, fmt.Errorf("%q names host %q but host is %q", ref, prefix, hostArg)
 	}
@@ -425,7 +478,7 @@ func (s *Server) locate(ctx context.Context, ref, hostArg string) (located, erro
 	if prefix != "" {
 		where = " on host " + hs[0].name
 	}
-	return located{}, fmt.Errorf("no session %q%s (use #N, <host>#N or a session id; list_sessions shows them)", ref, where)
+	return located{}, fmt.Errorf("no session %q%s (use A12-style refs as list_sessions shows them, #N for this machine, or a session id)", ref, where)
 }
 
 // locateAll resolves refs, failing on the first unknown one so nothing is
@@ -460,7 +513,7 @@ func (s *Server) listHosts(ctx context.Context) (any, error) {
 	}
 	rows := make([]map[string]any, 0, len(ds))
 	for _, d := range ds {
-		r := map[string]any{"name": d.Name, "id": d.ID, "online": d.Online}
+		r := map[string]any{"name": d.Name, "id": d.ID, "online": d.Online, "letter": d.Letter}
 		if d.Hostname != "" {
 			r["hostname"] = d.Hostname
 		}
@@ -473,4 +526,13 @@ func (s *Server) listHosts(ctx context.Context) (any, error) {
 		rows = append(rows, r)
 	}
 	return map[string]any{"hosts": rows, "note": "pass a name as host; self is the machine this MCP server runs on (the default for start_session)"}, nil
+}
+
+// selfLetter is this machine's hub letter as its own session rows carry it
+// (works with -r too, where the rows come from the remote collector).
+func (s *Server) selfLetter() string {
+	if s.letter != nil {
+		return s.letter()
+	}
+	return ""
 }

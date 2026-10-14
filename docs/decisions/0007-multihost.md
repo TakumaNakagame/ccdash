@@ -69,3 +69,14 @@ list / stop / resume / retitle a session on host Y).
   (MCP servers are spawned per claude session, so no collector restart).
 - The Android app still has the device-first navigation; porting the
   cross-host list and host picker there is separate work.
+
+## Addendum (2026-10-15): host letters
+
+Session numbers are per collector, so "#22" alone is ambiguous once lists
+mix hosts. Each hub device now has a letter (A, B, … in registration
+order; editable in the portal's device menu) and a session's ref is
+letter + number — "A231", "B22" — everywhere: TUI, portal, MCP, push
+notifications. The hub sends the letter on the tunnel dial; the collector
+keeps it in hub.json and stamps it on listed rows. MCP accepts "B22"
+(the host is found by letter), still takes "#N" / N for this machine and
+"<host>#N". A machine not joined to a hub keeps "#N".

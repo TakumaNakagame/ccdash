@@ -28,7 +28,11 @@ type Device struct {
 	// PeerAccess lets this device reach the others with its token (peer.go):
 	// "" off, "read", "control".
 	PeerAccess string `json:"peer_access,omitempty"`
-	tokenHash  string
+	// Letter prefixes the device's session numbers ("A42") so a session
+	// handle is unique across machines. Assigned in registration order,
+	// the operator may change it.
+	Letter    string `json:"letter,omitempty"`
+	tokenHash string
 }
 
 // store is the hub's own SQLite file — separate from any collector DB. It
@@ -79,13 +83,19 @@ func openStoreFile(path string) (*store, error) {
 	}
 	for _, q := range []string{
 		`ALTER TABLE devices ADD COLUMN peer_access TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE devices ADD COLUMN letter TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(q); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			_ = db.Close()
 			return nil, fmt.Errorf("hub migrate: %w", err)
 		}
 	}
-	return &store{db: db}, nil
+	st := &store{db: db}
+	if err := st.backfillLetters(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("hub migrate: letters: %w", err)
+	}
+	return st, nil
 }
 
 func (s *store) Close() error { return s.db.Close() }
@@ -132,9 +142,14 @@ var ErrDuplicateName = errors.New("a device with that name already exists")
 func (s *store) createDevice(ctx context.Context, name string) (Device, string, error) {
 	d := Device{ID: randHex(8), Name: name, CreatedAt: time.Now().UTC()}
 	tok := "ccdh_" + randHex(32)
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO devices (id, name, token_hash, created_at) VALUES (?, ?, ?, ?)`,
-		d.ID, d.Name, hashToken(tok), d.CreatedAt.Format(time.RFC3339Nano))
+	used, err := s.usedLetters(ctx)
+	if err != nil {
+		return Device{}, "", err
+	}
+	d.Letter = nextLetter(used)
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO devices (id, name, token_hash, created_at, letter) VALUES (?, ?, ?, ?, ?)`,
+		d.ID, d.Name, hashToken(tok), d.CreatedAt.Format(time.RFC3339Nano), d.Letter)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") && strings.Contains(err.Error(), "name") {
 			return Device{}, "", ErrDuplicateName
@@ -182,12 +197,12 @@ func (s *store) renameDevice(ctx context.Context, id, name string) error {
 	return nil
 }
 
-const deviceCols = `id, name, token_hash, created_at, last_seen, hostname, version, peer_access`
+const deviceCols = `id, name, token_hash, created_at, last_seen, hostname, version, peer_access, letter`
 
 func scanDevice(sc interface{ Scan(...any) error }) (Device, error) {
 	var d Device
 	var created, seen string
-	if err := sc.Scan(&d.ID, &d.Name, &d.tokenHash, &created, &seen, &d.Hostname, &d.Version, &d.PeerAccess); err != nil {
+	if err := sc.Scan(&d.ID, &d.Name, &d.tokenHash, &created, &seen, &d.Hostname, &d.Version, &d.PeerAccess, &d.Letter); err != nil {
 		return Device{}, err
 	}
 	d.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
@@ -227,6 +242,106 @@ func (s *store) touchDevice(ctx context.Context, id, hostname, version string) e
 
 func (s *store) setPeerAccess(ctx context.Context, id, access string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE devices SET peer_access = ? WHERE id = ?`, access, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// ErrDuplicateLetter is returned when another device has the letter.
+var ErrDuplicateLetter = errors.New("another device already has that letter")
+
+// validLetter: one or two capital letters (A–Z, then AA… past 26 devices).
+func validLetter(l string) bool {
+	if len(l) < 1 || len(l) > 2 {
+		return false
+	}
+	for _, c := range l {
+		if c < 'A' || c > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+// nextLetter is the first unused of A…Z, AA…ZZ.
+func nextLetter(used map[string]bool) string {
+	for a := 'A'; a <= 'Z'; a++ {
+		if l := string(a); !used[l] {
+			return l
+		}
+	}
+	for a := 'A'; a <= 'Z'; a++ {
+		for b := 'A'; b <= 'Z'; b++ {
+			if l := string([]rune{a, b}); !used[l] {
+				return l
+			}
+		}
+	}
+	return ""
+}
+
+func (s *store) usedLetters(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT letter FROM devices WHERE letter != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	used := map[string]bool{}
+	for rows.Next() {
+		var l string
+		if err := rows.Scan(&l); err != nil {
+			return nil, err
+		}
+		used[l] = true
+	}
+	return used, rows.Err()
+}
+
+// backfillLetters gives devices registered before letters existed one each,
+// in registration order (the first machine is A).
+func (s *store) backfillLetters(ctx context.Context) error {
+	used, err := s.usedLetters(ctx)
+	if err != nil {
+		return err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM devices WHERE letter = '' ORDER BY created_at, id`)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	for _, id := range ids {
+		l := nextLetter(used)
+		if _, err := s.db.ExecContext(ctx, `UPDATE devices SET letter = ? WHERE id = ?`, l, id); err != nil {
+			return err
+		}
+		used[l] = true
+	}
+	return nil
+}
+
+func (s *store) setLetter(ctx context.Context, id, letter string) error {
+	var other string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM devices WHERE letter = ? AND id != ?`, letter, id).Scan(&other)
+	if err == nil {
+		return ErrDuplicateLetter
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE devices SET letter = ? WHERE id = ?`, letter, id)
 	if err != nil {
 		return err
 	}
