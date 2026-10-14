@@ -40,6 +40,11 @@ type StartRequest struct {
 	Project string `json:"project,omitempty"`
 	// PermissionMode is "", manual, acceptEdits, auto or plan.
 	PermissionMode string `json:"permissionMode,omitempty"`
+	// SessionID + ResumeID (both the session's id) resume an existing
+	// session (`claude --resume`) under that key instead of starting a new
+	// one; Cwd must then be the session's own directory.
+	SessionID string `json:"sessionId,omitempty"`
+	ResumeID  string `json:"resumeId,omitempty"`
 }
 
 // Input is what POST /pty/{key}/input types into a hosted claude: Keys
@@ -112,6 +117,13 @@ type Store interface {
 	// on a dialog (the folder-trust question in a new folder) — from the
 	// collector's GET /pty, so also over HTTP.
 	WaitingSpawns(ctx context.Context) ([]WaitingSpawn, error)
+	// HostedSessions lists the session IDs whose claude runs in a live PTY
+	// of the collector (GET /pty) — the ones StopSession can stop.
+	HostedSessions(ctx context.Context) ([]string, error)
+	// StopSession ends the hosted claude in PTY key (DELETE /pty/{key}:
+	// SIGTERM, then a kill after a grace period). The transcript stays, so
+	// StartSession with ResumeID brings it back.
+	StopSession(ctx context.Context, key string) error
 
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
@@ -172,6 +184,17 @@ type ptyRow struct {
 	PID    int    `json:"pid"`
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt"`
+}
+
+// hostedOf keeps the session-ID keys of the alive PTYs.
+func hostedOf(rows []ptyRow) []string {
+	out := []string{}
+	for _, r := range rows {
+		if r.Alive && !strings.HasPrefix(r.Key, "pid-") {
+			out = append(out, r.Key)
+		}
+	}
+	return out
 }
 
 // waitingOf keeps the pid-* spawns with a prompt whose PTY has no session

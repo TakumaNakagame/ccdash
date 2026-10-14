@@ -521,8 +521,10 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | `set_archived` | アーカイブ／解除 |
 | `archive_finished` | 終了したセッションをまとめてアーカイブ (動いているものは止めずに飛ばす)。ピン留め・あとで見る・未確認／要対応のものは残す (`include_unread` で未確認も対象)。`sessions` / `project` / `idle_hours` で絞り込み、`dry_run` で対象だけ確認 |
 | `start_session` | 指定ディレクトリ (絶対パス) で新しい claude セッションを起動 (TUI の `n` と同じ)。`project` / 最初の `prompt` / `permission_mode` を指定可。設定の Attach が OFF なら使えない |
+| `stop_session` | ccdash がホストしているセッション 1 件の claude を止める (SIGTERM → 猶予後 kill)。処理中の作業は打ち切られるが、トランスクリプトは残る。ターミナルで起動した claude、停止済みのセッション、呼び出し元自身のセッションは拒否。処理中 (active) のものは `force: true` のときだけ止める。Attach が OFF なら使えない |
+| `resume_session` | 停止中のセッションを `claude --resume` で再開し (cwd はそのセッションのもの、ccdash がホスト)、ccdash に再び動いている状態で出す。アーカイブ済みなら解除する。まだ動いているもの (ccdash 内外とも) は拒否。最初の `prompt` / `permission_mode` を指定可。Attach が OFF なら使えない |
 
-claude の停止や承認の判断はできません。`ccdash mcp --read-only` にすると上の 4 つ (参照系) と `set_status` だけになります。
+承認の判断はできません。`ccdash mcp --read-only` にすると上の 4 つ (参照系) と `set_status` だけになります。
 
 ### 状態申告 (`set_status`)
 

@@ -244,6 +244,19 @@ func (r *Remote) WaitingSpawns(ctx context.Context) ([]WaitingSpawn, error) {
 	return waitingOf(rows), nil
 }
 
+// HostedSessions reads the collector's GET /pty.
+func (r *Remote) HostedSessions(ctx context.Context) ([]string, error) {
+	var rows []ptyRow
+	if err := r.doJSON(ctx, 10*time.Second, http.MethodGet, "/pty/", nil, nil, &rows); err != nil {
+		return nil, err
+	}
+	return hostedOf(rows), nil
+}
+
+func (r *Remote) StopSession(ctx context.Context, key string) error {
+	return r.doJSON(ctx, 15*time.Second, http.MethodDelete, "/pty/"+url.PathEscape(key), nil, nil, nil)
+}
+
 func (r *Remote) GetSetting(ctx context.Context, key string) (string, error) {
 	all, err := r.AllSettings(ctx)
 	if err != nil {

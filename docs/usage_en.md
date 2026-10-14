@@ -742,8 +742,10 @@ Tools:
 | `set_archived` | archive / unarchive sessions |
 | `archive_finished` | archive the sessions whose claude has exited (running ones are skipped, never stopped); keeps pinned, watch-later and unread / needs-you ones (`include_unread` takes unread too); narrow with `sessions` / `project` / `idle_hours`, preview with `dry_run` |
 | `start_session` | start a new claude session in a directory (absolute path), like the TUI's `n`; optional `project`, first `prompt`, `permission_mode`. Refused while the Attach setting is OFF |
+| `stop_session` | stop one session's claude that ccdash hosts (SIGTERM, then a kill); work in progress is cut off, the transcript stays. Refuses a claude started in a terminal, an already stopped session and the caller's own; a working (active) one only with `force: true`. Refused while Attach is OFF |
+| `resume_session` | bring a stopped session back with `claude --resume` (in its own cwd, hosted by ccdash) so it runs in ccdash again; unarchives it. Refuses one that still runs (under ccdash or not); optional first `prompt`, `permission_mode`. Refused while Attach is OFF |
 
-It never stops claude and never answers approvals. Add
+It never answers approvals. Add
 `--read-only` (`ccdash mcp --read-only`) to offer only the first four plus
 `set_status`.
 

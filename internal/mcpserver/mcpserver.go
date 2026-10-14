@@ -3,11 +3,12 @@
 // needs the operator, a session's recent conversation — and organize it:
 // put sessions into projects, create / rename / merge projects, recolor
 // them, retitle, pin, recolor and archive sessions, put them on the grid,
-// mark them seen — and start a new claude session in a
-// directory (start_session, like the TUI's `n`). It goes through
+// mark them seen — start a new claude session in a directory
+// (start_session, like the TUI's `n`), and stop / resume a session the
+// collector hosts (stop_session, resume_session). It goes through
 // store.Store, so it works against the local DB or a remote collector (-r)
-// alike. It never stops claude and never answers approvals; --read-only
-// drops the organizing tools and start_session.
+// alike. It never answers approvals; --read-only drops the organizing tools
+// and the session lifecycle ones.
 //
 // The protocol subset is small enough to speak by hand: newline-delimited
 // JSON-RPC 2.0 with initialize, ping, tools/list and tools/call.
@@ -47,6 +48,9 @@ set_grid, set_pinned, set_color, mark_seen, set_archived, archive_finished) chan
 projects are just names, created on first use.
 start_session opens a new claude session in a directory (optionally in a project, with a
 first prompt); the operator sees and drives it in ccdash.
+stop_session ends the claude process of a session ccdash hosts (one at a time; whatever it is
+doing is cut off, the transcript stays) and resume_session brings a stopped session back with
+claude --resume. Stop a session only when the operator asked for it; never stop your own.
 When this machine is joined to a ccdash hub (or runs the local portal, ccdash web), each
 session carries "url": a link that opens that session's chat in the portal (browser or
 installed app). Put it next to a session
@@ -244,6 +248,29 @@ var writeTools = []map[string]any{
 		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false},
 	},
 	{
+		"name": "stop_session",
+		"description": "Stop one session: ends its claude process (SIGTERM, then a kill), which the ccdash collector hosts. " +
+			"Side effects: whatever that claude is doing is cut off (a reply mid-turn is lost; tools it started may be left half done), and the operator loses it in their live view until it is resumed. " +
+			"The transcript is kept; resume_session brings the session back. Only for sessions started by ccdash (TUI `n`, the portal, start_session or resumed there) — " +
+			"a claude started in a terminal can't be stopped from here. Refuses a session that is already stopped, your own session, and (unless force) one that is working mid-turn. Use it only when the operator asked to stop that session.",
+		"inputSchema": required(map[string]any{
+			"session": map[string]any{"type": "string", "description": `one session: "#N", N or session id`},
+			"force":   map[string]any{"type": "boolean", "description": "also stop a session that is working mid-turn (status active)"},
+		}, "session"),
+		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false},
+	},
+	{
+		"name": "resume_session",
+		"description": "Resume a stopped session: starts `claude --resume` on its transcript in its own directory, hosted by the ccdash collector, so it shows up running in ccdash again (live in its right pane; an archived session is unarchived). " +
+			"Refuses a session that is still running — under ccdash or in a terminal. Optionally send a first prompt and pick the permission mode.",
+		"inputSchema": required(map[string]any{
+			"session":         map[string]any{"type": "string", "description": `one session: "#N", N or session id`},
+			"prompt":          map[string]any{"type": "string", "description": "message to send once it is back; empty = just open it"},
+			"permission_mode": map[string]any{"type": "string", "enum": []string{"manual", "acceptEdits", "auto", "plan"}, "description": "claude --permission-mode; default = claude's own"},
+		}, "session"),
+		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false},
+	},
+	{
 		"name":        "set_project",
 		"description": "Put sessions into a project (a new name creates the project with its own color), or take them out with an empty project.",
 		"inputSchema": required(map[string]any{
@@ -435,6 +462,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		PermissionMode  string   `json:"permission_mode"`
 		Status          string   `json:"status"`
 		Note            string   `json:"note"`
+		Force           bool     `json:"force"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -455,6 +483,10 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		v, err = s.setStatus(ctx, args.Status, args.Note, args.Session)
 	case "start_session":
 		v, err = s.startSession(ctx, args.Cwd, args.Project, args.Prompt, args.PermissionMode)
+	case "stop_session":
+		v, err = s.stopSession(ctx, args.Session, args.Force)
+	case "resume_session":
+		v, err = s.resumeSession(ctx, args.Session, args.Prompt, args.PermissionMode)
 	case "set_project":
 		v, err = s.setProject(ctx, args.Sessions, args.Project)
 	case "rename_project":
@@ -1088,13 +1120,8 @@ func (s *Server) startSession(ctx context.Context, cwd, project, prompt, mode st
 	if strings.HasPrefix(strings.TrimSpace(prompt), "-") {
 		return nil, fmt.Errorf("prompt must not start with '-'")
 	}
-	// The same switch that keeps the TUI from spawning claude.
-	cfg, err := settings.Load(ctx, s.st)
-	if err != nil {
+	if err := s.attachOn(ctx, "starting sessions"); err != nil {
 		return nil, err
-	}
-	if !cfg.AttachEnabled {
-		return nil, fmt.Errorf("starting sessions is OFF in ccdash (settings: Attach)")
 	}
 	project = strings.TrimSpace(project)
 	key, err := s.st.StartSession(ctx, store.StartRequest{Cwd: filepath.Clean(cwd), Prompt: prompt, Project: project, PermissionMode: mode})
@@ -1114,6 +1141,129 @@ func (s *Server) startSession(ctx context.Context, cwd, project, prompt, mode st
 	}
 	if project != "" {
 		out["project"] = project
+	}
+	return out, nil
+}
+
+// attachOn is the switch that keeps the TUI from spawning claude: it gates
+// every tool that starts or stops one.
+func (s *Server) attachOn(ctx context.Context, what string) error {
+	cfg, err := settings.Load(ctx, s.st)
+	if err != nil {
+		return err
+	}
+	if !cfg.AttachEnabled {
+		return fmt.Errorf("%s is OFF in ccdash (settings: Attach)", what)
+	}
+	return nil
+}
+
+// hosted reports whether the collector runs session id's claude in a PTY.
+func (s *Server) hosted(ctx context.Context, id string) (bool, error) {
+	keys, err := s.st.HostedSessions(ctx)
+	if err != nil {
+		return false, fmt.Errorf("ask the collector which sessions it hosts (is it running?): %w", err)
+	}
+	for _, k := range keys {
+		if k == id {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// stopSession ends one hosted claude (see the tool description for what it
+// refuses).
+func (s *Server) stopSession(ctx context.Context, ref string, force bool) (any, error) {
+	if strings.TrimSpace(ref) == "" {
+		return nil, fmt.Errorf("session is required")
+	}
+	if err := s.attachOn(ctx, "stopping sessions"); err != nil {
+		return nil, err
+	}
+	x, err := s.findSession(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	name := refsOf([]model.Session{x})[0]
+	if self := s.self(); self != "" && self == x.SessionID {
+		return nil, fmt.Errorf("%s is your own session; stopping it would cut off this very turn", name)
+	}
+	on, err := s.hosted(ctx, x.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if !on {
+		if running(x) {
+			return nil, fmt.Errorf("%s runs outside ccdash (started in a terminal, status %s); ccdash can't stop it — the operator has to end it where it runs", name, x.Status)
+		}
+		return nil, fmt.Errorf("%s is already stopped (status %s); resume_session brings it back", name, x.Status)
+	}
+	if x.Status == model.StatusActive && !force {
+		return nil, fmt.Errorf("%s is working mid-turn; stopping it now loses that work — pass force: true only if the operator wants it stopped anyway", name)
+	}
+	if err := s.st.StopSession(ctx, x.SessionID); err != nil {
+		return nil, fmt.Errorf("stop %s: %w", name, err)
+	}
+	return map[string]any{
+		"stopped": name,
+		"cwd":     x.Cwd,
+		"note":    "claude has exited; the transcript is kept and resume_session brings the session back. ccdash shows it as stopped within ~10 s",
+	}, nil
+}
+
+// resumeSession runs `claude --resume` for a stopped session under the
+// collector, keyed by its session id (like the portal's resume and the
+// restart path).
+func (s *Server) resumeSession(ctx context.Context, ref, prompt, mode string) (any, error) {
+	if strings.TrimSpace(ref) == "" {
+		return nil, fmt.Errorf("session is required")
+	}
+	if strings.HasPrefix(strings.TrimSpace(prompt), "-") {
+		return nil, fmt.Errorf("prompt must not start with '-'")
+	}
+	if err := s.attachOn(ctx, "starting sessions"); err != nil {
+		return nil, err
+	}
+	x, err := s.findSession(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	name := refsOf([]model.Session{x})[0]
+	on, err := s.hosted(ctx, x.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if on {
+		return nil, fmt.Errorf("%s is already running under ccdash; nothing to resume", name)
+	}
+	if running(x) {
+		// Two claudes on one transcript would interleave it. Right after a
+		// stop the row lags until the next discovery pass.
+		return nil, fmt.Errorf("%s is still running outside ccdash (status %s); a second claude on the same transcript would garble it. If it was just stopped, wait ~10 s and retry", name, x.Status)
+	}
+	if x.Cwd == "" {
+		return nil, fmt.Errorf("%s has no known directory; claude --resume needs it", name)
+	}
+	if x.Archived {
+		if err := s.st.SetArchived(ctx, x.SessionID, false); err != nil {
+			return nil, err
+		}
+	}
+	key, err := s.st.StartSession(ctx, store.StartRequest{
+		SessionID: x.SessionID, ResumeID: x.SessionID, Cwd: x.Cwd, Prompt: prompt, PermissionMode: mode,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resume %s (is the ccdash collector running?): %w", name, err)
+	}
+	out := map[string]any{
+		"resumed": name,
+		"pty":     key,
+		"cwd":     x.Cwd,
+		"note":    "claude --resume is starting; the session shows as running in ccdash within a few seconds",
+	}
+	if x.Archived {
+		out["unarchived"] = true
 	}
 	return out, nil
 }

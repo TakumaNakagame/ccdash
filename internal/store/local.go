@@ -168,6 +168,19 @@ func (l *Local) WaitingSpawns(ctx context.Context) ([]WaitingSpawn, error) {
 	return waitingOf(rows), nil
 }
 
+// HostedSessions reads the collector's GET /pty.
+func (l *Local) HostedSessions(ctx context.Context) ([]string, error) {
+	var rows []ptyRow
+	if err := l.callCollector(ctx, http.MethodGet, "/pty/", nil, &rows); err != nil {
+		return nil, err
+	}
+	return hostedOf(rows), nil
+}
+
+func (l *Local) StopSession(ctx context.Context, key string) error {
+	return l.callCollector(ctx, http.MethodDelete, "/pty/"+url.PathEscape(key), nil, nil)
+}
+
 // postCollector POSTs body as JSON to the loopback collector and decodes a
 // 2xx reply into out when out is non-nil.
 func (l *Local) postCollector(ctx context.Context, path string, body, out any) error {

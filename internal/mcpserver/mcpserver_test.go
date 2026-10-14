@@ -78,7 +78,7 @@ func TestServe(t *testing.T) {
 	if r[0].Result.ProtocolVersion != "2025-03-26" {
 		t.Errorf("initialize: %s", lines[0])
 	}
-	if len(r[1].Result.Tools) != 30 {
+	if len(r[1].Result.Tools) != 32 {
 		t.Errorf("tools/list: %s", lines[1])
 	}
 	body := func(i int) string { return r[i].Result.Content[0].Text }
@@ -384,5 +384,97 @@ func TestParentOf(t *testing.T) {
 	}
 	if got := parentOf(os.Getpid()); got != os.Getppid() {
 		t.Fatalf("parentOf = %d, want %d", got, os.Getppid())
+	}
+}
+
+// TestStopResumeSession: stop_session ends only a hosted, non-self, idle
+// session (force for a working one); resume_session restarts only one that
+// runs nowhere, by its id and cwd.
+func TestStopResumeSession(t *testing.T) {
+	attach := "1"
+	var deleted []string
+	var started map[string]any
+	sessions := []model.Session{
+		{SessionID: "host", Num: 1, Cwd: "/w/a", Status: model.StatusIdle},
+		{SessionID: "busy", Num: 2, Cwd: "/w/b", Status: model.StatusActive},
+		{SessionID: "term", Num: 3, Cwd: "/w/c", Status: model.StatusIdle},
+		{SessionID: "done", Num: 4, Cwd: "/w/d", Status: model.StatusRecent},
+		{SessionID: "me", Num: 5, Cwd: "/w/e", Status: model.StatusActive},
+		{SessionID: "nocwd", Num: 6, Status: model.StatusStopped},
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/settings":
+			_ = json.NewEncoder(w).Encode(map[string]string{"attach_enabled": attach})
+		case r.URL.Path == "/api/sessions":
+			if r.URL.Query().Get("archived") == "1" {
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(sessions)
+		case r.URL.Path == "/pty/" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`[{"key":"host","alive":true,"pid":10},{"key":"busy","alive":true,"pid":11},{"key":"me","alive":true,"pid":12},{"key":"pid-13","alive":true,"pid":13}]`))
+		case r.Method == http.MethodDelete:
+			deleted = append(deleted, strings.TrimPrefix(r.URL.Path, "/pty/"))
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/pty/start":
+			_ = json.NewDecoder(r.Body).Decode(&started)
+			_, _ = w.Write([]byte(`{"ptyKey":"done"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	s := New(store.NewRemote(ts.URL, "tok"), "test", false)
+	s.self = func() string { return "me" }
+	ctx := context.Background()
+	call := func(name, args string) (string, error) { return s.call(ctx, name, json.RawMessage(args)) }
+
+	if _, err := call("stop_session", `{"session":"#1"}`); err != nil || len(deleted) != 1 || deleted[0] != "host" {
+		t.Fatalf("stop #1: err=%v deleted=%v", err, deleted)
+	}
+	for args, want := range map[string]string{
+		`{"session":"#2"}`:  "mid-turn",
+		`{"session":"#3"}`:  "outside ccdash",
+		`{"session":"#4"}`:  "already stopped",
+		`{"session":"#5"}`:  "your own session",
+		`{"session":"#99"}`: "no session",
+		`{}`:                "required",
+	} {
+		if _, err := call("stop_session", args); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("stop %s: want %q, got %v", args, want, err)
+		}
+	}
+	if _, err := call("stop_session", `{"session":"busy","force":true}`); err != nil || deleted[len(deleted)-1] != "busy" {
+		t.Errorf("force stop: err=%v deleted=%v", err, deleted)
+	}
+
+	out, err := call("resume_session", `{"session":"#4","permission_mode":"plan","prompt":"go on"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started["sessionId"] != "done" || started["resumeId"] != "done" || started["cwd"] != "/w/d" ||
+		started["permissionMode"] != "plan" || started["prompt"] != "go on" || !strings.Contains(out, `"resumed": "#4"`) {
+		t.Errorf("resume: out=%s req=%v", out, started)
+	}
+	for args, want := range map[string]string{
+		`{"session":"#1"}`:                "already running under ccdash",
+		`{"session":"#3"}`:                "still running outside ccdash",
+		`{"session":"#6"}`:                "no known directory",
+		`{"session":"#4","prompt":"-rf"}`: "must not start",
+	} {
+		if _, err := call("resume_session", args); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("resume %s: want %q, got %v", args, want, err)
+		}
+	}
+
+	attach = "0"
+	for _, name := range []string{"stop_session", "resume_session"} {
+		if _, err := call(name, `{"session":"#1"}`); err == nil || !strings.Contains(err.Error(), "OFF") {
+			t.Errorf("%s with attach off: %v", name, err)
+		}
+		if _, err := New(store.NewRemote(ts.URL, "tok"), "test", true).call(ctx, name, json.RawMessage(`{"session":"#1"}`)); err == nil {
+			t.Errorf("%s read-only: want error", name)
+		}
 	}
 }
