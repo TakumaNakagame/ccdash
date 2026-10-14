@@ -124,6 +124,15 @@ writes, PTYs, approvals, push, settings — answers 403 to a read token; a
 wrong token gets 401. The bearer header is never forwarded to devices. See
 `docs/decisions/0004-hub-read-tokens.md`.
 
+**Peer access (multi-host MCP).** In 端末 → 管理 → 他の端末へのアクセス the
+operator can let one device reach the others through the hub with its own
+device token: オフ (default) / 閲覧 / 操作. `ccdash mcp` on that device then
+lists every host's sessions and can start / stop / resume / organize them
+on a named host (`host` argument, `list_hosts`). Peers reach only a narrow
+route set (`internal/hub/peer.go`) — never approvals, typing into a PTY,
+device management or settings — and the target device's own allowlist
+still applies. See `docs/decisions/0007-multihost.md`.
+
 ## Local portal (`ccdash web`)
 
 The same portal for **this machine only**, with no hub server: one

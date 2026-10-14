@@ -924,3 +924,12 @@ body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #res
   #restartbar { padding: 6px 10px; }
   body.detail #restartbar { padding-top: max(6px, env(safe-area-inset-top)); }
 }
+
+/* Multi-host: the host a session runs on is a quiet tag on its row; the
+   host chips above the list only narrow it. */
+.tabs.hosts { margin: 8px 0 0; }
+.tab.off { opacity: .55; }
+.host-pick { align-items: center; gap: 8px; margin-bottom: 8px; }
+.host-pick select { min-width: 0; }
+.attach-off { color: var(--bad); }
+.home-actions { margin: 4px 0 16px; }

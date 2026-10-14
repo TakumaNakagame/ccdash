@@ -149,13 +149,8 @@ function haptic(ms = 8) { try { navigator.vibrate?.(ms); } catch {} }
 function paintShell(parts) {
   const detail = parts[0] === "d" && (parts[2] === "s" || parts[2] === "p");
   document.body.classList.toggle("detail", detail);
-  const tab = parts[0] === "grid" ? "grid" : parts[0] === "tasks" ? "tasks" : parts[0] === "d" ? "sessions" : "home";
+  const tab = parts[0] === "grid" ? "grid" : parts[0] === "tasks" ? "tasks" : parts[0] === "d" || parts[0] === "s" ? "sessions" : "home";
   for (const a of document.querySelectorAll("#tabbar a")) a.classList.toggle("on", a.dataset.tab === tab);
-  let lastDev = "";
-  try { lastDev = localStorage.getItem("ccdash.lastDevice") || ""; } catch {}
-  if (parts[0] === "d" && parts[1]) { lastDev = parts[1]; try { localStorage.setItem("ccdash.lastDevice", lastDev); } catch {} }
-  const sess = document.querySelector('#tabbar a[data-tab="sessions"]');
-  if (sess) sess.href = lastDev ? `#/d/${lastDev}` : "#/";
 }
 
 // Page transitions: a push slides the new page in from the right, a pop
@@ -298,7 +293,8 @@ function closeSplit() {
   split = null;
 }
 
-function openSplit(id) {
+function openSplit() {
+  const id = hostFilter !== ALL_HOSTS ? hostFilter : lastHost();
   closeSplit();
   view.replaceChildren();
   const left = h("div", { class: "split-list" });
@@ -314,7 +310,7 @@ function openSplit(id) {
   const save = () => { try { localStorage.setItem("ccdash.listWidth", String(Math.round(w))); } catch {} };
   setW(saved || fallback);
   // Read it even with a stored width: a double-click goes back to it.
-  paneRatio(id).then((r) => { if (r) { fallback = r.listShare; if (!saved) setW(fallback); } });
+  if (id) paneRatio(id).then((r) => { if (r) { fallback = r.listShare; if (!saved) setW(fallback); } });
   handle.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     handle.setPointerCapture(e.pointerId);
@@ -349,8 +345,8 @@ function openSplit(id) {
     save();
   });
   view.append(box);
-  split = { dev: id, left, right, cleanup: [] };
-  devicePage(id, { mount: left, bucket: split.cleanup, compact: true });
+  split = { filter: hostFilter, left, right, cleanup: [] };
+  devicePage({ mount: left, bucket: split.cleanup, compact: true });
 }
 
 // parsePaneRatio mirrors settings.ParsePaneRatio: "list:work:tasks", any
@@ -400,21 +396,27 @@ function route() {
     gl.title = "セッションをまとめて表示（グリッド）";
   }
   const inDevice = parts[0] === "d" && parts[1];
+  // #/s is the session list of every host; #/d/<host> is the same list
+  // narrowed to that host (the filter sticks until changed).
+  const inList = parts[0] === "s" || (inDevice && !parts[2]);
+  if (inList) {
+    if (inDevice) setHostFilter(parts[1]);
+    listHash = location.hash;
+  }
   paintTaskScope();
-  if (inDevice && wideQuery.matches) {
-    if (split?.dev !== parts[1]) openSplit(parts[1]);
+  if ((inDevice || parts[0] === "s") && wideQuery.matches) {
+    if (!split || split.filter !== hostFilter) openSplit();
     paintListFold();
     split.right.replaceChildren();
     mainMount = split.right;
     split.left.querySelectorAll(".item.selected").forEach((e) => e.classList.remove("selected"));
     if (parts[2] === "s" && parts[3]) {
-      split.left.querySelector(`.item[data-sid="${CSS.escape(parts[3])}"]`)?.classList.add("selected");
+      split.left.querySelector(`.item[data-dev="${CSS.escape(parts[1])}"][data-sid="${CSS.escape(parts[3])}"]`)?.classList.add("selected");
       if (parts[4] === "diff") return diffPage(parts[1], parts[3]);
       return sessionPage(parts[1], parts[3], parts[4]);
     }
     if (parts[2] === "p" && parts[3]) return spawnPage(parts[1], parts[3], parts[4]);
-    crumbs({ text: "端末", href: "#/" }, { text: deviceCache.get(parts[1])?.name || "…" });
-    deviceName(parts[1]).then((n) => { if (location.hash.split("/")[2] === parts[1] && !parts[2]) crumbs({ text: "端末", href: "#/" }, { text: n }); });
+    crumbs({ text: "ホーム", href: "#/" }, { text: "セッション" });
     split.right.append(h("div", { class: "empty split-empty" }, "左の一覧からセッションを選んでください"));
     return;
   }
@@ -424,11 +426,12 @@ function route() {
   mainMount = view;
   if (parts[0] === "grid") return gridPage();
   if (parts[0] === "tasks") return tasksPage(parts[1]);
+  if (parts[0] === "s") return devicePage();
   if (inDevice) {
     if (parts[2] === "s" && parts[3] && parts[4] === "diff") return diffPage(parts[1], parts[3]);
     if (parts[2] === "s" && parts[3]) return sessionPage(parts[1], parts[3], parts[4]);
     if (parts[2] === "p" && parts[3]) return spawnPage(parts[1], parts[3], parts[4]);
-    return devicePage(parts[1]);
+    return devicePage();
   }
   return devicesPage();
 }
@@ -441,10 +444,11 @@ function route() {
 function parentHash() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   if (parts[0] === "grid") return beforeGrid || "#/";
+  if (parts[0] === "s") return "#/";
   if (parts[0] !== "d" || !parts[1]) return "";
   const dev = `#/d/${parts[1]}`;
   if (parts[2] === "s" && parts[3] && parts[4] === "diff") return `${dev}/s/${parts[3]}`;
-  if (parts[2]) return dev;
+  if (parts[2]) return listHash;
   return "#/";
 }
 
@@ -554,7 +558,7 @@ function boardCard(c) {
 }
 
 function devicesPage() {
-  crumbs({ text: "端末" });
+  crumbs({ text: "ホーム" });
   const list = h("div", { class: "list" }, h("div", { class: "empty" }, "読み込み中…"));
   const board = h("div", { class: "board" });
   const local = !!me?.local;
@@ -563,6 +567,11 @@ function devicesPage() {
     h("a", { class: "btn small", href: "#/tasks", onclick: (e) => { if (wideQuery.matches) { e.preventDefault(); setTaskPane(true); } } }, "すべて"));
   view.append(h("div", { class: "page" },
     h("section", { class: "todo" }, todoHead, todo),
+    // Sessions of every host are one list; the host is picked when one is
+    // started (newSession), not before.
+    h("div", { class: "row home-actions" },
+      h("a", { class: "btn grow", href: "#/s" }, icon("list"), "すべてのセッション"),
+      h("button", { class: "btn primary", onclick: () => newSession("") }, icon("plus"), "新規セッション")),
     board,
     h("div", { class: "row" },
       h("h1", { class: "grow" }, local ? "このマシン" : "端末"),
@@ -601,6 +610,7 @@ function deviceRow(d) {
   return h("div", { class: "item", onclick: () => d.online ? (location.hash = `#/d/${d.id}`) : toast("この端末はオフラインです") },
     h("span", { class: "dot" + (d.online ? " on" : "") }),
     h("div", { class: "grow" }, h("div", { class: "title" }, d.name), h("div", { class: "sub" }, sub)),
+    d.peer_access ? h("span", { class: "chip", title: "この端末の ccdash mcp から他の端末へアクセスできます" }, PEER_LABEL[d.peer_access]) : null,
     local ? null : h("button", { class: "btn small", onclick: (e) => { e.stopPropagation(); deviceMenu(d); } }, "管理"));
 }
 
@@ -633,12 +643,29 @@ function addDevice() {
   });
 }
 
+// Peer access (internal/hub/peer.go): whether this device's own ccdash mcp
+// may reach the other devices through the hub with its device token.
+const PEER_LABEL = { "": "オフ", read: "他端末: 閲覧", control: "他端末: 操作" };
+
 function deviceMenu(d) {
   dialog((body, close) => {
     const name = h("input", { value: d.name, maxlength: 64 });
+    const peer = h("select", { class: "mode" },
+      h("option", { value: "", selected: !d.peer_access }, "オフ（この端末からは自分のセッションだけ）"),
+      h("option", { value: "read", selected: d.peer_access === "read" }, "閲覧（他の端末のセッションを見る）"),
+      h("option", { value: "control", selected: d.peer_access === "control" }, "操作（他の端末で起動・停止・整理もできる）"));
+    peer.addEventListener("change", async () => {
+      try {
+        await api(`/api/devices/${d.id}/peer`, { method: "POST", json: { access: peer.value } });
+        d.peer_access = peer.value;
+        toast("他の端末へのアクセスを変更しました");
+      } catch (e) { toast(e.message); peer.value = d.peer_access || ""; }
+    });
     body.append(h("h1", {}, d.name),
       h("p", { class: "muted small" }, `ID ${d.id} · 登録 ${new Date(d.created_at).toLocaleString()}`),
       h("label", {}, "名前", h("br"), name),
+      h("label", {}, "他の端末へのアクセス（この端末の ccdash mcp から）", h("br"), peer),
+      h("p", { class: "muted small" }, "オンにすると、この端末の Claude が MCP 経由で他の端末のセッションを見たり（閲覧）、起動・停止・整理したり（操作）できます。この端末が乗っ取られると他の端末にも及ぶので、必要な端末だけに。承認の応答や端末の設定変更はどちらでもできません。"),
       h("div", { class: "actions" },
         h("button", { type: "button", class: "btn danger", onclick: async () => {
           if (!confirm(`「${d.name}」を削除しますか？ 接続中のトンネルも切断されます。`)) return;
@@ -849,11 +876,58 @@ const tabKey = (id) => `ccdash.tab.${id}`;
 function loadTab(id) { try { return localStorage.getItem(tabKey(id)) || ""; } catch { return ""; } }
 function saveTab(id, g) { try { localStorage.setItem(tabKey(id), g); } catch {} }
 
-async function devicePage(id, opts = {}) {
+// ---------- sessions (every host) ----------
+
+// The session list covers every online host at once; a host is a session's
+// attribute (a chip on its row), not a page you enter first. hostFilter
+// narrows the list to one host — chips above the list, or #/d/<host> —
+// and is remembered per browser. With one host in view the page also
+// shows that host's own things (status, usage, settings, restart).
+const ALL_HOSTS = "*";
+let hostFilter = (() => { try { return localStorage.getItem("ccdash.hostFilter") || ALL_HOSTS; } catch { return ALL_HOSTS; } })();
+function setHostFilter(v) {
+  hostFilter = v || ALL_HOSTS;
+  try { localStorage.setItem("ccdash.hostFilter", hostFilter); } catch {}
+}
+// The list a session's back button / swipe returns to.
+let listHash = "#/s";
+
+// refreshList rebuilds the session list in place (the split's left pane on
+// a wide screen, else the page).
+function refreshList() {
+  if (split && wideQuery.matches) {
+    split.cleanup.forEach((f) => { try { f(); } catch {} });
+    split.cleanup = [];
+    split.left.replaceChildren();
+    split.filter = hostFilter;
+    devicePage({ mount: split.left, bucket: split.cleanup, compact: true });
+    return;
+  }
+  route();
+}
+
+// onlineDevices: the hosts the list reads (cached rows from /api/devices).
+async function onlineDevices() {
+  const ds = await api("/api/devices");
+  ds.forEach((d) => deviceCache.set(d.id, d));
+  return ds;
+}
+
+const sessKey = (s) => s._dev + "\t" + s.session_id;
+
+async function devicePage(opts = {}) {
   const mount = opts.mount || mainMount;
   const bucket = opts.bucket || cleanup;
-  const name = await deviceName(id);
-  if (!opts.compact) crumbs({ text: "端末", href: "#/" }, { text: name });
+  let devs = [];
+  try { devs = await onlineDevices(); } catch {}
+  // A filter naming a host that is gone falls back to every host.
+  if (hostFilter !== ALL_HOSTS && devs.length && !devs.some((d) => d.id === hostFilter)) setHostFilter(ALL_HOSTS);
+  const single = hostFilter !== ALL_HOSTS ? hostFilter : "";
+  const onlyOne = !single && devs.filter((d) => d.online).length === 1 && devs.length === 1 ? devs[0].id : "";
+  const one = single || onlyOne; // the host this page is about, if just one
+  const name = one ? await deviceName(one) : "セッション";
+  if (!opts.compact) crumbs({ text: "ホーム", href: "#/" }, { text: single ? name : "セッション" });
+  const hostChips = h("div", { class: "tabs hosts" });
   const approvals = h("div");
   const spawns = h("div");
   const tabs = h("div", { class: "tabs" });
@@ -865,74 +939,86 @@ async function devicePage(id, opts = {}) {
   }, { passive: false });
   const list = h("div", { class: "list" }, h("div", { class: "empty" }, "読み込み中…"));
   const more = h("div");
-  const filter = h("input", { type: "search", placeholder: "タイトル・パス・#番号で絞り込み", "aria-label": "絞り込み" });
+  const filter = h("input", { type: "search", placeholder: "タイトル・パス・#番号・ホストで絞り込み", "aria-label": "絞り込み" });
   let showArchived = false;
   const archBtn = h("button", { class: "btn small", onclick: () => { showArchived = !showArchived; selected.clear(); paintSel(); archBtn.classList.toggle("on", showArchived); archBtn.textContent = showArchived ? "アーカイブ表示中" : "アーカイブ"; refreshNow(); } }, "アーカイブ");
   const status = h("div", { class: "muted small" });
-  const settingsBox = h("details", { class: "settings-box" }, h("summary", {}, "端末の設定（閲覧のみ）"));
+  const settingsBox = h("details", { class: "settings-box", hidden: !one }, h("summary", {}, "端末の設定（閲覧のみ）"));
   const usageCard = h("div", { class: "usage-card", hidden: true });
-  const loadUsage = async () => {
-    const u = await dev(id).get("/api/usage?days=7").catch(() => null);
-    if (!u) return;
-    const days = [];
-    for (let i = 6; i >= 0; i--) {
-      const dt = new Date(Date.now() - i * 86400000);
-      const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-      days.push([`${dt.getMonth() + 1}/${dt.getDate()}`, u.by_day?.[key]?.cost || 0]);
-    }
-    const max = Math.max(...days.map((x) => x[1]), 0.01);
-    usageCard.hidden = !u.range?.messages;
-    usageCard.replaceChildren(
-      h("div", { class: "row" },
-        h("div", { class: "grow" }, h("div", { class: "muted small" }, "今日（API 換算）"), h("b", { class: "big" }, fmtUSD(u.today?.cost || 0))),
-        h("div", {}, h("div", { class: "muted small" }, "7 日間"), h("b", {}, fmtUSD(u.range?.cost || 0)), h("span", { class: "muted small" }, ` · ${fmtTok(tokTotal(u.range || {}))} tok`))),
-      // Only today's value is printed; the others are in each bar's tooltip.
-      h("div", { class: "bars", title: "日別（API 換算）" }, days.map(([d, v], i) => h("div", { class: "bar" + (i === days.length - 1 ? " today" : ""), title: `${d} ${fmtUSD(v)}` },
-        h("span", { style: `height:${Math.max(3, Math.round((v / max) * 44))}px` }), h("small", {}, i === days.length - 1 ? "今日" : d)))));
-  };
-  loadUsage();
-  const usageTimer = setInterval(loadUsage, 60000);
-  bucket.push(() => clearInterval(usageTimer));
-  settingsBox.addEventListener("toggle", async () => {
-    if (!settingsBox.open || settingsBox.dataset.loaded) return;
-    try {
-      const rows = await dev(id).get("/hub/settings");
-      settingsBox.dataset.loaded = "1";
-      settingsBox.append(h("div", { class: "list" }, rows.map((r) => h("div", { class: "item", style: "cursor:default", title: r.help },
-        h("div", { class: "grow" }, h("div", {}, r.label), h("div", { class: "sub" }, r.help)),
-        h("span", { class: "chip" + (r.value === true ? " idle" : "") }, r.value === true ? "ON" : r.value === false ? "OFF" : String(r.value ?? "")))),
-        h("p", { class: "muted small" }, "変更は端末の TUI（, キー）から。ハブからは変更できません。")));
-    } catch (e) { toast(e.message); }
-  });
+  if (one) {
+    const loadUsage = async () => {
+      const u = await dev(one).get("/api/usage?days=7").catch(() => null);
+      if (!u) return;
+      const days = [];
+      for (let i = 6; i >= 0; i--) {
+        const dt = new Date(Date.now() - i * 86400000);
+        const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+        days.push([`${dt.getMonth() + 1}/${dt.getDate()}`, u.by_day?.[key]?.cost || 0]);
+      }
+      const max = Math.max(...days.map((x) => x[1]), 0.01);
+      usageCard.hidden = !u.range?.messages;
+      usageCard.replaceChildren(
+        h("div", { class: "row" },
+          h("div", { class: "grow" }, h("div", { class: "muted small" }, "今日（API 換算）"), h("b", { class: "big" }, fmtUSD(u.today?.cost || 0))),
+          h("div", {}, h("div", { class: "muted small" }, "7 日間"), h("b", {}, fmtUSD(u.range?.cost || 0)), h("span", { class: "muted small" }, ` · ${fmtTok(tokTotal(u.range || {}))} tok`))),
+        // Only today's value is printed; the others are in each bar's tooltip.
+        h("div", { class: "bars", title: "日別（API 換算）" }, days.map(([d, v], i) => h("div", { class: "bar" + (i === days.length - 1 ? " today" : ""), title: `${d} ${fmtUSD(v)}` },
+          h("span", { style: `height:${Math.max(3, Math.round((v / max) * 44))}px` }), h("small", {}, i === days.length - 1 ? "今日" : d)))));
+    };
+    loadUsage();
+    const usageTimer = setInterval(loadUsage, 60000);
+    bucket.push(() => clearInterval(usageTimer));
+    settingsBox.addEventListener("toggle", async () => {
+      if (!settingsBox.open || settingsBox.dataset.loaded) return;
+      try {
+        const rows = await dev(one).get("/hub/settings");
+        settingsBox.dataset.loaded = "1";
+        settingsBox.append(h("div", { class: "list" }, rows.map((r) => h("div", { class: "item", style: "cursor:default", title: r.help },
+          h("div", { class: "grow" }, h("div", {}, r.label), h("div", { class: "sub" }, r.help)),
+          h("span", { class: "chip" + (r.value === true ? " idle" : "") }, r.value === true ? "ON" : r.value === false ? "OFF" : String(r.value ?? "")))),
+          h("p", { class: "muted small" }, "変更は端末の TUI（, キー）から。ハブからは変更できません。")));
+      } catch (e) { toast(e.message); }
+    });
+  }
   // Checkboxes on the rows select sessions for bulk actions: put them on
   // the grid, archive (or unarchive), put them in a project, or generate
-  // titles with claude -p.
+  // titles with claude -p. Keys are "<host>\t<session>": the selection can
+  // span hosts, and each action goes to each session's own host.
   const selected = new Set();
   const selBar = h("div", { class: "sel-bar", hidden: true });
   const sel = {
     set: selected,
-    toggle(sid, on) { on ? selected.add(sid) : selected.delete(sid); paintSel(); render(); },
+    toggle(k, on) { on ? selected.add(k) : selected.delete(k); paintSel(); render(); },
   };
+  const picked = () => [...selected].map((k) => { const [d, sid] = k.split("\t"); return { d, sid }; });
   const bulk = async (label, fn) => {
-    const ids = [...selected];
     let ok = 0, ng = 0, lastErr = "";
-    for (const sid of ids) {
-      try { await fn(sid); ok++; } catch (e) { ng++; lastErr = e.message; }
+    for (const { d, sid } of picked()) {
+      try { await fn(d, sid); ok++; } catch (e) { ng++; lastErr = e.message; }
     }
     toast(`${label}: ${ok} 件` + (ng ? `（失敗 ${ng} 件: ${lastErr}）` : ""));
     selected.clear();
     paintSel();
     refreshNow();
   };
-  const setProject = () => projectPicker(id, { count: selected.size }, (name) =>
-    bulk(name ? `プロジェクト「${name}」に追加` : "プロジェクトから外す",
-      (sid) => dev(id).post(`/api/sessions/${encodeURIComponent(sid)}/project`, { project: name })));
+  // Projects live on each host: a selection across hosts can't share one.
+  const setProject = () => {
+    const hosts = new Set(picked().map((p) => p.d));
+    if (hosts.size > 1) { toast("プロジェクトはホストごとです。1 つのホストのセッションだけを選んでください"); return; }
+    const d0 = [...hosts][0];
+    projectPicker(d0, { count: selected.size }, (pname) =>
+      bulk(pname ? `プロジェクト「${pname}」に追加` : "プロジェクトから外す",
+        (d, sid) => dev(d).post(`/api/sessions/${encodeURIComponent(sid)}/project`, { project: pname })));
+  };
   const genTitles = async () => {
-    const ids = [...selected];
+    const byDev = new Map();
+    for (const { d, sid } of picked()) { if (!byDev.has(d)) byDev.set(d, []); byDev.get(d).push(sid); }
     let ok = 0, lastErr = "";
-    for (let i = 0; i < ids.length; i += 10) {
-      try { await dev(id).post("/api/titles", { sessionIds: ids.slice(i, i + 10) }); ok += Math.min(10, ids.length - i); }
-      catch (e) { lastErr = e.message; }
+    for (const [d, ids] of byDev) {
+      for (let i = 0; i < ids.length; i += 10) {
+        try { await dev(d).post("/api/titles", { sessionIds: ids.slice(i, i + 10) }); ok += Math.min(10, ids.length - i); }
+        catch (e) { lastErr = e.message; }
+      }
     }
     toast(ok ? `タイトルを生成しています（claude -p, ${ok} 件）` : "生成できませんでした: " + lastErr);
     selected.clear();
@@ -943,7 +1029,7 @@ async function devicePage(id, opts = {}) {
     selBar.hidden = !selected.size;
     list.classList.toggle("selecting", selected.size > 0);
     if (!selected.size) return;
-    const keys = [...selected].map((sid) => id + ":" + sid);
+    const keys = picked().map(({ d, sid }) => d + ":" + sid);
     selBar.replaceChildren(
       h("b", {}, `${selected.size} 件選択`),
       h("button", { class: "btn small", onclick: () => {
@@ -955,36 +1041,56 @@ async function devicePage(id, opts = {}) {
         toast("グリッドから外しました"); selected.clear(); paintSel(); render();
       } }, "グリッドから外す"),
       h("button", { class: "btn small", onclick: () => bulk(showArchived ? "アーカイブ解除" : "アーカイブ",
-        (sid) => dev(id).post(`/api/sessions/${encodeURIComponent(sid)}/archive`, { archived: !showArchived })) },
+        (d, sid) => dev(d).post(`/api/sessions/${encodeURIComponent(sid)}/archive`, { archived: !showArchived })) },
         showArchived ? "アーカイブ解除" : "アーカイブ"),
       h("button", { class: "btn small", title: "複数のセッションを一つのプロジェクトにまとめる", onclick: setProject }, icon("folder"), "プロジェクト"),
-      h("button", { class: "btn small", onclick: () => bulk("あとで見る", (sid) => dev(id).post(`/api/sessions/${encodeURIComponent(sid)}/later`, { later: true })) }, icon("clock"), "あとで見る"),
+      h("button", { class: "btn small", onclick: () => bulk("あとで見る", (d, sid) => dev(d).post(`/api/sessions/${encodeURIComponent(sid)}/later`, { later: true })) }, icon("clock"), "あとで見る"),
       h("button", { class: "btn small", title: "claude -p でタイトルを生成", onclick: genTitles }, "タイトル生成"),
       h("span", { class: "grow" }),
-      h("button", { class: "btn small", onclick: () => { for (const sid of visible) selected.add(sid); paintSel(); render(); } }, "表示中を全選択"),
+      h("button", { class: "btn small", onclick: () => { for (const k of visible) selected.add(k); paintSel(); render(); } }, "表示中を全選択"),
       h("button", { class: "btn small", onclick: () => { selected.clear(); paintSel(); render(); } }, "選択解除"));
   };
   let visible = [];
   mount.append(h("div", { class: "page" + (opts.compact ? " compact" : "") },
     h("div", { class: "row" },
-      h("h1", { class: "grow" }, name),
-      h("button", { class: "btn icon", title: "この端末の ccdash collector を再起動（ホスト中のセッションは自動で再開）", onclick: () => restartCollector(id, last), "aria-label": "collector を再起動" }, icon("restart")),
+      h("h1", { class: "grow" }, single ? name : "セッション"),
+      one ? h("button", { class: "btn icon", title: "この端末の ccdash collector を再起動（ホスト中のセッションは自動で再開）", onclick: () => restartCollector(one, last), "aria-label": "collector を再起動" }, icon("restart")) : null,
       h("button", { class: "btn", title: "スキル・コマンドを新しいセッションで実行（TUI の S）",
-        onclick: () => skillPicker(id, recentCwds(last?.sessions)) }, "スキル実行"),
-      h("button", { class: "btn primary", onclick: () => newSession(id) }, icon("plus"), "新規セッション")),
-    status, usageCard, approvals, spawns,
+        onclick: () => {
+          const hid = one || lastHost();
+          if (!hid) return toast("接続中のホストがありません");
+          skillPicker(hid, recentCwds((last?.sessions || []).filter((s) => s._dev === hid)));
+        } }, "スキル実行"),
+      h("button", { class: "btn primary", onclick: () => newSession(one || "") }, icon("plus"), "新規セッション")),
+    hostChips, status, usageCard, approvals, spawns,
     tabs,
     h("div", { class: "row", style: "margin-bottom:8px" }, h("label", { class: "search grow" }, icon("search"), filter), archBtn),
     selBar, list, more, settingsBox));
 
-  let last = null, tab = loadTab(id), limit = 100, briefs = {}, briefsAt = 0, shownTab = null;
+  // Host chips: すべて + every registered host (offline ones dimmed).
+  const paintHosts = () => {
+    if (devs.length < 2) { hostChips.replaceChildren(); hostChips.hidden = true; return; }
+    hostChips.hidden = false;
+    const chip = (v, label, d) => h("button", {
+      class: "tab" + (hostFilter === v ? " on" : "") + (d && !d.online ? " off" : ""),
+      title: d && !d.online ? "オフライン" : "",
+      onclick: () => { if (hostFilter === v) return; setHostFilter(v); refreshList(); },
+    }, d?.online ? h("span", { class: "dot on" }) : null, label,
+      hostFilter === ALL_HOSTS && d?.online ? h("span", { class: "count" }, (last?.sessions || []).filter((s) => s._dev === v).length) : null);
+    hostChips.replaceChildren(chip(ALL_HOSTS, "すべてのホスト"), ...devs.map((d) => chip(d.id, d.name, d)));
+  };
+
+  let last = null, tab = loadTab(one || ALL_HOSTS), limit = 100, briefs = {}, briefsAt = 0, shownTab = null;
   const render = () => {
     if (!last) return;
     if (deferWhileSelecting(list, render)) return;
-    const { sessions, ptys, info } = last;
-    const live = new Set(ptys.filter((p) => p.alive).map((p) => p.key));
-    const groups = uniqueGroups(sessions, info.autoRepoTabs !== false);
+    const { sessions, ptys, infos } = last;
+    const multi = new Set(sessions.map((s) => s._dev)).size > 1 || !one;
+    const live = new Set(ptys.filter((p) => p.alive).map((p) => p._dev + "\t" + p.key));
+    const autoRepo = Object.values(infos).every((i) => i?.autoRepoTabs !== false);
+    const groups = uniqueGroups(sessions, autoRepo);
     if (!groups.includes(tab)) tab = "";
+    paintHosts();
 
     tabs.replaceChildren(...groups.map((g) => {
       const n = g ? sessions.filter((s) => groupOf(s) === g).length : sessions.length;
@@ -992,7 +1098,7 @@ async function devicePage(id, opts = {}) {
       const running = (g ? sessions.filter((s) => groupOf(s) === g) : sessions).some(active);
       return h("button", {
         class: "tab" + (g === tab ? " on" : ""),
-        onclick: () => { tab = g; limit = 100; saveTab(id, g); render(); },
+        onclick: () => { tab = g; limit = 100; saveTab(one || ALL_HOSTS, g); render(); },
       }, running ? h("span", { class: "dot on" }) : null, g || "最新", h("span", { class: "count" }, n));
     }));
     // Bring the active tab into view only when it changes, and only by
@@ -1006,29 +1112,31 @@ async function devicePage(id, opts = {}) {
     const q = filter.value.trim().toLowerCase();
     const rows = sessions
       .filter((s) => !tab || groupOf(s) === tab)
-      .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${groupOf(s)} ${s.project || ""}`.toLowerCase().includes(q))
+      .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${groupOf(s)} ${s.project || ""} ${s._devName}`.toLowerCase().includes(q))
       .sort((a, b) => (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (new Date(b.last_seen) - new Date(a.last_seen)));
     const ordered = laterFirst(projectsFirst(rows));
     const out = [];
-    let bucket = null;
-    visible = ordered.slice(0, limit).map((s) => s.session_id);
+    let bk = null;
+    visible = ordered.slice(0, limit).map(sessKey);
     for (const s of ordered.slice(0, limit)) {
-      const b = s.later ? "\0later" : s.project ? "\0" + s.project : dateBucket(s);
-      if (b !== bucket) {
-        bucket = b;
+      // Projects are per host: two hosts' "web" are two blocks.
+      const b = s.later ? "\0later" : s.project ? "\0" + s._dev + "\0" + s.project : dateBucket(s);
+      if (b !== bk) {
+        bk = b;
         out.push(s.later ? h("div", { class: "bucket later" }, icon("clock"), "あとで見る")
           : s.project
-          ? projectHeader(s.project, projectColorOf(s.project, s.project_color), ordered.filter((x) => x.project === s.project),
+          ? projectHeader(multi ? `${s.project} · ${s._devName}` : s.project, projectColorOf(s.project, s.project_color),
+            ordered.filter((x) => x.project === s.project && x._dev === s._dev),
             // The project's directory: where its most recent session works.
-            () => newSession(id, { cwd: s.cwd, project: s.project }),
+            () => newSession(s._dev, { cwd: s.cwd, project: s.project }),
             async (delta) => {
-              try { await dev(id).post("/api/projects/order", { project: s.project, delta }); refreshNow(); } catch (e) { toast(e.message); }
+              try { await dev(s._dev).post("/api/projects/order", { project: s.project, delta }); refreshNow(); } catch (e) { toast(e.message); }
             })
           : h("div", { class: "bucket" }, b));
       }
-      out.push(sessionRow(id, s, live.has(s.session_id), info, !tab, sel, briefs[s.session_id]));
+      out.push(sessionRow(s._dev, s, live.has(s._dev + "\t" + s.session_id), infos[s._dev], !tab, sel, briefs[sessKey(s)], multi ? s._devName : ""));
     }
-    list.replaceChildren(...(out.length ? out : [h("div", { class: "empty" }, q ? "該当なし" : "セッションがありません")]));
+    list.replaceChildren(...(out.length ? out : [h("div", { class: "empty" }, q ? "該当なし" : devs.some((d) => d.online) ? "セッションがありません" : "接続中のホストがありません")]));
     more.replaceChildren(...(rows.length > limit
       ? [h("button", { class: "btn", style: "margin-top:8px;width:100%", onclick: () => { limit += 100; render(); } }, `さらに表示（残り ${rows.length - limit}）`)]
       : []));
@@ -1036,45 +1144,83 @@ async function devicePage(id, opts = {}) {
     // Fresh spawns not yet tied to a session row.
     const byPid = new Map();
     for (const p of ptys) {
-      if (!byPid.has(p.pid)) byPid.set(p.pid, []);
-      byPid.get(p.pid).push(p.key);
+      const k = p._dev + "\t" + p.pid;
+      if (!byPid.has(k)) byPid.set(k, []);
+      byPid.get(k).push(p);
     }
-    const fresh = [...byPid.values()].filter((keys) => keys.every((k) => k.startsWith("pid-"))).map((keys) => keys[0]);
-    const ptyOf = new Map(ptys.map((p) => [p.key, p]));
+    const fresh = [...byPid.values()].filter((ps) => ps.every((p) => p.key.startsWith("pid-"))).map((ps) => ps[0]);
     // A spawn can wait on a dialog before claude registers a session (the
     // folder-trust question in a new folder): show it, open it to answer.
     spawns.replaceChildren(...(fresh.length ? [h("h2", {}, "起動中（未登録）"), h("div", { class: "list" },
-      fresh.map((k) => {
-        const p = ptyOf.get(k) || {};
-        return h("div", { class: "item srow", onclick: () => (location.hash = `#/d/${id}/p/${encodeURIComponent(k)}`) },
-          h("div", { class: "grow" },
-            h("div", { class: "title mono" }, p.cwd ? p.cwd.split("/").filter(Boolean).pop() : k),
-            p.prompt ? h("div", { class: "muted small" }, p.prompt) : null),
-          h("div", { class: "srow-tail" }, p.prompt ? h("span", { class: "chip pend" }, "要対応") : h("span", { class: "chip live" }, "live")));
-      }))] : []));
+      fresh.map((p) => h("div", { class: "item srow", onclick: () => (location.hash = `#/d/${p._dev}/p/${encodeURIComponent(p.key)}`) },
+        h("div", { class: "grow" },
+          h("div", { class: "title mono" }, p.cwd ? p.cwd.split("/").filter(Boolean).pop() : p.key),
+          p.prompt ? h("div", { class: "muted small" }, p.prompt) : null),
+        h("div", { class: "srow-tail" }, multi ? h("span", { class: "chip host" }, deviceCache.get(p._dev)?.name || p._dev) : null,
+          p.prompt ? h("span", { class: "chip pend" }, "要対応") : h("span", { class: "chip live" }, "live")))))] : []));
   };
   filter.addEventListener("input", render);
 
+  // One box per host for approvals, so each keeps its own redraw signature.
+  const apBoxes = new Map();
   const refreshNow = () => tick();
   const tick = async () => {
-    const d = dev(id);
-    const [sessions, aps, ptys, info] = await Promise.all([
-      d.get(showArchived ? "/api/sessions?archived=1" : "/api/sessions").then((x) => x || []), d.get("/api/approvals").then((x) => x || []),
-      d.get("/pty/").then((x) => x || []).catch(() => []), deviceInfo(id),
-    ]);
-    last = { sessions, ptys, info };
+    if (!one) { try { devs = await onlineDevices(); } catch {} }
+    const ids = one ? [one] : devs.filter((d) => d.online).map((d) => d.id);
+    const per = await Promise.all(ids.map(async (id) => {
+      const d = dev(id);
+      try {
+        const [sessions, aps, ptys, info] = await Promise.all([
+          d.get(showArchived ? "/api/sessions?archived=1" : "/api/sessions").then((x) => x || []), d.get("/api/approvals").then((x) => x || []),
+          d.get("/pty/").then((x) => x || []).catch(() => []), deviceInfo(id),
+        ]);
+        return { id, sessions, aps, ptys, info };
+      } catch (e) {
+        if (one) throw e;
+        return null; // a host that drops mid-poll leaves the list, not the page
+      }
+    }));
+    const sessions = [], ptys = [], infos = {};
+    const nameOf = (id) => deviceCache.get(id)?.name || id;
+    for (const r of per.filter(Boolean)) {
+      for (const s of r.sessions) sessions.push(Object.assign(s, { _dev: r.id, _devName: nameOf(r.id) }));
+      for (const p of r.ptys) ptys.push(Object.assign(p, { _dev: r.id }));
+      infos[r.id] = r.info;
+    }
+    last = { sessions, ptys, infos };
     // Model / context / cost per row: a transcript scan, so not every tick.
     if (Date.now() - briefsAt > 30000) {
       briefsAt = Date.now();
-      d.get(showArchived ? "/api/usage/sessions?archived=1" : "/api/usage/sessions")
-        .then((b) => { briefs = b || {}; render(); }).catch(() => {});
+      Promise.all(ids.map((id) => dev(id).get(showArchived ? "/api/usage/sessions?archived=1" : "/api/usage/sessions")
+        .then((b) => Object.entries(b || {}).map(([sid, v]) => [id + "\t" + sid, v])).catch(() => [])))
+        .then((xs) => { briefs = Object.fromEntries(xs.flat()); render(); });
     }
-    status.textContent = (info.hostname && info.hostname !== name ? info.hostname + " · " : "") + `ccdash ${info.version}` +
-      (info.attachEnabled ? "" : " · attach OFF（閲覧のみ）") + (info.approveEnabled ? "" : " · 承認 OFF");
-    renderApprovals(approvals, id, aps, sessions);
+    if (one && infos[one]) {
+      const info = infos[one];
+      status.textContent = (info.hostname && info.hostname !== name ? info.hostname + " · " : "") + `ccdash ${info.version}` +
+        (info.attachEnabled ? "" : " · attach OFF（閲覧のみ）") + (info.approveEnabled ? "" : " · 承認 OFF");
+    } else {
+      const off = devs.filter((d) => !d.online).map((d) => d.name);
+      status.textContent = off.length ? `オフライン: ${off.join(", ")}` : "";
+    }
+    for (const r of per.filter(Boolean)) {
+      if (!apBoxes.has(r.id)) { const el = h("div"); apBoxes.set(r.id, el); approvals.append(el); }
+      renderApprovals(apBoxes.get(r.id), r.id, r.aps, r.sessions, one ? "" : nameOf(r.id));
+    }
+    for (const [id, el] of apBoxes) if (!ids.includes(id)) { el.remove(); apBoxes.delete(id); }
     render();
   };
   every(3000, tick, bucket);
+}
+
+// lastHost: the host a new session starts on by default — the last one
+// used for a new session, else the first online one.
+function lastHost() {
+  let v = "";
+  try { v = localStorage.getItem("ccdash.newSessionHost") || ""; } catch {}
+  const ds = [...deviceCache.values()];
+  if (v && ds.some((d) => d.id === v && d.online)) return v;
+  return ds.find((d) => d.online)?.id || v;
 }
 
 // restartCollector re-execs the device's collector (POST /api/restart). The
@@ -1269,8 +1415,9 @@ function freshChip(s) {
   return null;
 }
 
-function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
+function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, hostName = "") {
   const chips = [];
+  if (hostName) chips.push(h("span", { class: "chip host", title: "このセッションが動くホスト" }, hostName));
   const fresh = freshChip(s);
   if (fresh) chips.push(fresh);
   // (watch-later rows sit under the あとで見る band, which says so)
@@ -1294,24 +1441,25 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
     toast(on ? "グリッドに追加しました" : "グリッドから外しました");
   });
   const check = sel && h("input", { type: "checkbox", class: "row-check", title: "選択してまとめて操作" });
+  const sk = id + "\t" + s.session_id;
   if (check) {
-    check.checked = sel.set.has(s.session_id);
+    check.checked = sel.set.has(sk);
     check.addEventListener("click", (e) => e.stopPropagation());
-    check.addEventListener("change", () => sel.toggle(s.session_id, check.checked));
+    check.addEventListener("change", () => sel.toggle(sk, check.checked));
   }
   const proj = s.project ? `;--proj:${projectColorOf(s.project, s.project_color)}` : "";
-  return h("div", { class: "item srow" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : "") + (s.status === "active" ? " working" : ""), "data-sid": s.session_id,
+  return h("div", { class: "item srow" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : "") + (s.status === "active" ? " working" : ""), "data-sid": s.session_id, "data-dev": id,
     style: `--sess:${sessionColorOf(s)}${proj}`, onclick: (e) => {
     if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
     if (e.currentTarget.dataset.longpressed) { delete e.currentTarget.dataset.longpressed; return; }
     // While some rows are selected (edit mode), a tap toggles the row.
-    if (sel && sel.set.size) { sel.toggle(s.session_id, !sel.set.has(s.session_id)); haptic(); return; }
+    if (sel && sel.set.size) { sel.toggle(sk, !sel.set.has(sk)); haptic(); return; }
     location.hash = `#/d/${id}/s/${encodeURIComponent(s.session_id)}`;
   }, onpointerdown: (e) => {
     // Long press selects (how a phone list enters edit mode).
     if (!sel || e.pointerType !== "touch") return;
     const row = e.currentTarget;
-    const t = setTimeout(() => { row.dataset.longpressed = "1"; haptic(15); sel.toggle(s.session_id, true); }, 480);
+    const t = setTimeout(() => { row.dataset.longpressed = "1"; haptic(15); sel.toggle(sk, true); }, 480);
     const cancel = () => { clearTimeout(t); row.removeEventListener("pointerup", cancel); row.removeEventListener("pointermove", moved); row.removeEventListener("pointercancel", cancel); };
     const x0 = e.clientX, y0 = e.clientY;
     const moved = (ev) => { if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) > 10) cancel(); };
@@ -1329,7 +1477,7 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null) {
     s.status === "active" ? beamEl() : null);
 }
 
-function renderApprovals(el, id, aps, sessions) {
+function renderApprovals(el, id, aps, sessions, hostName = "") {
   const byId = new Map(sessions.map((s) => [s.session_id, s]));
   // Polled: redraw only when the list changes, so a scrolled tool input or
   // a selection in it stays put.
@@ -1337,7 +1485,7 @@ function renderApprovals(el, id, aps, sessions) {
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   if (!aps?.length) { el.replaceChildren(); return; }
-  el.replaceChildren(h("h2", {}, `承認待ち (${aps.length})`), ...aps.map((a) => {
+  el.replaceChildren(h("h2", {}, `承認待ち (${aps.length})` + (hostName ? ` · ${hostName}` : "")), ...aps.map((a) => {
     const s = byId.get(a.session_id);
     let input = "";
     try { input = JSON.stringify(a.tool_input, null, 2); } catch {}
@@ -1359,13 +1507,28 @@ function renderApprovals(el, id, aps, sessions) {
 // first message, e.g. a skill / slash command like the TUI's skill picker
 // (S). A project skill only loads inside its project, so picking one moves
 // the directory there.
+//
+// The host comes first: a new session starts on whichever online host is
+// picked (default: the one given — a project's host — else the last one
+// used), then the directory is picked on that host.
 function newSession(id, preset = {}) {
   dialog(async (body, close) => {
-    const info = await deviceInfo(id).catch(() => null);
-    if (info && !info.attachEnabled) {
-      body.append(h("p", {}, "この端末は attach が OFF のため、新規セッションを起動できません。"), h("div", { class: "actions" }, h("button", { class: "btn" }, "閉じる")));
+    let ds = [];
+    try { ds = await onlineDevices(); } catch {}
+    id = id || lastHost();
+    if (!ds.some((d) => d.id === id && d.online)) id = ds.find((d) => d.online)?.id || id;
+    if (!id) {
+      body.append(h("p", {}, "接続中のホストがありません。"), h("div", { class: "actions" }, h("button", { class: "btn" }, "閉じる")));
       return;
     }
+    // A preset directory (a project's, a skill's) belongs to the host it
+    // came with; switching hosts drops it.
+    const presetHost = id;
+    let info = await deviceInfo(id).catch(() => null);
+    const hostSel = h("select", { class: "grow mode", "aria-label": "起動するホスト" },
+      ...ds.map((d) => h("option", { value: d.id, disabled: !d.online, selected: d.id === id }, d.name + (d.online ? (d.hostname && d.hostname !== d.name ? ` (${d.hostname})` : "") : " — オフライン"))));
+    const hostRow = h("label", { class: "row host-pick", hidden: ds.length < 2 }, h("span", { class: "muted small" }, "ホスト"), hostSel);
+    const attachOff = h("p", { class: "attach-off small", hidden: true }, "このホストは attach が OFF のため、新規セッションを起動できません。");
     const path = h("input", { class: "grow mono", value: preset.cwd || info?.newSessionDir || "" });
     const dirs = h("div", { class: "dirlist" });
     const prompt = h("textarea", { rows: 2, class: "grow", placeholder: "最初の指示（任意）。/ でスキル・コマンドを選べます" });
@@ -1408,24 +1571,47 @@ function newSession(id, preset = {}) {
       } catch (e) { toast(e.message); }
     };
     path.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); load(path.value); } });
+    const startBtn = h("button", { class: "btn primary" }, "ここで claude を起動");
+    const paintAttach = () => {
+      const off = !!info && !info.attachEnabled;
+      attachOff.hidden = !off;
+      startBtn.disabled = off;
+    };
+    hostSel.addEventListener("change", async () => {
+      id = hostSel.value;
+      skillList = null;
+      info = await deviceInfo(id).catch(() => null);
+      paintAttach();
+      path.value = id === presetHost && preset.cwd ? preset.cwd : info?.newSessionDir || "";
+      load(path.value);
+    });
+    const projectNote = h("p", { class: "muted small", hidden: !preset.project }, `プロジェクト「${preset.project || ""}」に入ります`);
+    hostSel.addEventListener("change", () => { projectNote.hidden = !preset.project || id !== presetHost; });
     const start = async (e) => {
       e.preventDefault();
       let first = prompt.value.trim();
       if (first.startsWith("-")) first = " " + first;
       try {
-        const r = await dev(id).post("/pty/start", { cwd: path.value, cols: 120, rows: 36, prompt: first, permissionMode: mode.value, project: preset.project || "" });
+        // A project belongs to its host: on another host the session
+        // starts outside it.
+        const project = id === presetHost ? preset.project || "" : "";
+        const r = await dev(id).post("/pty/start", { cwd: path.value, cols: 120, rows: 36, prompt: first, permissionMode: mode.value, project });
+        try { localStorage.setItem("ccdash.newSessionHost", id); } catch {}
         close();
         location.hash = `#/d/${id}/p/${encodeURIComponent(r.ptyKey)}`;
       } catch (err) { toast(err.message); }
     };
+    startBtn.addEventListener("click", start);
     body.append(h("h1", {}, "新規セッション"),
-      preset.project ? h("p", { class: "muted small" }, `プロジェクト「${preset.project}」に入ります`) : null,
+      hostRow, attachOff,
+      projectNote,
       h("div", { class: "row" }, path, h("button", { type: "button", class: "btn", onclick: () => load(path.value) }, "移動")),
       dirs,
       h("div", { class: "col" }, prompt, skillBox, mode),
       h("div", { class: "actions" },
         h("button", { class: "btn", value: "cancel" }, "キャンセル"),
-        h("button", { class: "btn primary", onclick: start }, "ここで claude を起動")));
+        startBtn));
+    paintAttach();
     load(path.value);
     if (preset.prompt) showSkills();
   });
@@ -1554,7 +1740,7 @@ async function termRoute(id, { sid, key }) {
   const ptys = (await dev(id).get("/pty/").catch(() => [])) || [];
   const k = key || sid;
   const chatHref = sid ? `#/d/${id}/s/${encodeURIComponent(sid)}` : `#/d/${id}/p/${encodeURIComponent(key)}`;
-  crumbs({ text: "端末", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: "ターミナル" });
+  crumbs({ text: "ホーム", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: "ターミナル" });
   if (!ptys.some((p) => p.key === k && p.alive)) {
     toast("このセッションは ccdash 上で動いていません");
     location.replace(chatHref);
@@ -2830,7 +3016,7 @@ async function diffPage(id, sid) {
   const name = await deviceName(id);
   const d = dev(id);
   const chatHref = `#/d/${id}/s/${encodeURIComponent(sid)}`;
-  crumbs({ text: "端末", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: "差分", href: chatHref });
+  crumbs({ text: "ホーム", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: "差分", href: chatHref });
   let notes = loadNotes(id, sid);
   const info = h("div", { class: "muted small" }, "読み込み中…");
   const filesEl = h("div", { class: "diff-files" });
@@ -3447,7 +3633,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     titleEl.classList.toggle("titling", session?.title_status === "running");
     titleEl.style.setProperty("--sess", session ? sessionColorOf(session) : sessionColor(sid));
     if (!compact) {
-      crumbs({ text: "端末", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: title });
+      crumbs({ text: "ホーム", href: "#/" }, { text: name, href: `#/d/${id}` }, { text: title });
       // Full screen (the phone app's usual view): the light runs round the
       // header while Claude is mid-turn, like a tile's frame.
       setBeam(bar, session?.status === "active");
@@ -4198,7 +4384,7 @@ function installTaskPane() {
 
 // tasksPage is the full-page list (phones: the タスク tab).
 function tasksPage(only) {
-  crumbs({ text: "端末", href: "#/" }, { text: "タスク" });
+  crumbs({ text: "ホーム", href: "#/" }, { text: "タスク" });
   const list = h("div", { class: "task-body" });
   view.append(h("div", { class: "page" }, h("h1", {}, "タスク"), list));
   taskList(list, { only: only || "" });

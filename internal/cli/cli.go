@@ -654,7 +654,9 @@ It never stops claude or answers approvals; --read-only keeps only the viewing t
 (append -r to read the remote collector configured with 'ccdash remote set').
 When this machine is joined to a hub ('ccdash hub join'), sessions carry a "url" that
 opens their chat in the hub portal — or, failing that, in a running 'ccdash web';
---hub-url sets or overrides that origin.`,
+--hub-url sets or overrides that origin. Once the operator turns on this machine's
+"other machines" access in the hub portal, the tools also reach the other joined
+machines (host argument, list_hosts) through the hub.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// stdout carries the protocol; keep logs off it.
 			log.SetOutput(os.Stderr)
@@ -663,15 +665,26 @@ opens their chat in the hub portal — or, failing that, in a running 'ccdash we
 				return err
 			}
 			defer closeFn()
-			if hubURL == "" {
-				if hc, err := hubcfg.Load(); err == nil {
+			var fleet *mcpserver.Fleet
+			if hc, err := hubcfg.Load(); err == nil {
+				if hubURL == "" {
 					hubURL = hc.URL
+				}
+				// Other hosts through the hub (peer access, turned on per
+				// device in the portal). Not with -r: "this machine" would
+				// be the remote collector, which the hub token isn't.
+				if !rf.wantsRemote() {
+					fleet = mcpserver.NewFleet(hc.URL, hc.Token)
 				}
 			}
 			if hubURL == "" {
 				hubURL = localPortalURL() // a machine on 'ccdash web' only
 			}
-			return mcpserver.New(st, version, readOnly).WithHubURL(hubURL).Serve(cmd.Context(), os.Stdin, os.Stdout)
+			srv := mcpserver.New(st, version, readOnly).WithHubURL(hubURL)
+			if fleet != nil {
+				srv = srv.WithFleet(fleet)
+			}
+			return srv.Serve(cmd.Context(), os.Stdin, os.Stdout)
 		},
 	}
 	c.Flags().BoolVar(&readOnly, "read-only", false, "only offer the viewing tools")

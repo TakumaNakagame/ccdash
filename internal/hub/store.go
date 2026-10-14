@@ -25,7 +25,10 @@ type Device struct {
 	LastSeen  time.Time `json:"last_seen,omitzero"`
 	Hostname  string    `json:"hostname,omitempty"`
 	Version   string    `json:"version,omitempty"`
-	tokenHash string
+	// PeerAccess lets this device reach the others with its token (peer.go):
+	// "" off, "read", "control".
+	PeerAccess string `json:"peer_access,omitempty"`
+	tokenHash  string
 }
 
 // store is the hub's own SQLite file — separate from any collector DB. It
@@ -67,6 +70,14 @@ func openStore(dir string) (*store, error) {
 	}
 	for _, q := range stmts {
 		if _, err := db.Exec(q); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("hub migrate: %w", err)
+		}
+	}
+	for _, q := range []string{
+		`ALTER TABLE devices ADD COLUMN peer_access TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.Exec(q); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			_ = db.Close()
 			return nil, fmt.Errorf("hub migrate: %w", err)
 		}
@@ -168,12 +179,12 @@ func (s *store) renameDevice(ctx context.Context, id, name string) error {
 	return nil
 }
 
-const deviceCols = `id, name, token_hash, created_at, last_seen, hostname, version`
+const deviceCols = `id, name, token_hash, created_at, last_seen, hostname, version, peer_access`
 
 func scanDevice(sc interface{ Scan(...any) error }) (Device, error) {
 	var d Device
 	var created, seen string
-	if err := sc.Scan(&d.ID, &d.Name, &d.tokenHash, &created, &seen, &d.Hostname, &d.Version); err != nil {
+	if err := sc.Scan(&d.ID, &d.Name, &d.tokenHash, &created, &seen, &d.Hostname, &d.Version, &d.PeerAccess); err != nil {
 		return Device{}, err
 	}
 	d.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
@@ -209,4 +220,15 @@ func (s *store) touchDevice(ctx context.Context, id, hostname, version string) e
 		`UPDATE devices SET last_seen = ?, hostname = ?, version = ? WHERE id = ?`,
 		time.Now().UTC().Format(time.RFC3339Nano), hostname, version, id)
 	return err
+}
+
+func (s *store) setPeerAccess(ctx context.Context, id, access string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE devices SET peer_access = ? WHERE id = ?`, access, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
