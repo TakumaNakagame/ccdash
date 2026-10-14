@@ -52,6 +52,7 @@ func envOr(flagVal, env string) string {
 
 func hubServeCmd() *cobra.Command {
 	var listen, dataDir, publicURL, issuer, clientID, secretFile, readTokenFile string
+	var stateSecret, clusterPeers, clusterListen, clusterAdvertise string
 	var emails []string
 	var noAuth, tsAuth bool
 	c := &cobra.Command{
@@ -135,12 +136,23 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 				}
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning: --no-auth — anyone who can reach", listen, "can drive every joined machine")
 			}
+			cl := hub.ClusterConfig{Peers: clusterPeers, Listen: clusterListen, Advertise: clusterAdvertise}
+			if cl.Peers != "" && cl.Advertise == "" {
+				ip := os.Getenv("POD_IP")
+				_, port, err := net.SplitHostPort(cl.Listen)
+				if ip == "" || err != nil {
+					return errors.New("--cluster-peers needs --cluster-advertise (or $POD_IP and a --cluster-listen with a port)")
+				}
+				cl.Advertise = net.JoinHostPort(ip, port)
+			}
 			ctx, cancel := signalContext(cmd.Context())
 			defer cancel()
 			h, err := hub.New(ctx, hub.Config{
-				Listen:    listen,
-				DataDir:   dataDir,
-				PublicURL: publicURL,
+				StateSecret: envOr(stateSecret, "CCDASH_HUB_STATE_SECRET"),
+				Cluster:     cl,
+				Listen:      listen,
+				DataDir:     dataDir,
+				PublicURL:   publicURL,
 				Auth: hub.AuthConfig{
 					Issuer:         envOr(issuer, "CCDASH_HUB_OIDC_ISSUER"),
 					ClientID:       envOr(clientID, "CCDASH_HUB_OIDC_CLIENT_ID"),
@@ -167,6 +179,10 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 	c.Flags().StringSliceVar(&emails, "allowed-email", nil, "email allowed to log in (repeatable)")
 	c.Flags().BoolVar(&tsAuth, "tailscale-auth", false, "log users in by the Tailscale-User-Login header of `tailscale serve` (loopback --listen; logins must be in --allowed-email)")
 	c.Flags().BoolVar(&noAuth, "no-auth", false, "skip login (local development only; loopback --listen required)")
+	c.Flags().StringVar(&stateSecret, "state-secret", "", "keep the state in this Kubernetes Secret (in-cluster service account) instead of hub.sqlite; an existing <data-dir>/hub.sqlite is imported once (else $CCDASH_HUB_STATE_SECRET)")
+	c.Flags().StringVar(&clusterPeers, "cluster-peers", "", "run as one of several replicas: DNS name of a headless Service listing them (or host:port,host:port); needs --state-secret")
+	c.Flags().StringVar(&clusterListen, "cluster-listen", ":8081", "replica-to-replica port (keep it off the ingress)")
+	c.Flags().StringVar(&clusterAdvertise, "cluster-advertise", "", "this replica's host:port as the others reach it (default $POD_IP and the --cluster-listen port)")
 	c.Flags().StringVar(&readTokenFile, "read-token-file", "", "file of read-only bearer tokens for machine clients, one per line (adds to $CCDASH_HUB_READ_TOKENS)")
 	return c
 }

@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -53,6 +54,13 @@ type Config struct {
 	// ReadTokens are bearer tokens for machine clients: GET-only access to
 	// a fixed set of read routes (see readtoken.go). Empty disables them.
 	ReadTokens []string
+	// StateSecret keeps the state in this Kubernetes Secret (k8sstore.go)
+	// instead of DataDir/hub.sqlite, which is then only imported once
+	// when the Secret doesn't exist yet. Required for several replicas.
+	StateSecret string
+	// Cluster lets replicas forward to each other (cluster.go).
+	Cluster ClusterConfig
+	k8s     *k8sAPI // tests: a fake API server instead of the in-cluster one
 	// Local makes this the local portal (`ccdash web`, local.go): one
 	// fixed device linked in-process, token-file login, loopback only.
 	Local *LocalConfig
@@ -61,8 +69,9 @@ type Config struct {
 // Hub is a running portal.
 type Hub struct {
 	cfg  Config
-	st   *store
+	st   stateStore
 	auth *authn
+	cl   *cluster // nil: a lone hub
 
 	assets string // hash of the embedded web files; the SPA reloads when it changes
 
@@ -71,19 +80,32 @@ type Hub struct {
 	pushClient webpush.HTTPClient // nil = a plain http.Client (tests capture pushes)
 
 	mu        sync.Mutex
-	conns     map[string]*deviceConn    // device id → live tunnel
+	conns     map[string]*deviceConn    // device id → live tunnel held by this replica
 	refused   map[string]bool           // tailscale logins already logged as refused
 	snapshots map[string]deviceSnapshot // device id → latest session list (board)
 }
 
 // deviceConn is one connected device's tunnel plus an HTTP client that
-// dials through it.
+// dials through it — or, with peer set, the same through the replica that
+// holds the tunnel (cluster.go).
 type deviceConn struct {
-	sess      *yamux.Session
+	sess      *yamux.Session // nil for a peer's tunnel
+	open      func() (net.Conn, error)
+	peer      string // the replica holding the tunnel; "" = this one
+	tokenHash string // the token the tunnel came in with (revoked → dropped)
 	since     time.Time
 	remote    string
 	transport *http.Transport
 	proxy     *httputil.ReverseProxy
+}
+
+func newDeviceConn(open func() (net.Conn, error), since time.Time, remote string) *deviceConn {
+	tr := &http.Transport{
+		DialContext:         func(context.Context, string, string) (net.Conn, error) { return open() },
+		MaxIdleConnsPerHost: 8,
+		IdleConnTimeout:     60 * time.Second,
+	}
+	return &deviceConn{open: open, since: since, remote: remote, transport: tr, proxy: newDeviceProxy(tr)}
 }
 
 // New opens the hub's store and prepares the handlers.
@@ -116,7 +138,7 @@ func New(ctx context.Context, cfg Config) (*Hub, error) {
 		return nil, err
 	}
 	cfg.ReadTokens = nil
-	st, err := openStore(cfg.DataDir)
+	st, err := openState(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +157,7 @@ func New(ctx context.Context, cfg Config) (*Hub, error) {
 			return nil, err
 		}
 	}
-	return &Hub{
+	h := &Hub{
 		assets: assetsHash(),
 		cfg:    cfg,
 		st:     st,
@@ -143,7 +165,68 @@ func New(ctx context.Context, cfg Config) (*Hub, error) {
 		conns:  map[string]*deviceConn{},
 
 		readTokens: readTokens,
-	}, nil
+	}
+	if cfg.Cluster.Peers != "" && cfg.Local == nil {
+		ck, err := st.secret(ctx, clusterKeyName, func() string { return randHex(32) })
+		if err != nil {
+			_ = st.Close()
+			return nil, err
+		}
+		h.cl = newCluster(h, cfg.Cluster, ck)
+	}
+	if ks, ok := st.(*k8sStore); ok {
+		ks.mu.Lock()
+		ks.onChange = h.revalidateConns
+		ks.mu.Unlock()
+	}
+	return h, nil
+}
+
+// openState opens the configured state backend.
+func openState(ctx context.Context, cfg Config) (stateStore, error) {
+	if cfg.StateSecret == "" || cfg.Local != nil {
+		if cfg.Cluster.Peers != "" && cfg.Local == nil {
+			return nil, errors.New("several replicas need a shared state: add --state-secret")
+		}
+		return openStore(cfg.DataDir)
+	}
+	api := cfg.k8s
+	if api == nil {
+		var err error
+		if api, err = inClusterAPI(); err != nil {
+			return nil, err
+		}
+	}
+	imp := ""
+	if cfg.DataDir != "" {
+		imp = filepath.Join(cfg.DataDir, "hub.sqlite")
+	}
+	return openK8sStore(ctx, api, cfg.StateSecret, imp)
+}
+
+// revalidateConns drops tunnels whose device another replica deleted or
+// whose token it rotated (the state changed under this one).
+func (h *Hub) revalidateConns() {
+	ds, err := h.st.listDevices(context.Background())
+	if err != nil {
+		return
+	}
+	valid := map[string]string{}
+	for _, d := range ds {
+		valid[d.ID] = d.tokenHash
+	}
+	var stale []string
+	h.mu.Lock()
+	for id, dc := range h.conns {
+		if hash, ok := valid[id]; !ok || (dc.tokenHash != "" && hash != dc.tokenHash) {
+			stale = append(stale, id)
+		}
+	}
+	h.mu.Unlock()
+	for _, id := range stale {
+		log.Printf("hub: device %s was deleted or its token rotated: dropping its tunnel", id)
+		h.dropConn(id)
+	}
 }
 
 // Close releases the store.
@@ -172,6 +255,13 @@ func (h *Hub) Serve(ctx context.Context, ln net.Listener) error {
 		}
 		h.mu.Unlock()
 	}()
+	if h.cl != nil {
+		go func() {
+			if err := h.cl.serve(ctx); err != nil {
+				log.Printf("hub: cluster port: %v", err)
+			}
+		}()
+	}
 	if h.cfg.Local == nil {
 		log.Printf("ccdash hub %s listening on %s (public url %s)", buildinfo.Version, ln.Addr(), h.cfg.PublicURL)
 	}
@@ -457,21 +547,20 @@ func (h *Hub) handleListDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := make([]deviceView, 0, len(ds))
-	h.mu.Lock()
+	snaps := h.allSnapshots()
 	for _, d := range ds {
 		v := deviceView{Device: d}
-		if dc := h.conns[d.ID]; dc != nil {
+		pc, ok := h.connInfo(d.ID)
+		if ok {
 			v.Online = true
-			since := dc.since
-			v.Since = &since
-			v.Remote = dc.remote
-			if rs := h.snapshots[d.ID].Restart; rs != nil && (rs.Pending || rs.Last != "") {
+			v.Since = &pc.Since
+			v.Remote = pc.Remote
+			if rs := snaps[d.ID].Restart; rs != nil && (rs.Pending || rs.Last != "") {
 				v.Restart = rs
 			}
 		}
 		out = append(out, v)
 	}
-	h.mu.Unlock()
 	writeJSON(w, out)
 }
 
@@ -517,6 +606,7 @@ func (h *Hub) handleRotateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.dropConn(id)
+	h.dropEverywhere(id)
 	email, _ := h.auth.user(r)
 	log.Printf("hub: %s rotated the token of device %s", email, id)
 	writeJSON(w, map[string]any{"token": tok, "join": h.joinCommand()})
@@ -553,6 +643,7 @@ func (h *Hub) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.dropConn(id)
+	h.dropEverywhere(id)
 	email, _ := h.auth.user(r)
 	log.Printf("hub: %s deleted device %s", email, id)
 	w.WriteHeader(http.StatusNoContent)
@@ -568,7 +659,27 @@ func (h *Hub) dropConn(id string) {
 	}
 }
 
+// dropEverywhere makes the other replicas re-read the state and drop
+// their tunnel of id (a revoked token must not stay connected there).
+func (h *Hub) dropEverywhere(id string) {
+	if h.cl != nil {
+		h.cl.broadcastDrop(id, time.Time{}, true)
+	}
+}
+
+// conn is the link to device id: this replica's tunnel, else the replica
+// holding it, else nil (offline).
 func (h *Hub) conn(id string) *deviceConn {
+	if dc := h.localConn(id); dc != nil {
+		return dc
+	}
+	if h.cl != nil {
+		return h.cl.conn(id)
+	}
+	return nil
+}
+
+func (h *Hub) localConn(id string) *deviceConn {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.conns[id]
@@ -602,13 +713,9 @@ func (h *Hub) handleAgent(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) serveDevice(d Device, sess *yamux.Session, remote, hostname, version string) {
 	_ = h.st.touchDevice(context.Background(), d.ID, hostname, version)
 
-	tr := &http.Transport{
-		DialContext:         func(context.Context, string, string) (net.Conn, error) { return sess.Open() },
-		MaxIdleConnsPerHost: 8,
-		IdleConnTimeout:     60 * time.Second,
-	}
-	dc := &deviceConn{sess: sess, since: time.Now().UTC(), remote: remote, transport: tr}
-	dc.proxy = newDeviceProxy(tr)
+	dc := newDeviceConn(sess.Open, time.Now().UTC(), remote)
+	dc.sess, dc.tokenHash = sess, d.tokenHash
+	tr := dc.transport
 
 	h.mu.Lock()
 	old := h.conns[d.ID]
@@ -618,6 +725,11 @@ func (h *Hub) serveDevice(d Device, sess *yamux.Session, remote, hostname, versi
 		_ = old.sess.Close()
 	}
 	log.Printf("hub: device %q connected from %s (%s, ccdash %s)", d.Name, dc.remote, hostname, version)
+	if h.cl != nil {
+		// A tunnel another replica still holds for this device is dead
+		// (the device keeps one): close it there so only this one watches.
+		go h.cl.broadcastDrop(d.ID, dc.since, false)
+	}
 	watchCtx, stopWatch := context.WithCancel(context.Background())
 	defer stopWatch()
 	go h.watchDevice(watchCtx, d, dc)
@@ -724,7 +836,7 @@ func (h *Hub) handlePTYSocket(w http.ResponseWriter, r *http.Request) {
 	// Open the device side first so failures (404 no such PTY, 409 another
 	// client attached, 403 attach off) come back as plain HTTP errors the
 	// page can show, instead of a WebSocket that closes immediately.
-	dev, err := dc.sess.Open()
+	dev, err := dc.open()
 	if err != nil {
 		http.Error(w, "device unreachable", http.StatusBadGateway)
 		return
