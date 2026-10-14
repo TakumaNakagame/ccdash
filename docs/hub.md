@@ -133,6 +133,27 @@ route set (`internal/hub/peer.go`) — never approvals, typing into a PTY,
 device management or settings — and the target device's own allowlist
 still applies. See `docs/decisions/0007-multihost.md`.
 
+## Several replicas (Kubernetes)
+
+On Kubernetes the hub can run as two or more replicas so a node drain or a
+rollout doesn't take the portal down (docs/decisions/0008-hub-ha.md):
+
+```
+ccdash hub serve --listen :8080 --public-url https://ccdash.example.net \
+  --state-secret ccdash-hub-state \
+  --cluster-peers ccdash-hub-peers.<namespace>.svc.cluster.local --cluster-listen :8081
+```
+
+- `--state-secret` keeps the state in that Secret instead of hub.sqlite.
+  The service account needs `create` on Secrets in the namespace and
+  `get` / `update` on that one. If the Secret doesn't exist and
+  `<data-dir>/hub.sqlite` does, the file is imported once, so devices,
+  logins and push subscriptions carry over.
+- `--cluster-peers` names a headless Service selecting the hub Pods. Each
+  device keeps one tunnel to whichever replica it reached, and the others
+  forward to it on the cluster port (keep that port off the ingress).
+  `$POD_IP` (downward API) tells a replica which address is its own.
+
 ## Local portal (`ccdash web`)
 
 The same portal for **this machine only**, with no hub server: one

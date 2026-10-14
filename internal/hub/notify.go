@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -531,6 +532,54 @@ func restartNotice(d Device, rs *model.RestartState, st *watchState) (notificati
 	return n, true
 }
 
+// allSnapshots is every device's latest snapshot: this replica's watchers
+// plus the other replicas' (cluster.go).
+func (h *Hub) allSnapshots() map[string]deviceSnapshot {
+	out := map[string]deviceSnapshot{}
+	h.mu.Lock()
+	for id, snap := range h.snapshots {
+		out[id] = snap
+	}
+	h.mu.Unlock()
+	if h.cl != nil {
+		for _, snap := range h.cl.snapshots() {
+			if cur, ok := out[snap.Device.ID]; !ok || snap.At.After(cur.At) {
+				out[snap.Device.ID] = snap
+			}
+		}
+	}
+	return out
+}
+
+// connInfo reports whether device id is connected to any replica.
+func (h *Hub) connInfo(id string) (peerConn, bool) {
+	if dc := h.localConn(id); dc != nil {
+		return peerConn{ID: id, Since: dc.since, Remote: dc.remote}, true
+	}
+	if h.cl != nil {
+		return h.cl.info(id)
+	}
+	return peerConn{}, false
+}
+
+// onlineIDs lists the devices connected to any replica.
+func (h *Hub) onlineIDs() []string {
+	var ids []string
+	h.mu.Lock()
+	for id := range h.conns {
+		ids = append(ids, id)
+	}
+	h.mu.Unlock()
+	if h.cl != nil {
+		for _, id := range h.cl.onlineIDs() {
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
 func (h *Hub) dropSnapshot(id string) {
 	h.mu.Lock()
 	delete(h.snapshots, id)
@@ -567,19 +616,15 @@ func (h *Hub) handleLocate(w http.ResponseWriter, r *http.Request) {
 
 // locateSession names the device that reports sid, or "".
 func (h *Hub) locateSession(sid string) string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for id, snap := range h.snapshots {
+	for id, snap := range h.allSnapshots() {
 		for _, s := range snap.Sessions {
 			if s.SessionID == sid {
 				return id
 			}
 		}
 	}
-	if len(h.conns) == 1 {
-		for id := range h.conns {
-			return id
-		}
+	if ids := h.onlineIDs(); len(ids) == 1 {
+		return ids[0]
 	}
 	return ""
 }
@@ -609,10 +654,8 @@ func boardColumn(s model.Session) string {
 // unread finishes, across every connected device (the portal's
 // updateBadge counts the same from /api/board).
 func (h *Hub) badgeCount() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	n := 0
-	for _, snap := range h.snapshots {
+	for _, snap := range h.allSnapshots() {
 		for _, s := range snap.Sessions {
 			if k := boardColumn(s); k == "needs_you" || k == "done" {
 				n++
@@ -627,8 +670,7 @@ func (h *Hub) badgeCount() int {
 // finished unread — without a round trip to every device.
 func (h *Hub) handleBoard(w http.ResponseWriter, r *http.Request) {
 	board := map[string][]boardCard{"needs_you": {}, "working": {}, "done": {}}
-	h.mu.Lock()
-	for _, snap := range h.snapshots {
+	for _, snap := range h.allSnapshots() {
 		for _, s := range snap.Sessions {
 			c := boardCard{DeviceID: snap.Device.ID, DeviceName: snap.Device.Name, Session: s}
 			if k := boardColumn(s); k != "" {
@@ -636,7 +678,6 @@ func (h *Hub) handleBoard(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	h.mu.Unlock()
 	for _, k := range []string{"needs_you", "working", "done"} {
 		cs := board[k]
 		sort.Slice(cs, func(i, j int) bool { return cs[i].Session.LastSeen.After(cs[j].Session.LastSeen) })
@@ -652,15 +693,13 @@ func (h *Hub) handleBoard(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) handleActive(w http.ResponseWriter, r *http.Request) {
 	all := r.URL.Query().Get("all") == "1"
 	out := []boardCard{}
-	h.mu.Lock()
-	for _, snap := range h.snapshots {
+	for _, snap := range h.allSnapshots() {
 		for _, s := range snap.Sessions {
 			if all || s.Status == model.StatusActive || s.Status == model.StatusIdle || s.Attention == model.AttentionNeedsYou {
 				out = append(out, boardCard{DeviceID: snap.Device.ID, DeviceName: snap.Device.Name, Session: s})
 			}
 		}
 	}
-	h.mu.Unlock()
 	rank := func(s model.Session) int {
 		switch {
 		case s.Attention == model.AttentionNeedsYou:

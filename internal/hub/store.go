@@ -41,7 +41,10 @@ func openStore(dir string) (*store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, "hub.sqlite")
+	return openStoreFile(filepath.Join(dir, "hub.sqlite"))
+}
+
+func openStoreFile(path string) (*store, error) {
 	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
