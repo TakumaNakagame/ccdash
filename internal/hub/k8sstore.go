@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"slices"
 	"strings"
 	"sync"
@@ -68,6 +69,7 @@ type docDevice struct {
 	Hostname   string    `json:"hostname,omitempty"`
 	Version    string    `json:"version,omitempty"`
 	PeerAccess string    `json:"peer_access,omitempty"`
+	Letter     string    `json:"letter,omitempty"`
 }
 
 type docSub struct {
@@ -81,7 +83,7 @@ type docSub struct {
 
 func (d docDevice) device() Device {
 	return Device{ID: d.ID, Name: d.Name, CreatedAt: d.CreatedAt, LastSeen: d.LastSeen,
-		Hostname: d.Hostname, Version: d.Version, PeerAccess: d.PeerAccess, tokenHash: d.TokenHash}
+		Hostname: d.Hostname, Version: d.Version, PeerAccess: d.PeerAccess, Letter: d.Letter, tokenHash: d.TokenHash}
 }
 
 func (s docSub) sub() pushSub {
@@ -140,8 +142,56 @@ func openK8sStore(ctx context.Context, api *k8sAPI, name, importFrom string) (*k
 			log.Printf("hub: imported %s into secret %s (%d devices, %d push subscriptions)", importFrom, name, len(doc.Devices), len(doc.Subs))
 		}
 	}
+	// Devices from before letters get one, in registration order.
+	err := s.mutate(ctx, func(d *stateDoc) error {
+		if !d.backfillLetters() {
+			return errNoChange
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("state secret %s/%s: letters: %w", api.namespace, name, err)
+	}
 	go s.loop()
 	return s, nil
+}
+
+func (d *stateDoc) usedLetters() map[string]bool {
+	used := map[string]bool{}
+	for _, x := range d.Devices {
+		if x.Letter != "" {
+			used[x.Letter] = true
+		}
+	}
+	return used
+}
+
+// backfillLetters gives every device without a letter one (registration
+// order); false when there was nothing to do.
+func (d *stateDoc) backfillLetters() bool {
+	idx := []int{}
+	for i, x := range d.Devices {
+		if x.Letter == "" && x.ID != LocalDeviceID {
+			idx = append(idx, i)
+		}
+	}
+	if len(idx) == 0 {
+		return false
+	}
+	sort.SliceStable(idx, func(a, b int) bool {
+		da, db := d.Devices[idx[a]], d.Devices[idx[b]]
+		if !da.CreatedAt.Equal(db.CreatedAt) {
+			return da.CreatedAt.Before(db.CreatedAt)
+		}
+		return da.ID < db.ID
+	})
+	used := d.usedLetters()
+	for _, i := range idx {
+		l := nextLetter(used)
+		d.Devices[i].Letter = l
+		used[l] = true
+	}
+	return true
 }
 
 func (s *k8sStore) loop() {
@@ -267,6 +317,7 @@ func (s *k8sStore) createDevice(ctx context.Context, name string) (Device, strin
 		if d.nameTaken(name, "") {
 			return ErrDuplicateName
 		}
+		nd.Letter = nextLetter(d.usedLetters())
 		d.Devices = append(d.Devices, nd)
 		return nil
 	})
@@ -384,6 +435,22 @@ func (s *k8sStore) setPeerAccess(ctx context.Context, id, access string) error {
 	})
 }
 
+func (s *k8sStore) setLetter(ctx context.Context, id, letter string) error {
+	return s.mutate(ctx, func(d *stateDoc) error {
+		x := d.device(id)
+		if x == nil {
+			return sql.ErrNoRows
+		}
+		for _, o := range d.Devices {
+			if o.ID != id && o.Letter == letter {
+				return ErrDuplicateLetter
+			}
+		}
+		x.Letter = letter
+		return nil
+	})
+}
+
 func (s *k8sStore) ensureLocalDevice(ctx context.Context, name string) (Device, error) {
 	if !validName(name) {
 		name = "this machine"
@@ -472,7 +539,7 @@ func readSQLiteState(ctx context.Context, path string) (stateDoc, error) {
 	}
 	for _, d := range ds {
 		doc.Devices = append(doc.Devices, docDevice{ID: d.ID, Name: d.Name, TokenHash: d.tokenHash, CreatedAt: d.CreatedAt,
-			LastSeen: d.LastSeen, Hostname: d.Hostname, Version: d.Version, PeerAccess: d.PeerAccess})
+			LastSeen: d.LastSeen, Hostname: d.Hostname, Version: d.Version, PeerAccess: d.PeerAccess, Letter: d.Letter})
 	}
 	rows, err := st.db.QueryContext(ctx, `SELECT k, v FROM kv`)
 	if err != nil {

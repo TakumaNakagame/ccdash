@@ -308,7 +308,7 @@ func (s *store) backfillLetters(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM devices WHERE letter = '' ORDER BY created_at, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM devices WHERE letter = '' AND id != ? ORDER BY created_at, id`, LocalDeviceID)
 	if err != nil {
 		return err
 	}

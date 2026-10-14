@@ -90,3 +90,35 @@ func TestAgentDialCarriesLetter(t *testing.T) {
 		t.Errorf("headers %v", rh)
 	}
 }
+
+func TestK8sStoreLetters(t *testing.T) {
+	ctx := context.Background()
+	_, api := newFakeAPI(t)
+	s, err := openK8sStore(ctx, api, "state", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a, _, _ := s.createDevice(ctx, "pc")
+	b, _, _ := s.createDevice(ctx, "lxc")
+	if a.Letter != "A" || b.Letter != "B" {
+		t.Fatalf("letters %q %q", a.Letter, b.Letter)
+	}
+	if err := s.setLetter(ctx, b.ID, "A"); err != ErrDuplicateLetter {
+		t.Fatalf("duplicate: %v", err)
+	}
+	if err := s.setLetter(ctx, b.ID, "L"); err != nil {
+		t.Fatal(err)
+	}
+	// A secret from before letters is backfilled in registration order.
+	doc := stateDoc{Devices: []docDevice{
+		{ID: "x", Name: "late", CreatedAt: time.Unix(200, 0)},
+		{ID: "y", Name: "early", CreatedAt: time.Unix(100, 0)},
+	}}
+	if !doc.backfillLetters() || doc.Devices[1].Letter != "A" || doc.Devices[0].Letter != "B" {
+		t.Fatalf("backfill %+v", doc.Devices)
+	}
+	if doc.backfillLetters() {
+		t.Fatal("second backfill changed something")
+	}
+}
