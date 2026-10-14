@@ -1801,8 +1801,19 @@ function linkify(el) {
 function md(text) {
   const out = [];
   const lines = text.split("\n");
-  let i = 0, list = null, callout = false;
-  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  let i = 0, callout = false;
+  // Open lists, outermost first: {tag, indent}. A deeper-indented item
+  // opens a list inside the open <li>, so "  - x" nests under "- y".
+  const lists = [];
+  const closeList = () => { while (lists.length) out.push(`</li></${lists.pop().tag}>`); };
+  const listItem = (tag, indent, body) => {
+    while (lists.length && lists.at(-1).indent > indent) out.push(`</li></${lists.pop().tag}>`);
+    const top = lists.at(-1);
+    if (top && top.indent === indent && top.tag !== tag) out.push(`</li></${lists.pop().tag}>`);
+    if (lists.at(-1)?.indent === indent) out.push("</li>");
+    else { out.push(`<${tag}>`); lists.push({ tag, indent }); }
+    out.push(`<li>${inlineMd(body)}`);
+  };
   while (i < lines.length) {
     const line = lines[i];
     const fence = line.match(/^\s*```(\S*)/);
@@ -1831,12 +1842,10 @@ function md(text) {
     if ((m = e.match(/^(#{1,4})\s+(.*)$/))) {
       closeList();
       out.push(`<div class="md-h">${inlineMd(m[2])}</div>`);
-    } else if ((m = e.match(/^\s*[-*]\s+(.*)$/))) {
-      if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; }
-      out.push(`<li>${inlineMd(m[1])}</li>`);
-    } else if ((m = e.match(/^\s*\d+[.)]\s+(.*)$/))) {
-      if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; }
-      out.push(`<li>${inlineMd(m[1])}</li>`);
+    } else if ((m = e.match(/^(\s*)[-*]\s+(.*)$/))) {
+      listItem("ul", m[1].replace(/\t/g, "    ").length, m[2]);
+    } else if ((m = e.match(/^(\s*)\d+[.)]\s+(.*)$/))) {
+      listItem("ol", m[1].replace(/\t/g, "    ").length, m[2]);
     } else if (/^\s*`?★\s*Insight\s*─+`?\s*$/.test(line)) {
       // Claude's explanatory-style "★ Insight ───" … "───" block: a callout.
       closeList();
