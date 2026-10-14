@@ -59,6 +59,7 @@ type hubDevice struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
 	Hostname   string    `json:"hostname,omitempty"`
+	Version    string    `json:"version,omitempty"`
 	Online     bool      `json:"online"`
 	LastSeen   time.Time `json:"last_seen,omitzero"`
 	PeerAccess string    `json:"peer_access,omitempty"`
@@ -173,6 +174,16 @@ type host struct {
 	id   string // hub device id; "" for this machine while single-host
 	self bool
 	st   store.Store
+	ver  string // the host's ccdash version (hub device list); "" for this machine
+}
+
+// explain adds a hint to an error from another host: an older ccdash there
+// doesn't let the hub reach routes it didn't know yet.
+func (h host) explain(err error) error {
+	if err == nil || h.self || !strings.Contains(err.Error(), "not available through the hub") {
+		return err
+	}
+	return fmt.Errorf("%w (host %s runs ccdash %s, which doesn't offer this through the hub yet — update ccdash there)", err, h.name, h.ver)
 }
 
 // located is a session and the host it lives on.
@@ -257,7 +268,7 @@ func (s *Server) hostNamed(ctx context.Context, name string) (host, error) {
 				}
 				return host{}, fmt.Errorf("host %q is offline (%s); its collector isn't connected to the hub", d.Name, seen)
 			}
-			return host{name: d.Name, id: d.ID, st: s.fleet.storeFor(d.ID)}, nil
+			return host{name: d.Name, id: d.ID, st: s.fleet.storeFor(d.ID), ver: d.Version}, nil
 		}
 	}
 	names := make([]string, 0, len(ds))
@@ -292,7 +303,7 @@ func (s *Server) hostsFor(ctx context.Context, name string) (hs []host, offline 
 		switch {
 		case d.ID == self.id:
 		case d.Online:
-			hs = append(hs, host{name: d.Name, id: d.ID, st: s.fleet.storeFor(d.ID)})
+			hs = append(hs, host{name: d.Name, id: d.ID, st: s.fleet.storeFor(d.ID), ver: d.Version})
 		default:
 			offline = append(offline, d.Name)
 		}
@@ -330,9 +341,9 @@ func (s *Server) sessionsOn(ctx context.Context, hs []host, archived bool) ([]lo
 	for i, r := range out {
 		if r.err != nil {
 			if len(hs) == 1 {
-				return nil, nil, r.err
+				return nil, nil, hs[i].explain(r.err)
 			}
-			errs[hostLabel(hs[i])] = r.err.Error()
+			errs[hostLabel(hs[i])] = hs[i].explain(r.err).Error()
 			continue
 		}
 		for _, x := range r.ss {
