@@ -257,6 +257,27 @@ func (r *Remote) StopSession(ctx context.Context, key string) error {
 	return r.doJSON(ctx, 15*time.Second, http.MethodDelete, "/pty/"+url.PathEscape(key), nil, nil, nil)
 }
 
+func (r *Remote) RestartStatus(ctx context.Context) (model.RestartState, error) {
+	var st model.RestartState
+	err := r.doJSON(ctx, 10*time.Second, http.MethodGet, "/api/restart", nil, nil, &st)
+	return st, err
+}
+
+func (r *Remote) ScheduleRestart(ctx context.Context, by string, timeout time.Duration) (model.RestartState, error) {
+	if _, err := r.RestartStatus(ctx); err != nil { // see Local.ScheduleRestart
+		return model.RestartState{}, errNoScheduledRestart(err)
+	}
+	var st model.RestartState
+	err := r.doJSON(ctx, 10*time.Second, http.MethodPost, "/api/restart", nil, restartBody(by, timeout), &st)
+	return st, err
+}
+
+func (r *Remote) CancelRestart(ctx context.Context) (model.RestartState, error) {
+	var st model.RestartState
+	err := r.doJSON(ctx, 10*time.Second, http.MethodDelete, "/api/restart", nil, nil, &st)
+	return st, err
+}
+
 func (r *Remote) GetSetting(ctx context.Context, key string) (string, error) {
 	all, err := r.AllSettings(ctx)
 	if err != nil {

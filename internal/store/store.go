@@ -11,6 +11,7 @@
 package store
 
 import (
+	"fmt"
 	"context"
 	"github.com/takumanakagame/ccmanage/internal/usage"
 	"strings"
@@ -124,6 +125,13 @@ type Store interface {
 	// SIGTERM, then a kill after a grace period). The transcript stays, so
 	// StartSession with ResumeID brings it back.
 	StopSession(ctx context.Context, key string) error
+	// RestartStatus / ScheduleRestart / CancelRestart drive the collector's
+	// scheduled restart (GET / POST {"when":"idle"} / DELETE /api/restart):
+	// it waits until no hosted claude is busy, then restarts and resumes
+	// them. by names the asker ("tui", "cli", "mcp"); timeout 0 = default.
+	RestartStatus(ctx context.Context) (model.RestartState, error)
+	ScheduleRestart(ctx context.Context, by string, timeout time.Duration) (model.RestartState, error)
+	CancelRestart(ctx context.Context) (model.RestartState, error)
 
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
@@ -184,6 +192,17 @@ type ptyRow struct {
 	PID    int    `json:"pid"`
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt"`
+}
+
+// restartBody is POST /api/restart's body for a scheduled restart.
+func restartBody(by string, timeout time.Duration) map[string]any {
+	return map[string]any{"when": model.RestartWhenIdle, "by": by, "timeout_min": int(timeout.Minutes())}
+}
+
+// errNoScheduledRestart: the collector predates scheduled restarts (or is
+// unreachable), so POST /api/restart would restart it right away.
+func errNoScheduledRestart(err error) error {
+	return fmt.Errorf("this collector can't schedule a restart (older than v0.9.60, or not running): %w", err)
 }
 
 // hostedOf keeps the session-ID keys of the alive PTYs.

@@ -335,6 +335,10 @@ type model struct {
 
 	restartConfirm   bool
 	restartRequested bool
+	// restartState is the collector's scheduled restart (GET /api/restart),
+	// polled every restartPollEvery; restartPolledAt is the last poll.
+	restartState    mdl.RestartState
+	restartPolledAt time.Time
 	// helpOpen shows the `?` key list (help.go).
 	helpOpen   bool
 	helpScroll int
@@ -689,6 +693,10 @@ func (m *model) refresh() tea.Cmd {
 	if !m.remote.Enabled {
 		cmds = append(cmds, fetchPTYListCmd())
 	}
+	if time.Since(m.restartPolledAt) >= restartPollEvery {
+		m.restartPolledAt = time.Now()
+		cmds = append(cmds, m.fetchRestartCmd())
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -952,6 +960,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case errMsg:
 		m.err = msg.err
+	case restartStateMsg:
+		m.handleRestartState(msg)
+		return m, nil
 	case ptyListMsg:
 		if msg.err == nil {
 			m.ptyAlive = msg.alive
@@ -3274,6 +3285,9 @@ func (m *model) renderHeader() string {
 		count = 1
 	}
 	rule := subtitleStyle.Render(strings.Repeat("─", count))
+	if band := m.restartBand(); band != "" {
+		return lipgloss.JoinVertical(lipgloss.Left, bar, rule, band)
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, bar, rule)
 }
 

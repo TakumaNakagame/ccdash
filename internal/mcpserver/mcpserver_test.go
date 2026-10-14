@@ -78,7 +78,7 @@ func TestServe(t *testing.T) {
 	if r[0].Result.ProtocolVersion != "2025-03-26" {
 		t.Errorf("initialize: %s", lines[0])
 	}
-	if len(r[1].Result.Tools) != 32 {
+	if len(r[1].Result.Tools) != 33 {
 		t.Errorf("tools/list: %s", lines[1])
 	}
 	body := func(i int) string { return r[i].Result.Content[0].Text }
@@ -476,5 +476,52 @@ func TestStopResumeSession(t *testing.T) {
 		if _, err := New(store.NewRemote(ts.URL, "tok"), "test", true).call(ctx, name, json.RawMessage(`{"session":"#1"}`)); err == nil {
 			t.Errorf("%s read-only: want error", name)
 		}
+	}
+}
+
+// TestScheduleRestart: schedule_restart posts {"when":"idle"} only to a
+// collector that knows scheduled restarts (GET /api/restart answers);
+// cancel deletes; overview shows a pending one.
+func TestScheduleRestart(t *testing.T) {
+	old := false
+	var posted map[string]any
+	pending := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/settings":
+			_ = json.NewEncoder(w).Encode(map[string]string{"attach_enabled": "1"})
+		case r.URL.Path == "/api/restart" && old:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		case r.URL.Path == "/api/restart" && r.Method == http.MethodPost:
+			_ = json.NewDecoder(r.Body).Decode(&posted)
+			pending = true
+			fallthrough
+		case r.URL.Path == "/api/restart":
+			if r.Method == http.MethodDelete {
+				pending = false
+			}
+			_ = json.NewEncoder(w).Encode(model.RestartState{Pending: pending, Hosted: 2, Waiting: []model.RestartBlocker{{SessionID: "x", Num: 7, Why: "作業中"}}})
+		case r.URL.Path == "/api/sessions", r.URL.Path == "/api/approvals", r.URL.Path == "/api/projects", r.URL.Path == "/pty/":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	s := New(store.NewRemote(ts.URL, "tok"), "test", false)
+	ctx := context.Background()
+	out, err := s.call(ctx, "schedule_restart", json.RawMessage(`{"timeout_minutes":30}`))
+	if err != nil || posted["when"] != "idle" || posted["by"] != "mcp" || posted["timeout_min"] != float64(30) || !strings.Contains(out, "#7 作業中") {
+		t.Fatalf("schedule: err=%v posted=%v out=%s", err, posted, out)
+	}
+	if out, _ := s.call(ctx, "overview", nil); !strings.Contains(out, "restart_pending") {
+		t.Errorf("overview without restart_pending: %s", out)
+	}
+	if out, err := s.call(ctx, "schedule_restart", json.RawMessage(`{"cancel":true}`)); err != nil || !strings.Contains(out, `"pending": false`) {
+		t.Errorf("cancel: %v %s", err, out)
+	}
+	old, posted = true, nil
+	if _, err := s.call(ctx, "schedule_restart", nil); err == nil || posted != nil {
+		t.Errorf("old collector: err=%v posted=%v (must not POST: it would restart at once)", err, posted)
 	}
 }

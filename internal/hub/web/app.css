@@ -803,7 +803,7 @@ button.sent-file { width: 100%; font: inherit; color: inherit; cursor: pointer; 
 aside.viewer.side { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; width: var(--side-w, min(46vw, 760px)); display: flex; flex-direction: column;
   background: var(--panel); border-left: 1px solid var(--line); box-shadow: -12px 0 32px rgb(0 0 0 / .12); animation: side-in .22s cubic-bezier(.2, .8, .2, 1); }
 @keyframes side-in { from { transform: translateX(40px); opacity: 0; } }
-body.side-open header#top, body.side-open main#view { margin-right: var(--side-w, min(46vw, 760px)); }
+body.side-open header#top, body.side-open #restartbar, body.side-open main#view { margin-right: var(--side-w, min(46vw, 760px)); }
 aside.viewer.side .doc { padding: 22px 22px 40px; }
 
 /* Tile header: compact icon buttons so the title stays readable, also on
@@ -850,7 +850,7 @@ aside.viewer.side .doc { padding: 22px 22px 40px; }
 #taskpane .task-handle { position: absolute; z-index: 1; top: 0; bottom: 0; left: -7px; width: 12px; }
 body.tasks-resizing { cursor: col-resize; user-select: none; }
 body.tasks-resizing .task-handle::before, body.tasks-resizing .task-handle::after { background: var(--accent); }
-body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) main#view { margin-right: var(--tasks-w); }
+body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #restartbar, body.tasks-open:not(.side-open) main#view { margin-right: var(--tasks-w); }
 .task-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 14px; min-height: 48px; border-bottom: 1px solid var(--line); font-weight: 700; }
 #taskpane .task-body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 8px 24px; }
 
@@ -907,3 +907,20 @@ body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) main
 .task + .task > .task-check { margin-top: 9px; }
 .task-main { padding-top: 8px; padding-bottom: 8px; }
 .task.open + .task > .task-main, .task:hover + .task > .task-main { border-top-color: transparent; }
+
+/* Restart bar: a device's collector will restart (and resume its hosted
+   sessions) once they are idle — a warning on every page, under the header. */
+#restartbar { padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
+#restartbar[hidden] { display: none; }
+.restart-note { display: flex; align-items: center; gap: 10px; max-width: 960px; margin: 0 auto; padding: 8px 12px; line-height: 1.4;
+  background: var(--panel); border: 1px solid color-mix(in srgb, var(--warn) 60%, var(--line)); border-radius: var(--r-md); }
+.restart-note + .restart-note { margin-top: 6px; }
+.restart-note > .ic { flex: none; width: 20px; height: 20px; color: var(--warn); }
+.restart-note .rn-title { font-weight: 600; font-size: var(--fs-sm); }
+.restart-note .btn { flex: none; }
+.restart-choices { margin: 8px 0 12px; padding-left: 18px; line-height: 1.6; }
+.restart-choices li + li { margin-top: 4px; }
+@media (max-width: 1023px) {
+  #restartbar { padding: 6px 10px; }
+  body.detail #restartbar { padding-top: max(6px, env(safe-area-inset-top)); }
+}

@@ -68,6 +68,11 @@ type Server struct {
 	// only by `ccdash server`, which re-execs itself on that error.
 	CanRestart   bool
 	restartAsked atomic.Bool
+	// restartMu guards the scheduled restart (restartwait.go).
+	restartMu     sync.Mutex
+	restartSched  *restartSchedule
+	restartLast   string
+	restartLastAt time.Time
 	// OnListening, when set, runs once every listener is bound (`ccdash
 	// server` records its PID then — not before, or a server that loses
 	// the port would overwrite the record of the one that has it).
@@ -145,6 +150,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/shutdown", wrap(s.handleShutdown))
 	s.mux.HandleFunc("GET "+LocalPortalPath, wrap(s.handleLocalPortal))
 	s.mux.HandleFunc("POST /api/restart", wrap(s.handleRestart))
+	s.mux.HandleFunc("GET /api/restart", wrap(s.handleRestartState))
+	s.mux.HandleFunc("DELETE /api/restart", wrap(s.handleRestartCancel))
 
 	// Remote-mode API — consumed by internal/store.Remote so a TUI can run
 	// on a different host than the collector. Same rate-limit + token

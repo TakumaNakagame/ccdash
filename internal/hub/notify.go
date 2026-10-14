@@ -287,9 +287,11 @@ func (h *Hub) handlePushTest(w http.ResponseWriter, r *http.Request) {
 // refreshes the device's snapshot for the cross-device board.
 
 type watchState struct {
-	first     bool
-	attention map[string]string // session id → attention|reason last seen
-	lastSent  map[string]time.Time
+	first       bool
+	restart     string            // pending / last outcome of the device's scheduled restart, last look
+	restartSeen bool              // restart holds a baseline
+	attention   map[string]string // session id → attention|reason last seen
+	lastSent    map[string]time.Time
 }
 
 func newWatchState() *watchState {
@@ -309,7 +311,16 @@ func (h *Hub) watchDevice(ctx context.Context, d Device, dc *deviceConn) {
 			log.Printf("hub: watch %s: %v", d.Name, err)
 		}
 		if err == nil {
-			h.storeSnapshot(d, sessions)
+			// A collector older than scheduled restarts answers 404: no state.
+			var rs *model.RestartState
+			var got model.RestartState
+			if getJSON(ctx, client, "/api/restart", &got) == nil {
+				rs = &got
+			}
+			if n, ok := restartNotice(d, rs, st); ok {
+				ns = append(ns, n)
+			}
+			h.storeSnapshot(d, sessions, rs)
 		}
 		for _, n := range ns {
 			b := h.badgeCount()
@@ -475,16 +486,49 @@ func spawnPrompts(ctx context.Context, c *http.Client, d Device, st *watchState,
 type deviceSnapshot struct {
 	Device   Device
 	Sessions []model.Session
+	Restart  *model.RestartState // nil: the collector predates scheduled restarts
 	At       time.Time
 }
 
-func (h *Hub) storeSnapshot(d Device, sessions []model.Session) {
+func (h *Hub) storeSnapshot(d Device, sessions []model.Session, rs *model.RestartState) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.snapshots == nil {
 		h.snapshots = map[string]deviceSnapshot{}
 	}
-	h.snapshots[d.ID] = deviceSnapshot{Device: d, Sessions: sessions, At: time.Now()}
+	h.snapshots[d.ID] = deviceSnapshot{Device: d, Sessions: sessions, Restart: rs, At: time.Now()}
+}
+
+// restartNotice pushes a warning when a device's collector schedules a
+// restart (its hosted sessions will be stopped and resumed) and when a
+// schedule gives up. The first look is a baseline, like attention.
+func restartNotice(d Device, rs *model.RestartState, st *watchState) (notification, bool) {
+	sig := ""
+	if rs != nil {
+		switch {
+		case rs.Pending:
+			sig = "pending"
+		case rs.Last != "":
+			sig = rs.Last + "@" + rs.LastAt.String()
+		}
+	}
+	prev, seen := st.restart, st.restartSeen
+	st.restart, st.restartSeen = sig, true
+	if !seen || sig == prev || sig == "" {
+		return notification{}, false
+	}
+	n := notification{URL: "/#/d/" + d.ID, Tag: d.ID + ":restart"}
+	switch {
+	case rs.Pending:
+		n.Title = d.Name + " · 再起動を予約"
+		n.Body = fmt.Sprintf("作業中のセッションが終わり次第 ccdash を再起動します（%d 件待ち）。ホスト中の %d 件はいったん止まり、自動で再開されます。", len(rs.Waiting), rs.Hosted)
+	case rs.Last == "expired":
+		n.Title = d.Name + " · 再起動の予約は時間切れ"
+		n.Body = "作業中のセッションが終わらなかったため、ccdash の再起動を取りやめました。"
+	default:
+		return notification{}, false
+	}
+	return n, true
 }
 
 func (h *Hub) dropSnapshot(id string) {

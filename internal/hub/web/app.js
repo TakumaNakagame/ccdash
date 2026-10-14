@@ -1079,18 +1079,103 @@ async function devicePage(id, opts = {}) {
 
 // restartCollector re-execs the device's collector (POST /api/restart). The
 // claudes it hosts are stopped and resumed by the new process; the tunnel
-// drops for a few seconds meanwhile.
+// drops for a few seconds meanwhile. The default is to schedule it
+// ({"when":"idle"}): the collector waits until none of them is busy, and
+// the restart bar warns everyone meanwhile.
 async function restartCollector(id, last) {
   const hosted = (last?.ptys || []).filter((p) => p.alive && !p.key.startsWith("pid-")).length;
   const fresh = (last?.ptys || []).filter((p) => p.alive && p.key.startsWith("pid-")).length;
-  if (!confirm(`この端末の ccdash collector を再起動しますか？\n\n` +
-    `・ホスト中のセッション ${hosted} 件はいったん停止し、再起動後に claude --resume で自動的に再開します（応答中の内容は中断されます）\n` +
-    (fresh ? `・まだ未登録（最初のメッセージ前）の ${fresh} 件は再開されません\n` : "") +
-    `・数秒〜数十秒、この端末に接続できなくなります`)) return;
-  try {
-    const r = await dev(id).post("/api/restart", {});
-    toast(`再起動しています… ${r?.resuming ?? hosted} 件を再開します`, 6000);
-  } catch (e) { toast(e.message); }
+  // A collector older than scheduled restarts has no GET /api/restart (and
+  // would take {"when":"idle"} as "now"): offer only the immediate one.
+  const rs = await dev(id).get("/api/restart").catch(() => null);
+  if (rs?.pending) return restartPendingDialog(id, rs);
+  dialog((body, close) => {
+    const run = (btn, fn) => btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try { await fn(); close(); } catch (e) { toast(e.message); btn.disabled = false; }
+    });
+    const now = h("button", { class: "btn danger", type: "button" }, "今すぐ再起動");
+    run(now, async () => {
+      const r = await dev(id).post("/api/restart", {});
+      toast(`再起動しています… ${r?.resuming ?? hosted} 件を再開します`, 6000);
+    });
+    const later = rs ? h("button", { class: "btn primary", type: "button" }, "作業が終わったら再起動") : null;
+    if (later) run(later, async () => {
+      const r = await dev(id).post("/api/restart", { when: "idle", by: "portal" });
+      const n = r?.waiting?.length || 0;
+      toast(n ? `再起動を予約しました。作業中の ${n} 件が終わり次第、再起動します` : "再起動を予約しました。まもなく再起動します", 6000);
+      setTimeout(pollRestartBar, RESTART_BAR_LAG);
+    });
+    body.append(h("h1", {}, "この端末の ccdash を再起動しますか？"),
+      h("div", { class: "muted small" },
+        `ホスト中のセッション ${hosted} 件はいったん止まり、再起動後に claude --resume で自動的に再開します。` +
+        (fresh ? `まだ最初のメッセージ前の ${fresh} 件は再開されません。` : "") +
+        "数秒〜数十秒、この端末に接続できなくなります。"),
+      rs ? h("ul", { class: "small restart-choices" },
+        h("li", {}, h("b", {}, "作業が終わったら再起動"), "：作業中・承認や質問の待ち・バックグラウンド待ちのセッションが無くなってから再起動します。途中で切れる作業はありません。待っている間は画面上部に予告が出ます（2 時間で終わらなければ取りやめ）。"),
+        h("li", {}, h("b", {}, "今すぐ再起動"), "：応答中の内容は中断されます。"))
+        : h("div", { class: "muted small" }, "この端末の ccdash は古いため「作業が終わったら再起動」は使えません。応答中の内容は中断されます。"),
+      h("div", { class: "actions" },
+        h("button", { class: "btn", value: "cancel", formnovalidate: true }, "やめる"), now, later));
+  });
+}
+
+// restartPendingDialog: the device already has a restart scheduled.
+function restartPendingDialog(id, rs) {
+  dialog((body, close) => {
+    const cancel = h("button", { class: "btn primary", type: "button" }, "予約を取り消す");
+    cancel.addEventListener("click", async () => {
+      cancel.disabled = true;
+      try { await dev(id).del("/api/restart"); close(); toast("再起動の予約を取り消しました"); restartBarDrop(id); }
+      catch (e) { toast(e.message); cancel.disabled = false; }
+    });
+    body.append(h("h1", {}, "再起動を予約中です"),
+      h("div", { class: "muted small" }, restartWaitText(rs)),
+      h("div", { class: "actions" }, h("button", { class: "btn", value: "cancel", formnovalidate: true }, "閉じる"), cancel));
+  });
+}
+
+// ---- restart bar ----
+// A device whose collector has a restart scheduled (POST /api/restart
+// {"when":"idle"}) gets a warning under the header on every page: its
+// hosted sessions will be stopped and resumed once none of them is busy.
+// The hub carries the state per device (/api/devices → restart).
+function restartWaitText(rs) {
+  const w = rs.waiting || [];
+  const ref = (b) => (b.num ? "#" + b.num : (b.session_id || "").slice(0, 8));
+  const list = w.slice(0, 3).map((b) => `${ref(b)} ${b.why}`).join("、") + (w.length > 3 ? ` ほか ${w.length - 3} 件` : "");
+  return (w.length ? `作業中のセッションが終わり次第、再起動します（待ち: ${list}）。` : "まもなく再起動します。") +
+    `ホスト中の ${rs.hosted} 件はいったん止まり、自動で再開されます。`;
+}
+
+// The hub refreshes a device's state every few seconds (its watch poll),
+// so right after a schedule / cancel the bar trusts what it just did.
+const RESTART_BAR_LAG = 4500;
+const restartBarHold = new Map(); // device id → until (ms): hide its note
+function restartBarDrop(id) {
+  restartBarHold.set(id, Date.now() + RESTART_BAR_LAG + 5000);
+  pollRestartBar();
+}
+
+async function pollRestartBar() {
+  let ds;
+  try { ds = await api("/api/devices"); } catch { return; }
+  const bar = $("#restartbar");
+  const pend = ds.filter((d) => d.restart?.pending && !(restartBarHold.get(d.id) > Date.now()));
+  bar.hidden = !pend.length;
+  bar.replaceChildren(...pend.map((d) => {
+    const cancel = h("button", { class: "btn", type: "button" }, "取り消す");
+    cancel.addEventListener("click", async () => {
+      cancel.disabled = true;
+      try { await dev(d.id).del("/api/restart"); toast("再起動の予約を取り消しました"); restartBarDrop(d.id); }
+      catch (e) { toast(e.message); cancel.disabled = false; }
+    });
+    return h("div", { class: "restart-note", role: "status" }, icon("restart"),
+      h("div", { class: "grow" },
+        h("div", { class: "rn-title" }, (ds.length > 1 ? d.name + " の " : "") + "ccdash を再起動予約中"),
+        h("div", { class: "muted small" }, restartWaitText(d.restart))),
+      cancel);
+  }));
 }
 
 // ---- working beam ----
@@ -4178,13 +4263,15 @@ function installListFold() {
   const badgeTick = () => api("/api/board").then(updateBadge).catch(() => {});
   badgeTick();
   setInterval(badgeTick, 15000);
+  pollRestartBar();
+  setInterval(pollRestartBar, 5000);
   // Installable as an app (PWA); the worker caches nothing.
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   // A tapped notification asks an open window to show its session.
   navigator.serviceWorker?.addEventListener("message", (e) => {
     if (e.data?.type === "open" && e.data.url) location.href = e.data.url;
   });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) { checkUpdate(); badgeTick(); } });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { checkUpdate(); badgeTick(); pollRestartBar(); } });
   window.addEventListener("hashchange", () => { noteHash(); navigate(); });
   for (const sp of document.querySelectorAll("[data-icon]")) sp.replaceWith(icon(sp.dataset.icon));
   installSheet();

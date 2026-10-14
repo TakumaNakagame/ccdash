@@ -253,3 +253,44 @@ func TestModalKeyboardNav(t *testing.T) {
 		t.Fatalf("tab+enter: confirm=%v requested=%v", m.restartConfirm, m.restartRequested)
 	}
 }
+
+// TestScheduledRestartUI: a collector that can restart itself gets "When
+// idle" first (w schedules, without quitting); a pending schedule shows a
+// band under the header and the window offers to cancel it.
+func TestScheduledRestartUI(t *testing.T) {
+	m := newModel(context.Background(), nil, RemoteInfo{})
+	m.width, m.height = 160, 40
+	m.restartState = mdl.RestartState{CanRestart: true}
+	m.openRestartConfirm("")
+	box, _ := m.restartBox()
+	if s := ansi.Strip(box); !strings.Contains(s, "When idle") || !strings.Contains(s, "Restart now") {
+		t.Fatalf("box:\n%s", s)
+	}
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // focus starts on When idle
+	if m.restartConfirm || m.restartRequested || cmd == nil {
+		t.Fatalf("w: confirm=%v requested=%v cmd=%v", m.restartConfirm, m.restartRequested, cmd != nil)
+	}
+
+	if strings.Contains(ansi.Strip(m.renderHeader()), "restart scheduled") {
+		t.Fatal("band without a schedule")
+	}
+	m.restartState = mdl.RestartState{Pending: true, CanRestart: true, Hosted: 3,
+		Waiting: []mdl.RestartBlocker{{SessionID: "s1", Num: 12, Why: "作業中"}}}
+	h := ansi.Strip(m.renderHeader())
+	if !strings.Contains(h, "restart scheduled") || !strings.Contains(h, "#12 作業中") || !strings.Contains(h, "3 hosted") {
+		t.Fatalf("header:\n%s", h)
+	}
+	m.openRestartConfirm("")
+	box, _ = m.restartBox()
+	if s := ansi.Strip(box); !strings.Contains(s, "Cancel schedule") || !strings.Contains(s, "#12 作業中") {
+		t.Fatalf("pending box:\n%s", s)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // focus starts on Close
+	if m.restartConfirm || m.restartRequested {
+		t.Fatal("enter on Close should only close")
+	}
+	m.openRestartConfirm("")
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"}); cmd == nil || m.restartConfirm {
+		t.Fatal("x should cancel the schedule")
+	}
+}

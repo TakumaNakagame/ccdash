@@ -181,6 +181,29 @@ func (l *Local) StopSession(ctx context.Context, key string) error {
 	return l.callCollector(ctx, http.MethodDelete, "/pty/"+url.PathEscape(key), nil, nil)
 }
 
+func (l *Local) RestartStatus(ctx context.Context) (model.RestartState, error) {
+	var st model.RestartState
+	err := l.callCollector(ctx, http.MethodGet, "/api/restart", nil, &st)
+	return st, err
+}
+
+func (l *Local) ScheduleRestart(ctx context.Context, by string, timeout time.Duration) (model.RestartState, error) {
+	// An older collector ignores {"when":"idle"} and restarts at once; it
+	// has no GET /api/restart, so ask that first.
+	if _, err := l.RestartStatus(ctx); err != nil {
+		return model.RestartState{}, errNoScheduledRestart(err)
+	}
+	var st model.RestartState
+	err := l.callCollector(ctx, http.MethodPost, "/api/restart", restartBody(by, timeout), &st)
+	return st, err
+}
+
+func (l *Local) CancelRestart(ctx context.Context) (model.RestartState, error) {
+	var st model.RestartState
+	err := l.callCollector(ctx, http.MethodDelete, "/api/restart", nil, &st)
+	return st, err
+}
+
 // postCollector POSTs body as JSON to the loopback collector and decodes a
 // 2xx reply into out when out is non-nil.
 func (l *Local) postCollector(ctx context.Context, path string, body, out any) error {

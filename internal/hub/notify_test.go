@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/takumanakagame/ccmanage/internal/model"
 )
@@ -112,7 +113,7 @@ func TestBoard(t *testing.T) {
 		{SessionID: "c", Status: model.StatusIdle, Attention: model.AttentionDone},
 		{SessionID: "d", Status: model.StatusIdle},
 		{SessionID: "e", Status: model.StatusStopped, Unseen: true}, // NEW without a done flag
-	})
+	}, nil)
 	if n := hub.badgeCount(); n != 3 {
 		t.Fatalf("badgeCount = %d, want 3 (b, c, e)", n)
 	}
@@ -177,8 +178,8 @@ func TestPushSubscribeAndKey(t *testing.T) {
 // reports it, asks for a login first, and says so when nobody has it.
 func TestSessionLink(t *testing.T) {
 	hub := newTestHub(t, true)
-	hub.storeSnapshot(Device{ID: "d1"}, []model.Session{{SessionID: "x"}})
-	hub.storeSnapshot(Device{ID: "d2"}, []model.Session{{SessionID: "abc-123"}})
+	hub.storeSnapshot(Device{ID: "d1"}, []model.Session{{SessionID: "x"}}, nil)
+	hub.storeSnapshot(Device{ID: "d2"}, []model.Session{{SessionID: "abc-123"}}, nil)
 	w := serve(hub.Handler(), "GET", "/s/abc-123", "", nil)
 	if w.Code != http.StatusFound || w.Header().Get("Location") != "/#/d/d2/s/abc-123" {
 		t.Fatalf("link = %d %q", w.Code, w.Header().Get("Location"))
@@ -192,5 +193,34 @@ func TestSessionLink(t *testing.T) {
 	w = serve(newTestHub(t, false).Handler(), "GET", "/s/abc-123", "", nil)
 	if w.Code != http.StatusFound || w.Header().Get("Location") != "/auth/login?next=%2Fs%2Fabc-123" {
 		t.Fatalf("logged out = %d %q", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// TestRestartNotice: a device scheduling a restart pushes once (not on the
+// first look), an expired schedule pushes, a cancel doesn't.
+func TestRestartNotice(t *testing.T) {
+	d := Device{ID: "dev1", Name: "desk"}
+	st := newWatchState()
+	pending := &model.RestartState{Pending: true, Hosted: 3, Waiting: []model.RestartBlocker{{SessionID: "a", Why: "作業中"}}}
+	if _, ok := restartNotice(d, pending, st); ok {
+		t.Error("baseline pushed")
+	}
+	if _, ok := restartNotice(d, nil, st); ok {
+		t.Error("no state pushed")
+	}
+	n, ok := restartNotice(d, pending, st)
+	if !ok || !strings.Contains(n.Title, "再起動を予約") || !strings.Contains(n.Body, "1 件待ち") || !strings.Contains(n.Body, "3 件") {
+		t.Errorf("pending: %v %+v", ok, n)
+	}
+	if _, ok := restartNotice(d, pending, st); ok {
+		t.Error("repeat pushed")
+	}
+	at := time.Now()
+	if n, ok := restartNotice(d, &model.RestartState{Last: "expired", LastAt: at}, st); !ok || !strings.Contains(n.Title, "時間切れ") {
+		t.Errorf("expired: %v %+v", ok, n)
+	}
+	restartNotice(d, pending, st)
+	if _, ok := restartNotice(d, &model.RestartState{Last: "cancelled", LastAt: at}, st); ok {
+		t.Error("cancel pushed")
 	}
 }

@@ -18,9 +18,11 @@ package server
 //     not suddenly launch claude everywhere.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -28,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
 )
 
@@ -76,7 +79,7 @@ func (s *Server) sessionKeyOf(key string) (string, *ptyEntry) {
 // hostedSessions lists the alive PTYs that hold a known session, with the
 // cwd recorded for it (falling back to nothing: claude then starts in the
 // collector's cwd, which --resume would refuse — so those are skipped).
-func (s *Server) hostedSessions(r *http.Request) []resumeEntry {
+func (s *Server) hostedSessions(ctx context.Context) []resumeEntry {
 	s.ptyMu.Lock()
 	type hosted struct {
 		sid        string
@@ -93,7 +96,7 @@ func (s *Server) hostedSessions(r *http.Request) []resumeEntry {
 	s.ptyMu.Unlock()
 	var out []resumeEntry
 	for _, h := range hs {
-		sess, ok, err := s.db.GetSession(r.Context(), h.sid)
+		sess, ok, err := s.db.GetSession(ctx, h.sid)
 		if err != nil || !ok || sess.Cwd == "" {
 			continue
 		}
@@ -103,8 +106,8 @@ func (s *Server) hostedSessions(r *http.Request) []resumeEntry {
 }
 
 // saveResumeList writes the hosted sessions for the next start to resume.
-func (s *Server) saveResumeList(r *http.Request) (int, error) {
-	list := s.hostedSessions(r)
+func (s *Server) saveResumeList(ctx context.Context) (int, error) {
+	list := s.hostedSessions(ctx)
 	p, err := resumeFilePath()
 	if err != nil {
 		return 0, err
@@ -205,23 +208,52 @@ func (s *Server) handlePTYRestart(w http.ResponseWriter, r *http.Request, id str
 }
 
 // handleRestart: POST /api/restart — save the hosted sessions and re-exec the
-// collector, which resumes them on start. 501 where the process can't
-// re-exec itself (CanRestart unset).
+// collector, which resumes them on start. With {"when":"idle"} it only
+// schedules that for when no hosted claude is busy (restartwait.go). 501
+// where the process can't re-exec itself (CanRestart unset).
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	if !s.CanRestart || s.cancelFn == nil {
 		writeErr(w, http.StatusNotImplemented, errors.New("this collector cannot restart itself; restart it from where it runs"))
 		return
 	}
-	n, err := s.saveResumeList(r)
+	var req restartReq
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("bad body: %w", err))
+			return
+		}
+	}
+	switch req.When {
+	case "", model.RestartNow:
+	case model.RestartWhenIdle:
+		writeOK(w, s.scheduleRestart(req))
+		return
+	default:
+		writeErr(w, http.StatusBadRequest, fmt.Errorf(`when must be "now" or "idle"`))
+		return
+	}
+	s.cancelScheduledRestart("") // an immediate restart supersedes it
+	n, err := s.restartNow(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, fmt.Errorf("save resume list: %w", err))
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeOK(w, map[string]int{"resuming": n})
+}
+
+// restartNow saves the hosted sessions and stops the server with
+// ErrRestart a moment later (so a reply, and the hub's relay of it, goes
+// out first).
+func (s *Server) restartNow(ctx context.Context) (int, error) {
+	n, err := s.saveResumeList(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("save resume list: %w", err)
+	}
 	log.Printf("restart requested; %d hosted sessions will be resumed", n)
 	go func() {
-		time.Sleep(300 * time.Millisecond) // let the response (and the hub's relay of it) go out
+		time.Sleep(300 * time.Millisecond)
 		s.restartAsked.Store(true)
 		s.cancelFn()
 	}()
+	return n, nil
 }

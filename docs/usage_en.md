@@ -446,6 +446,40 @@ running. A confirmation window first lists what it breaks: live sessions
 hosted by ccdash are stopped mid-reply (resume them with `enter`), and
 pending approvals are released. Sessions started outside ccdash are not
 affected. In remote mode it only relaunches the local dashboard.
+
+### Restart once the sessions are idle (scheduled)
+
+When the collector runs as `ccdash server` (or `ccdash web`), the first
+button of that window is **When idle**: it *schedules* the restart instead
+of doing it now.
+
+- Every 2 s the collector looks for hosted sessions that are working, hold
+  an approval, show a question / dialog on screen, or declared a background
+  wait (`set_status` background). Once none has been busy for a moment it
+  restarts and resumes them all with `claude --resume`, so nothing is cut
+  off. Sessions waiting for an answer, an action or done reporting don't
+  hold it up: their text survives the resume.
+- Meanwhile everyone is warned: an orange band under the TUI header, a note
+  at the top of every portal page (and the Android app) — "ccdash を再起動予約中
+  (待ち: #12 作業中…)" — and a push from the hub.
+- Cancel it with **Cancel schedule** (Restart ccdash in the TUI), **取り消す**
+  on the portal's note, or `ccdash restart --cancel`.
+- It gives up after 2 h (`ccdash restart --timeout 30m`, at most 24 h)
+  rather than force anything.
+- Input isn't blocked: a new prompt just pushes the restart back.
+- The TUI's When idle restarts the collector only; the TUI keeps its
+  version until you relaunch it.
+
+From a shell (`-r` drives a remote collector):
+
+```sh
+ccdash restart            # schedule
+ccdash restart --status   # what it waits for
+ccdash restart --cancel   # cancel
+```
+
+`ccdash update` points at it when an old collector is still running. The
+portal's device-page restart button offers 作業が終わったら再起動 / 今すぐ再起動.
 - **Newest at bottom** — reverses the list so the most recent session
   is at the bottom (matching the transcript tail orientation).
 
@@ -743,6 +777,7 @@ Tools:
 | `archive_finished` | archive the sessions whose claude has exited (running ones are skipped, never stopped); keeps pinned, watch-later and unread / needs-you ones (`include_unread` takes unread too); narrow with `sessions` / `project` / `idle_hours`, preview with `dry_run` |
 | `start_session` | start a new claude session in a directory (absolute path), like the TUI's `n`; optional `project`, first `prompt`, `permission_mode`. Refused while the Attach setting is OFF |
 | `stop_session` | stop one session's claude that ccdash hosts (SIGTERM, then a kill); work in progress is cut off, the transcript stays. Refuses a claude started in a terminal, an already stopped session and the caller's own; a working (active) one only with `force: true`. Refused while Attach is OFF |
+| `schedule_restart` | schedule a collector restart for when no hosted session is busy (see "Restart once the sessions are idle"); `cancel: true` cancels, `timeout_minutes` bounds the wait. The calling session counts as busy until its turn ends. `overview` shows a pending one as `restart_pending` |
 | `resume_session` | bring a stopped session back with `claude --resume` (in its own cwd, hosted by ccdash) so it runs in ccdash again; unarchives it. Refuses one that still runs (under ccdash or not); optional first `prompt`, `permission_mode`. Refused while Attach is OFF |
 
 It never answers approvals. Add

@@ -236,11 +236,13 @@ func hubAllowed(r *http.Request, cfg settings.Settings) (bool, string) {
 		return true, ""
 	case r.Method == http.MethodPost && hubTaskEdit.MatchString(p) && p != "/api/tasks/sync" && p != "/api/tasks/import":
 		return true, ""
-	case r.Method == http.MethodGet && (p == "/pty/" || p == "/pty"):
+	case r.Method == http.MethodGet && (p == "/pty/" || p == "/pty" || p == "/api/restart"):
 		return true, ""
-	case strings.HasPrefix(p, "/pty/"), r.Method == http.MethodPost && p == "/api/restart":
+	case strings.HasPrefix(p, "/pty/"), (r.Method == http.MethodPost || r.Method == http.MethodDelete) && p == "/api/restart":
 		// /api/restart only re-execs the collector and resumes the claudes it
-		// hosts — what DELETE /pty + /pty/start could do one by one.
+		// hosts — what DELETE /pty + /pty/start could do one by one; a
+		// scheduled one ({"when":"idle"}) waits for them to be idle, DELETE
+		// cancels that.
 		if !cfg.AttachEnabled {
 			return false, "attach is OFF on this device"
 		}

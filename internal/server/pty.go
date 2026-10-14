@@ -560,7 +560,7 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Query().Get("resume") == "1" {
-		if n, err := s.saveResumeList(r); err != nil {
+		if n, err := s.saveResumeList(r.Context()); err != nil {
 			log.Printf("shutdown: save resume list: %v", err)
 		} else {
 			log.Printf("shutdown: %d hosted sessions saved for resume", n)

@@ -130,6 +130,7 @@ spawns a collector — everything goes over HTTP.`,
 	root.AddCommand(hubCmd())
 	root.AddCommand(webCmd())
 	root.AddCommand(updateCmd(version))
+	root.AddCommand(restartCmd(rf))
 	root.AddCommand(mcpCmd(rf, version))
 	return root
 }
@@ -432,6 +433,11 @@ too. Set it with:
 				fmt.Println()
 				fmt.Printf("--- release notes for %s ---\n", res.NewVersion)
 				fmt.Println(notes)
+			}
+			if pingServer(fmt.Sprintf("%s:%d", paths.DefaultHost, paths.DefaultPort)) {
+				fmt.Println()
+				fmt.Println("ccdash: the running collector still runs the old version. `ccdash restart` restarts it")
+				fmt.Println("        once no hosted session is busy (they are all resumed).")
 			}
 			return nil
 		},

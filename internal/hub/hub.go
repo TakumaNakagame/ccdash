@@ -37,6 +37,7 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"github.com/takumanakagame/ccmanage/internal/buildinfo"
+	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/tunnel"
 )
 
@@ -443,6 +444,9 @@ type deviceView struct {
 	Online bool       `json:"online"`
 	Since  *time.Time `json:"since,omitempty"`
 	Remote string     `json:"remote,omitempty"`
+	// Restart is the device's scheduled collector restart, while one is
+	// pending or just ended without running (the portal / app warn).
+	Restart *model.RestartState `json:"restart,omitempty"`
 }
 
 func (h *Hub) handleListDevices(w http.ResponseWriter, r *http.Request) {
@@ -460,6 +464,9 @@ func (h *Hub) handleListDevices(w http.ResponseWriter, r *http.Request) {
 			since := dc.since
 			v.Since = &since
 			v.Remote = dc.remote
+			if rs := h.snapshots[d.ID].Restart; rs != nil && (rs.Pending || rs.Last != "") {
+				v.Restart = rs
+			}
 		}
 		out = append(out, v)
 	}

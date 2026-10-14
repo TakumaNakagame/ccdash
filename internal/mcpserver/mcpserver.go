@@ -51,6 +51,9 @@ first prompt); the operator sees and drives it in ccdash.
 stop_session ends the claude process of a session ccdash hosts (one at a time; whatever it is
 doing is cut off, the transcript stays) and resume_session brings a stopped session back with
 claude --resume. Stop a session only when the operator asked for it; never stop your own.
+schedule_restart restarts the ccdash collector once no hosted session is busy (each is then
+stopped and resumed; nothing mid-turn is cut off); use it only when the operator asked, e.g.
+after a ccdash update, and tell them. overview shows a pending one as restart_pending.
 When this machine is joined to a ccdash hub (or runs the local portal, ccdash web), each
 session carries "url": a link that opens that session's chat in the portal (browser or
 installed app). Put it next to a session
@@ -271,6 +274,18 @@ var writeTools = []map[string]any{
 		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false},
 	},
 	{
+		"name": "schedule_restart",
+		"description": "Schedule a restart of the ccdash collector (e.g. to load an updated ccdash) for when no session it hosts is busy — working, holding an approval or a question, or waiting on something in the background. " +
+			"Then every hosted session is stopped and resumed with claude --resume (conversations are kept; an unregistered fresh claude with no prompt yet is dropped), and ccdash is unreachable for a few seconds. " +
+			"Nothing is cut off mid-turn: it keeps waiting while anything is busy, and gives up after timeout_minutes (default 120). The operator sees a warning in ccdash meanwhile and can cancel it. " +
+			"Your own session counts as busy until your turn ends, so the restart (and your resume) comes after your final message. cancel: true drops a scheduled restart. Use it only when the operator asked for a restart.",
+		"inputSchema": schema(map[string]any{
+			"cancel":          map[string]any{"type": "boolean", "description": "cancel the scheduled restart instead"},
+			"timeout_minutes": map[string]any{"type": "integer", "description": "give up after this many minutes of waiting (default 120, max 1440)"},
+		}),
+		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true},
+	},
+	{
 		"name":        "set_project",
 		"description": "Put sessions into a project (a new name creates the project with its own color), or take them out with an empty project.",
 		"inputSchema": required(map[string]any{
@@ -463,6 +478,8 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		Status          string   `json:"status"`
 		Note            string   `json:"note"`
 		Force           bool     `json:"force"`
+		Cancel          bool     `json:"cancel"`
+		TimeoutMinutes  int      `json:"timeout_minutes"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -487,6 +504,8 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		v, err = s.stopSession(ctx, args.Session, args.Force)
 	case "resume_session":
 		v, err = s.resumeSession(ctx, args.Session, args.Prompt, args.PermissionMode)
+	case "schedule_restart":
+		v, err = s.scheduleRestart(ctx, args.Cancel, args.TimeoutMinutes)
 	case "set_project":
 		v, err = s.setProject(ctx, args.Sessions, args.Project)
 	case "rename_project":
@@ -660,6 +679,9 @@ func (s *Server) overview(ctx context.Context) (any, error) {
 	if ws, err := s.st.WaitingSpawns(ctx); err == nil && len(ws) > 0 {
 		out["new_sessions_waiting"] = ws
 		out["new_sessions_waiting_note"] = "claudes started by ccdash that stopped at a dialog (e.g. Claude Code's folder-trust question) before they have a session; the operator answers it in ccdash (TUI row / portal 起動中)"
+	}
+	if rs, err := s.st.RestartStatus(ctx); err == nil && rs.Pending {
+		out["restart_pending"] = restartView(rs)
 	}
 	if u, err := s.st.UsageSummary(ctx, 1); err == nil {
 		out["today_usage_estimate"] = map[string]any{
@@ -1266,4 +1288,51 @@ func (s *Server) resumeSession(ctx context.Context, ref, prompt, mode string) (a
 		out["unarchived"] = true
 	}
 	return out, nil
+}
+
+// restartView is a scheduled restart as the tools report it.
+func restartView(rs model.RestartState) map[string]any {
+	waiting := make([]string, len(rs.Waiting))
+	for i, b := range rs.Waiting {
+		ref := b.SessionID
+		if b.Num > 0 {
+			ref = fmt.Sprintf("#%d", b.Num)
+		}
+		waiting[i] = ref + " " + b.Why
+	}
+	out := map[string]any{
+		"pending":         rs.Pending,
+		"waiting_for":     waiting,
+		"hosted_sessions": rs.Hosted,
+	}
+	if rs.Pending {
+		out["since"] = rs.Since.Format(time.RFC3339)
+		out["gives_up_at"] = rs.Deadline.Format(time.RFC3339)
+		out["note"] = "the collector restarts once nothing in waiting_for is busy; every hosted session is then stopped and resumed"
+	}
+	if rs.Last != "" {
+		out["last"] = rs.Last
+	}
+	return out
+}
+
+func (s *Server) scheduleRestart(ctx context.Context, cancel bool, minutes int) (any, error) {
+	if cancel {
+		rs, err := s.st.CancelRestart(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("cancel the restart (is the ccdash collector running?): %w", err)
+		}
+		return restartView(rs), nil
+	}
+	if err := s.attachOn(ctx, "restarting the collector"); err != nil {
+		return nil, err
+	}
+	if minutes < 0 || minutes > 1440 {
+		return nil, fmt.Errorf("timeout_minutes must be 1..1440")
+	}
+	rs, err := s.st.ScheduleRestart(ctx, "mcp", time.Duration(minutes)*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("schedule the restart (is the ccdash collector running? it must run as `ccdash server` to restart itself): %w", err)
+	}
+	return restartView(rs), nil
 }

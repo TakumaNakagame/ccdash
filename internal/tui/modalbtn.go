@@ -77,14 +77,24 @@ var modalButtonKeys = []string{"y", "n"}
 // the window ignores. Arrows / hjkl / tab move the focus; enter and space
 // press the focused button; esc is "n".
 func (m *model) resolveModalKey(msg tea.KeyPressMsg) string {
-	n := len(modalButtonKeys)
+	return m.resolveModalKeyOf(msg, modalButtonKeys)
+}
+
+// resolveModalKeyOf is resolveModalKey for a window whose buttons are keys
+// (each pressed by its own letter; esc is always "n").
+func (m *model) resolveModalKeyOf(msg tea.KeyPressMsg, keys []string) string {
+	n := len(keys)
+	k := strings.ToLower(msg.String())
+	for _, b := range keys {
+		if k == b {
+			return b
+		}
+	}
 	switch msg.String() {
-	case "y", "Y":
-		return "y"
-	case "n", "N", "esc":
+	case "esc":
 		return "n"
 	case "enter", "space":
-		return modalButtonKeys[clamp(m.modalFocus, 0, n-1)]
+		return keys[clamp(m.modalFocus, 0, n-1)]
 	case "left", "h", "up", "k", "shift+tab":
 		m.modalFocus = (m.modalFocus - 1 + n) % n
 	case "right", "l", "down", "j", "tab":
