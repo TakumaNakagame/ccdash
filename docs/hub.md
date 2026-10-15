@@ -154,6 +154,30 @@ ccdash hub serve --listen :8080 --public-url https://ccdash.example.net \
   forward to it on the cluster port (keep that port off the ingress).
   `$POD_IP` (downward API) tells a replica which address is its own.
 
+## Tracing (OpenTelemetry)
+
+The hub and the collector (`ccdash server`, `ccdash web`) send OTLP/HTTP
+traces when the standard environment names a receiver; without it they
+create no TracerProvider and read or write no trace headers:
+
+```
+OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy-otlp.tracing.svc:4318   # or …_TRACES_ENDPOINT (full URL, /v1/traces)
+OTEL_SERVICE_NAME=ccdash-hub          # default: ccdash-hub / ccdash-collector
+OTEL_TRACES_SAMPLER=parentbased_traceratio OTEL_TRACES_SAMPLER_ARG=0.2   # optional; default parent-based always-on
+```
+
+Only OTLP/HTTP is sent (`OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is logged and
+ignored); `OTEL_SDK_DISABLED=true` turns it off again. The hub joins an
+incoming `traceparent` (from an ingress that traces) and passes it through
+the tunnel, so browser → hub → device collector is one trace. Polling and
+streams get no span — every GET except login, `/s/<id>`, git diff / file
+and usage, plus statusline, per-tool hooks, `seen` and `resize`
+(`internal/tracing.Traced`). Session starts (`pty.start`), the post-restart
+resume, restarts and title generation have their own spans. The hosted
+claudes inherit the collector's environment, OTEL variables included;
+Claude Code only exports its own telemetry with
+`CLAUDE_CODE_ENABLE_TELEMETRY=1`.
+
 ## Local portal (`ccdash web`)
 
 The same portal for **this machine only**, with no hub server: one

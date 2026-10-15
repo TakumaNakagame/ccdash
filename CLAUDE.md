@@ -65,6 +65,7 @@ internal/db/                    SQLite layer (sessions / events / approvals / se
 internal/store/                 Store seam between TUI/CLI and data: Local (*db.DB + files + title generation) / Remote (HTTP client for -r remote mode)
 internal/clientcfg/             client-side remote config (~/.config/ccdash/config.json) read by -r, written by `ccdash remote set`
 internal/hub/                   `ccdash hub serve`: OIDC login, device registry (own hub.sqlite, or a k8s Secret: k8sstore.go), replica forwarding (cluster.go), tunnel endpoint, device proxy, browser⇄pty-raw WebSocket bridge; web/ = embedded vanilla-JS SPA (chat view + xterm.js; libraries vendored in web/vendor/); local.go = `ccdash web` mode
+internal/tracing/               OpenTelemetry: on only with OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT; otelhttp Handler / Transport + Span; Traced = which requests get a span (never polling GETs)
 internal/hubcfg/                device-side join state ($XDG_STATE_HOME/ccdash/hub.json, 0600: hub url + device token)
 internal/tunnel/                device ⇄ hub tunnel: WebSocket (coder/websocket) + yamux, hub = yamux client
 internal/discovery/             scans ~/.claude/projects/*.jsonl, extracts cwd / first user prompt

@@ -301,7 +301,7 @@ func newWatchState() *watchState {
 
 // watchDevice polls one connected device until ctx ends (the tunnel closed).
 func (h *Hub) watchDevice(ctx context.Context, d Device, dc *deviceConn) {
-	client := &http.Client{Transport: dc.transport, Timeout: 10 * time.Second}
+	client := &http.Client{Transport: dc.rt, Timeout: 10 * time.Second}
 	st := newWatchState()
 	t := time.NewTicker(watchInterval)
 	defer t.Stop()

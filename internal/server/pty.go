@@ -15,11 +15,13 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/takumanakagame/ccmanage/internal/attach"
 	"github.com/takumanakagame/ccmanage/internal/claudecfg"
 	"github.com/takumanakagame/ccmanage/internal/procmap"
 	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/takumanakagame/ccmanage/internal/tracing"
 )
 
 // newPTYCommand builds the child for POST /pty/start. A variable so tests
@@ -117,7 +119,7 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	key, tag, code, err := s.startPTY(req)
+	key, tag, code, err := s.startPTY(r.Context(), req)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
@@ -133,7 +135,17 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 // startPTY spawns claude in a new PTY (see handlePTYStart). It returns the
 // PTY key and hook tag — tag 0 when an alive entry for req.SessionID
 // already existed — or an HTTP status and error.
-func (s *Server) startPTY(req ptyStartReq) (string, int, int, error) {
+func (s *Server) startPTY(ctx context.Context, req ptyStartReq) (string, int, int, error) {
+	_, end := tracing.Span(ctx, "pty.start",
+		attribute.Bool("ccdash.resume", req.ResumeID != ""),
+		attribute.String("ccdash.permission_mode", req.PermissionMode),
+		attribute.Bool("ccdash.project", req.Project != ""))
+	key, tag, code, err := s.spawnPTY(req)
+	end(err)
+	return key, tag, code, err
+}
+
+func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 	switch req.PermissionMode {
 	case "", "manual", "acceptEdits", "auto", "plan":
 	default:

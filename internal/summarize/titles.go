@@ -14,12 +14,14 @@ import (
 	"time"
 
 	"github.com/mattn/go-runewidth"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/takumanakagame/ccmanage/internal/attach"
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/redact"
 	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/takumanakagame/ccmanage/internal/tracing"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
@@ -94,9 +96,12 @@ func KickoffTitles(ctx context.Context, d *db.DB, sessionIDs []string) error {
 		timeoutSec = 180
 	}
 	go func() {
-		bg, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+		// A child of the request's span (if any) that outlives it.
+		bg, cancel := context.WithTimeout(tracing.Detach(ctx), time.Duration(timeoutSec)*time.Second)
 		defer cancel()
+		bg, end := tracing.Span(bg, "titles.generate", attribute.Int("ccdash.sessions", len(batch)))
 		titles, err := RunTitles(bg, batch)
+		end(err)
 		if err != nil {
 			log.Printf("titles: %v", err)
 		}

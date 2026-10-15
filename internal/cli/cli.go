@@ -510,6 +510,8 @@ talk to loopback, remote clients use the --listen address.`,
 			defer d.Close()
 			ctx, cancel := signalContext(cmd.Context())
 			defer cancel()
+			stopTracing := startTracing(ctx, "ccdash-collector")
+			defer stopTracing()
 			s := server.New(d, bindAddr)
 			s.CanRestart = true
 			// server.pid: lets a TUI stop this server if it ever stops
@@ -521,6 +523,7 @@ talk to loopback, remote clients use the --listen address.`,
 				// PTYs closed; come back as the (possibly updated) binary,
 				// which resumes them.
 				_ = d.Close()
+				stopTracing()
 				return reexecSelf()
 			}
 			removeServerPID(os.Getpid())

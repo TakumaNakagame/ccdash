@@ -11,6 +11,7 @@ import (
 
 	"github.com/hashicorp/yamux"
 
+	"github.com/takumanakagame/ccmanage/internal/tracing"
 	"github.com/takumanakagame/ccmanage/internal/tunnel"
 )
 
@@ -36,7 +37,7 @@ func (s *Server) ServeLocalPortal(ctx context.Context, conn net.Conn) error {
 		_ = conn.Close()
 		return err
 	}
-	hs := &http.Server{Handler: s.tunnelHandler(true), ReadHeaderTimeout: 10 * time.Second}
+	hs := &http.Server{Handler: tracing.Handler(s.tunnelHandler(true)), ReadHeaderTimeout: 10 * time.Second}
 	stop := context.AfterFunc(ctx, func() { _ = sess.Close() })
 	defer stop()
 	_ = hs.Serve(sess) // returns once the session closes

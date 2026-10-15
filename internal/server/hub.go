@@ -24,6 +24,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/settings"
 	"github.com/takumanakagame/ccmanage/internal/skills"
+	"github.com/takumanakagame/ccmanage/internal/tracing"
 	"github.com/takumanakagame/ccmanage/internal/tunnel"
 )
 
@@ -102,7 +103,7 @@ func (s *Server) hubServeOnce(ctx context.Context, cfg hubcfg.Config) error {
 			log.Printf("hub: save identity: %v", err)
 		}
 	}
-	hs := &http.Server{Handler: s.hubHandler(), ReadHeaderTimeout: 10 * time.Second}
+	hs := &http.Server{Handler: tracing.Handler(s.hubHandler()), ReadHeaderTimeout: 10 * time.Second}
 	stop := make(chan struct{})
 	go s.hubWatch(ctx, sess, cfg, stop)
 	_ = hs.Serve(sess) // returns once the session closes

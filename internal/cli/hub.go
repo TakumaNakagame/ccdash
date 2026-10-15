@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -20,6 +22,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/hubcfg"
 	"github.com/takumanakagame/ccmanage/internal/paths"
 	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/takumanakagame/ccmanage/internal/tracing"
 	"github.com/takumanakagame/ccmanage/internal/tunnel"
 )
 
@@ -147,6 +150,8 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 			}
 			ctx, cancel := signalContext(cmd.Context())
 			defer cancel()
+			stopTracing := startTracing(ctx, "ccdash-hub")
+			defer stopTracing()
 			h, err := hub.New(ctx, hub.Config{
 				StateSecret: envOr(stateSecret, "CCDASH_HUB_STATE_SECRET"),
 				Cluster:     cl,
@@ -316,4 +321,16 @@ func hubStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// startTracing turns on OpenTelemetry tracing when the OTLP environment
+// asks for it (internal/tracing); a setup error is logged, never fatal.
+func startTracing(ctx context.Context, service string) func() {
+	stop, err := tracing.Start(ctx, service)
+	if err != nil {
+		log.Printf("%v (tracing stays off)", err)
+		return func() {}
+	}
+	var once sync.Once
+	return func() { once.Do(stop) }
 }

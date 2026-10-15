@@ -31,6 +31,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/redact"
 	"github.com/takumanakagame/ccmanage/internal/settings"
 	"github.com/takumanakagame/ccmanage/internal/summarize"
+	"github.com/takumanakagame/ccmanage/internal/tracing"
 	"github.com/takumanakagame/ccmanage/internal/transcript"
 )
 
@@ -258,7 +259,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		lns = append(lns, ln)
 	}
 	s.srv = &http.Server{
-		Handler:           s.mux,
+		Handler:           tracing.Handler(s.mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	for _, ln := range lns {
