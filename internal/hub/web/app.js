@@ -764,6 +764,20 @@ function laterFirst(rows) {
   const later = rows.filter((s) => s.later).sort((a, b) => t(b.later_at) - t(a.later_at));
   return later.length ? [...later, ...rows.filter((s) => !s.later)] : rows;
 }
+// newFirst lifts unread sessions into a 新着 block at the very top, the one
+// that moved last first — on a phone the question is "what moved?", and the
+// answer shouldn't be scattered over date and project blocks.
+function newFirst(rows) {
+  const t = (s) => new Date(s.last_activity || s.last_seen || 0).getTime();
+  const fresh = rows.filter((s) => s.unseen).sort((a, b) => t(b) - t(a));
+  return fresh.length ? [...fresh, ...rows.filter((s) => !s.unseen)] : rows;
+}
+// The 新着 block is on by default where the list is a phone's whole screen.
+const NEW_FIRST_KEY = "ccdash.newFirst";
+function newFirstOn() {
+  try { const v = localStorage.getItem(NEW_FIRST_KEY); if (v) return v === "1"; } catch {}
+  return matchMedia("(pointer: coarse)").matches;
+}
 function projectsFirst(rows) {
   const t = (v) => (v ? new Date(v).getTime() : 0);
   if (!rows.some((s) => s.project)) return rows;
@@ -957,6 +971,14 @@ async function devicePage(opts = {}) {
   const more = h("div");
   const filter = h("input", { type: "search", placeholder: "タイトル・パス・#番号・ホストで絞り込み", "aria-label": "絞り込み" });
   let showArchived = false;
+  let lift = newFirstOn();
+  const liftBtn = h("button", { class: "btn small" + (lift ? " on" : ""), title: "未読（NEW）のセッションを一覧の先頭にまとめる",
+    onclick: () => {
+      lift = !lift;
+      try { localStorage.setItem(NEW_FIRST_KEY, lift ? "1" : "0"); } catch {}
+      liftBtn.classList.toggle("on", lift);
+      render();
+    } }, "新着を上に");
   const archBtn = h("button", { class: "btn small", onclick: () => { showArchived = !showArchived; selected.clear(); paintSel(); archBtn.classList.toggle("on", showArchived); archBtn.textContent = showArchived ? "アーカイブ表示中" : "アーカイブ"; refreshNow(); } }, "アーカイブ");
   const status = h("div", { class: "muted small" });
   const settingsBox = h("details", { class: "settings-box", hidden: !one }, h("summary", {}, "端末の設定（閲覧のみ）"));
@@ -1080,7 +1102,7 @@ async function devicePage(opts = {}) {
       h("button", { class: "btn primary", onclick: () => newSession(one || "") }, icon("plus"), "新規セッション")),
     hostChips, status, usageCard, approvals, spawns,
     tabs,
-    h("div", { class: "row", style: "margin-bottom:8px" }, h("label", { class: "search grow" }, icon("search"), filter), archBtn),
+    h("div", { class: "row", style: "margin-bottom:8px" }, h("label", { class: "search grow" }, icon("search"), filter), liftBtn, archBtn),
     selBar, list, more, settingsBox));
 
   // Host chips: すべて + every registered host (offline ones dimmed).
@@ -1111,11 +1133,14 @@ async function devicePage(opts = {}) {
     tabs.replaceChildren(...groups.map((g) => {
       const n = g ? sessions.filter((s) => groupOf(s) === g).length : sessions.length;
       const active = (s) => s.status === "active" || s.status === "idle";
-      const running = (g ? sessions.filter((s) => groupOf(s) === g) : sessions).some(active);
+      const mine = g ? sessions.filter((s) => groupOf(s) === g) : sessions;
+      const running = mine.some(active);
+      const fresh = mine.filter((s) => s.unseen).length;
       return h("button", {
         class: "tab" + (g === tab ? " on" : ""),
         onclick: () => { tab = g; limit = 100; saveTab(one || ALL_HOSTS, g); render(); },
-      }, running ? h("span", { class: "dot on" }) : null, g || "最新", h("span", { class: "count" }, n));
+      }, running ? h("span", { class: "dot on" }) : null, g || "最新", h("span", { class: "count" }, n),
+        fresh ? h("span", { class: "count new", title: `NEW ${fresh} 件` }, fresh) : null);
     }));
     // Bring the active tab into view only when it changes, and only by
     // scrolling the strip sideways: scrollIntoView also scrolls the page,
@@ -1130,16 +1155,20 @@ async function devicePage(opts = {}) {
       .filter((s) => !tab || groupOf(s) === tab)
       .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${sref(s, s._dev)} ${groupOf(s)} ${s.project || ""} ${s._devName}`.toLowerCase().includes(q))
       .sort((a, b) => (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (new Date(b.last_seen) - new Date(a.last_seen)));
-    const ordered = laterFirst(projectsFirst(rows));
+    const sorted = laterFirst(projectsFirst(rows));
+    const ordered = lift && !showArchived ? newFirst(sorted) : sorted;
+    const freshRows = ordered.filter((s) => s.unseen);
     const out = [];
     let bk = null;
     visible = ordered.slice(0, limit).map(sessKey);
     for (const s of ordered.slice(0, limit)) {
       // Projects are per host: two hosts' "web" are two blocks.
-      const b = s.later ? "\0later" : s.project ? "\0" + s._dev + "\0" + s.project : dateBucket(s);
+      const b = lift && s.unseen ? "\0new" : s.later ? "\0later" : s.project ? "\0" + s._dev + "\0" + s.project : dateBucket(s);
       if (b !== bk) {
         bk = b;
-        out.push(s.later ? h("div", { class: "bucket later" }, icon("clock"), "あとで見る")
+        out.push(b === "\0new" ? h("div", { class: "bucket new" }, icon("bell"), `新着 ${freshRows.length}`, h("span", { class: "grow" }),
+          h("button", { type: "button", class: "btn small", title: "新着をすべて既読にする", onclick: (e) => { e.stopPropagation(); markAllSeen(freshRows); } }, "すべて既読"))
+          : s.later ? h("div", { class: "bucket later" }, icon("clock"), "あとで見る")
           : s.project
           ? projectHeader(multi ? `${s.project} · ${s._devName}` : s.project, projectColorOf(s.project, s.project_color),
             ordered.filter((x) => x.project === s.project && x._dev === s._dev),
@@ -1176,6 +1205,11 @@ async function devicePage(opts = {}) {
           p.prompt ? h("span", { class: "chip pend" }, "要対応") : h("span", { class: "chip live" }, "live")))))] : []));
   };
   filter.addEventListener("input", render);
+  const markAllSeen = async (rows) => {
+    await Promise.all(rows.map((s) => dev(s._dev).post(`/api/sessions/${encodeURIComponent(s.session_id)}/seen`, {}).catch(() => {})));
+    toast(`${rows.length} 件を既読にしました`);
+    refreshNow();
+  };
 
   // One box per host for approvals, so each keeps its own redraw signature.
   const apBoxes = new Map();
@@ -1424,12 +1458,26 @@ function recentReply(s) {
   return !!s && !s.unseen && s.status !== "active" && s.attention !== "needs_you" && !s.pending_count &&
     !!s.last_activity && Date.now() - new Date(s.last_activity).getTime() < RECENT_REPLY_MS;
 }
-// freshChip: NEW (unread progress) or "返信 3分前" (recently replied, seen).
+// freshChip: NEW (unread progress, with how long ago it moved) or
+// "返信 3分前" (recently replied, seen).
 function freshChip(s) {
-  if (s?.unseen) return h("span", { class: "chip new", title: "最後に見た後に進捗あり" }, "NEW");
+  if (s?.unseen) return h("span", { class: "chip new", title: "最後に見た後に進捗あり" }, "NEW" + (s.last_activity ? " · " + rel(s.last_activity) : ""));
   if (recentReply(s)) return h("span", { class: "chip recent", title: "最近返信あり（既読）" }, "返信 " + rel(s.last_activity));
   return null;
 }
+
+// justNew: a session that turned unread a moment ago flashes once (its row
+// and its grid tile): this browser saw it go unread just now, and it moved
+// within the last minute — so opening a page doesn't light up everything
+// that has been unread for an hour.
+const newSince = new Map(); // "dev\tsid" → when this browser first saw it unread
+function justNew(dev, s) {
+  const k = dev + "\t" + s?.session_id;
+  if (!s?.unseen) { newSince.delete(k); return false; }
+  if (!newSince.has(k)) newSince.set(k, Date.now() - new Date(s.last_activity || 0).getTime() < 60000 ? Date.now() : 0);
+  return Date.now() - newSince.get(k) < NEW_FLASH_MS;
+}
+const NEW_FLASH_MS = 2400;
 
 function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, hostName = "") {
   const chips = [];
@@ -1464,7 +1512,8 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, host
     check.addEventListener("change", () => sel.toggle(sk, check.checked));
   }
   const proj = s.project ? `;--proj:${projectColorOf(s.project, s.project_color)}` : "";
-  return h("div", { class: "item srow" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : "") + (s.status === "active" ? " working" : ""), "data-sid": s.session_id, "data-dev": id,
+  return h("div", { class: "item srow" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : "") + (s.status === "active" ? " working" : "") +
+    (s.unseen ? " unseen" : "") + (justNew(id, s) ? " just-new" : ""), "data-sid": s.session_id, "data-dev": id,
     style: `--sess:${sessionColorOf(s)}${proj}`, onclick: (e) => {
     if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
     if (e.currentTarget.dataset.longpressed) { delete e.currentTarget.dataset.longpressed; return; }
@@ -2560,7 +2609,6 @@ function gridState(s) {
 function layoutGrid(grid, n) {
   if (!n) return;
   for (const t of grid.children) t.style.gridColumn = "";
-  if (grid.classList.contains("free")) { grid.style.gridTemplateColumns = ""; grid.style.gridAutoRows = ""; return; }
   if (grid.classList.contains("has-max")) {
     grid.style.gridTemplateColumns = "minmax(0, 1fr)";
     grid.style.gridAutoRows = `${Math.max(200, grid.clientHeight)}px`;
@@ -2599,6 +2647,71 @@ function layoutGrid(grid, n) {
   grid.style.gridAutoRows = `${Math.floor(best.h)}px`;
 }
 
+// ---- grid: マス目 (snap) layout helpers ----
+const SNAP_GAP = 12, SNAP_MIN_CELL = 300;
+// Per browser: the group order and, per column count, each tile's cells.
+const gridSnapStore = {
+  get() {
+    try {
+      const v = JSON.parse(localStorage.getItem("ccdash.gridSnap") || "null");
+      if (v && Array.isArray(v.order) && v.layouts && typeof v.layouts === "object") return v;
+    } catch {}
+    return { order: [], layouts: {} };
+  },
+  set(v) { try { localStorage.setItem("ccdash.gridSnap", JSON.stringify(v)); } catch {} },
+};
+// groupKeyOf: the group a grid tile belongs to — its project (projects are
+// per host), else the session list's group (repo / directory).
+function groupKeyOf(c) {
+  const s = c.session;
+  return s.project ? `p\t${c.device_id}\t${s.project}` : `g\t${groupOf(s)}`;
+}
+function groupLabelOf(c, all) {
+  const s = c.session;
+  if (!s.project) return groupOf(s) || "その他";
+  const hosts = new Set((all || []).map((x) => x.device_id));
+  return hosts.size > 1 ? `${s.project} · ${c.device_name}` : s.project;
+}
+const cellsOverlap = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+// firstFree: the first 1×1 cell no rect covers — row by row within the
+// rects' current width and height, else in the columns right of them, else
+// at the start of a new row.
+function firstFree(rects, cols) {
+  const width = Math.min(cols, Math.max(1, ...rects.map((r) => r.x + r.w)));
+  const height = Math.max(0, ...rects.map((r) => r.y + r.h));
+  const free = (x, y) => !rects.some((r) => cellsOverlap(r, { x, y, w: 1, h: 1 }));
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) if (free(x, y)) return { x, y, w: 1, h: 1 };
+  for (let x = width; x < cols; x++) for (let y = 0; y < Math.max(1, height); y++) if (free(x, y)) return { x, y, w: 1, h: 1 };
+  return { x: 0, y: height, w: 1, h: 1 };
+}
+// unoverlap returns the rects that must move down so that none overlap,
+// keeping the upper-left ones (and first, if given) where they are.
+function unoverlap(rects, first = null) {
+  const out = {}, placed = [];
+  const order = Object.entries(rects).sort((a, b) => (b[0] === first) - (a[0] === first) || a[1].y - b[1].y || a[1].x - b[1].x);
+  for (const [k, r0] of order) {
+    const r = { ...r0 };
+    while (placed.some((p) => cellsOverlap(p, r))) r.y++;
+    placed.push(r);
+    if (r.y !== r0.y) out[k] = r;
+  }
+  return out;
+}
+// settleCells puts tile k at target (it was at from) among its peers and
+// returns every rect that changed: one peer of the same size under it swaps
+// into k's old place; otherwise peers in the way are pushed down, top to
+// bottom, until nothing overlaps.
+function settleCells(peers, k, from, target) {
+  const out = { [k]: target };
+  const hit = Object.entries(peers).filter(([, r]) => cellsOverlap(r, target));
+  if (hit.length === 1 && hit[0][1].w === target.w && hit[0][1].h === target.h && (from.w === target.w && from.h === target.h)) {
+    const swapped = { ...hit[0][1], x: from.x, y: from.y };
+    if (!Object.entries(peers).some(([pk, r]) => pk !== hit[0][0] && cellsOverlap(r, swapped))) { out[hit[0][0]] = swapped; return out; }
+  }
+  // The moved tile goes first so it keeps its place; the rest yield.
+  return Object.assign(out, unoverlap({ ...peers, [k]: target }, k));
+}
+
 function gridPage() {
   const mount = mainMount;
   const tiles = new Map();
@@ -2623,84 +2736,232 @@ function gridPage() {
   // closing or adding a tile means while the grid is automatic.
   const pinAuto = (except) => { if (auto) items.filter((k) => k !== except).forEach((k) => gridList.put(k, true)); };
   const grid = h("div", { class: "grid" });
-  const relayout = () => { layoutGrid(grid, grid.childElementCount); if (free) placeFree(); };
-  // Free placement: tiles become windows you drag by the header and resize
-  // from the corner. Rects are kept as fractions of the grid area (so they
-  // follow window resizes) in localStorage; a tile without one starts where
-  // the auto layout would put it.
-  const store = { get() { try { return JSON.parse(localStorage.getItem("ccdash.gridRects") || "{}"); } catch { return {}; } },
-    set(v) { try { localStorage.setItem("ccdash.gridRects", JSON.stringify(v)); } catch {} } };
-  let free = false;
-  try { free = localStorage.getItem("ccdash.gridMode") === "free"; } catch {}
-  let rects = store.get(), zTop = 10;
-  const autoRect = (i, n) => {
-    // Where the auto layout would put tile i, as fractions.
-    const W = grid.clientWidth || 1, H = grid.clientHeight || 1;
-    const cols = Math.max(1, Math.round(Math.sqrt(n * (W / H) / 1.4))) , rows = Math.ceil(n / cols);
-    const c = i % cols, r = Math.floor(i / cols);
-    return { x: c / cols, y: r / rows, w: 1 / cols, h: 1 / rows };
-  };
-  const placeFree = () => {
-    const W = grid.clientWidth, H = grid.clientHeight, n = tiles.size;
-    let i = 0;
-    for (const [k, t] of tiles) {
-      const r = rects[k] || autoRect(i, n);
-      Object.assign(t.el.style, { left: r.x * W + "px", top: r.y * H + "px", width: Math.max(220, r.w * W - 8) + "px", height: Math.max(160, r.h * H - 8) + "px" });
-      i++;
+  const relayout = () => placeTiles();
+  // Two layouts. 整列: the tiles fill the screen (layoutGrid). マス目: a grid
+  // of cells the tiles snap into — 1×1 at least, any w×h — dragged by the
+  // header and resized from the corner. Either way the tiles stay with their
+  // group (groupKeyOf: project, else the list's group): in マス目 each group
+  // is a section of its own that its tiles can't leave, sections can be
+  // reordered and arranged on their own, and narrow ones sit side by side.
+  // Cells and order are per browser (screens differ), per column count.
+  let snapMode = false;
+  try { snapMode = ["snap", "free"].includes(localStorage.getItem("ccdash.gridMode")); } catch {}
+  const snap = gridSnapStore.get();
+  const saveSnap = () => gridSnapStore.set(snap);
+  const keyOfEl = (el) => [...tiles].find(([, t]) => t.el === el)?.[0];
+  const byKeyNow = () => new Map(all.map((c) => [keyOf(c), c]));
+  // groupOrder: the groups of the tiles on screen, in the operator's order
+  // (new groups go last, in tile order).
+  const groupOrder = (keys) => {
+    const byKey = byKeyNow(), seen = [];
+    for (const k of keys) { const c = byKey.get(k); if (c) { const g = groupKeyOf(c); if (!seen.includes(g)) seen.push(g); } }
+    const known = snap.order.filter((g) => seen.includes(g));
+    const order = [...known, ...seen.filter((g) => !known.includes(g))];
+    if (order.some((g, i) => snap.order[i] !== g) || snap.order.length !== order.length) {
+      // Keep groups that are off screen right now at the end, for when they come back.
+      snap.order = [...order, ...snap.order.filter((g) => !order.includes(g))];
+      saveSnap();
     }
+    return order;
   };
-  const setMode = (m) => {
-    free = m;
-    try { localStorage.setItem("ccdash.gridMode", m ? "free" : "auto"); } catch {}
-    grid.classList.toggle("free", m);
-    for (const [, t] of tiles) if (!m) Object.assign(t.el.style, { left: "", top: "", width: "", height: "", zIndex: "" });
-    modeAuto.classList.toggle("on", !m);
-    modeFree.classList.toggle("on", m);
-    resetBtn.hidden = !m;
+  // groupedItems: the tile order both layouts start from — group by group,
+  // the grid list's order inside a group.
+  const groupedItems = () => {
+    const byKey = byKeyNow(), order = groupOrder(items);
+    const gi = (k) => { const c = byKey.get(k); return c ? order.indexOf(groupKeyOf(c)) : 1e9; };
+    return items.map((k, i) => [k, i]).sort((a, b) => gi(a[0]) - gi(b[0]) || a[1] - b[1]).map(([k]) => k);
+  };
+  const metrics = () => {
+    const cs = getComputedStyle(grid);
+    const W = grid.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 1, H = grid.clientHeight;
+    const cols = W < 700 ? 1 : Math.max(2, Math.min(8, Math.floor((W + SNAP_GAP) / (SNAP_MIN_CELL + SNAP_GAP))));
+    const cw = (W - SNAP_GAP * (cols - 1)) / cols;
+    const ch = W < 700 ? 320 : Math.max(200, Math.round(Math.min(cw * 0.8, (H - SNAP_GAP * 2 - 34) / 3)));
+    return { cols, cw, ch };
+  };
+  const sections = new Map(); // group key → { el, head, body }
+  const section = (g, c) => {
+    let sec = sections.get(g);
+    if (!sec) {
+      const body = h("div", { class: "gsec-body" });
+      const head = h("div", { class: "gsec-head" });
+      sec = { el: h("div", { class: "gsec", "data-group": g }, head, body), head, body };
+      sections.set(g, sec);
+    }
+    const color = c.session.project ? projectColorOf(c.session.project, c.session.project_color) : "";
+    sec.el.style.setProperty("--proj", color || "var(--line)");
+    sec.label = groupLabelOf(c, all);
+    return sec;
+  };
+  const paintHead = (sec, g, n, idx, total) => {
+    const sig = `${sec.label}|${n}|${idx}|${total}`;
+    if (sec.head.dataset.sig === sig) return;
+    sec.head.dataset.sig = sig;
+    const move = (d) => { const o = [...snap.order], i = o.indexOf(g), j = i + d; if (i < 0 || j < 0 || j >= o.length) return; [o[i], o[j]] = [o[j], o[i]]; snap.order = o; saveSnap(); relayout(); };
+    sec.head.replaceChildren(h("span", { class: "proj-dot" }), h("b", {}, sec.label), h("span", { class: "muted small" }, `${n}`), h("span", { class: "grow" }),
+      h("button", { type: "button", class: "gsec-btn", title: "このグループを前へ", "aria-label": "このグループを前へ", disabled: idx === 0, onclick: () => move(-1) }, icon("up")),
+      h("button", { type: "button", class: "gsec-btn", title: "このグループを後ろへ", "aria-label": "このグループを後ろへ", disabled: idx === total - 1, onclick: () => move(1) }, icon("down")),
+      h("button", { type: "button", class: "gsec-btn", title: "このグループのタイルを並べ直す", "aria-label": "このグループのタイルを並べ直す", onclick: () => arrangeGroup(g) }, icon("grid")));
+  };
+  // The cell layout for this column count; one made for another count is
+  // carried over (clamped) until the operator changes something here.
+  const cellsFor = (cols) => {
+    if (snap.layouts[cols]) return snap.layouts[cols];
+    const counts = Object.keys(snap.layouts).map(Number).sort((a, b) => Math.abs(a - cols) - Math.abs(b - cols));
+    const from = counts.length ? snap.layouts[counts[0]] : {};
+    const out = {};
+    for (const [k, r] of Object.entries(from)) { const w = Math.min(r.w, cols); out[k] = { x: Math.min(r.x, cols - w), y: r.y, w, h: r.h }; }
+    return out;
+  };
+  let cells = {}, curCols = 0;
+  const commitCells = () => { snap.layouts[curCols] = cells; saveSnap(); };
+  const groupTiles = (g) => { const byKey = byKeyNow(); return groupedItems().filter((k) => tiles.has(k) && byKey.get(k) && groupKeyOf(byKey.get(k)) === g); };
+  // arrangeGroup packs a group's tiles row by row: 2×2 while they fit in
+  // two rows of the width, else 1×1.
+  const arrangeGroup = (g, keys = groupTiles(g)) => {
+    const n = keys.length;
+    const s = curCols >= 2 && n * 4 <= curCols * 2 * 2 && n <= 2 ? 2 : curCols >= 4 && n <= curCols / 2 ? 2 : 1;
+    const per = Math.max(1, Math.floor(curCols / s));
+    keys.forEach((k, i) => { cells[k] = { x: (i % per) * s, y: Math.floor(i / per) * s, w: s, h: s }; });
+    commitCells();
     relayout();
   };
-  const modeAuto = h("button", { class: "btn small", onclick: () => setMode(false) }, "整列");
-  const modeFree = h("button", { class: "btn small", onclick: () => setMode(true) }, "自由配置");
-  const resetBtn = h("button", { class: "btn small", title: "全部を整列の位置に戻す", onclick: () => { rects = {}; store.set(rects); relayout(); } }, "並べ直す");
-  const keyOfEl = (el) => [...tiles].find(([, t]) => t.el === el)?.[0];
-  const saveRect = (el) => {
-    const k = keyOfEl(el);
-    if (!k) return;
-    const W = grid.clientWidth, H = grid.clientHeight;
-    rects[k] = { x: el.offsetLeft / W, y: el.offsetTop / H, w: (el.offsetWidth + 8) / W, h: (el.offsetHeight + 8) / H };
-    store.set(rects);
+  const placeSnap = () => {
+    const m = metrics();
+    if (m.cols !== curCols) { curCols = m.cols; cells = cellsFor(curCols); }
+    grid.style.setProperty("--cw", m.cw + "px");
+    grid.style.setProperty("--ch", m.ch + "px");
+    const byKey = byKeyNow(), order = groupOrder(items);
+    const keys = groupedItems().filter((k) => tiles.has(k) && byKey.get(k));
+    const live = new Set();
+    let changed = false;
+    order.forEach((g, idx) => {
+      const mine = keys.filter((k) => groupKeyOf(byKey.get(k)) === g);
+      if (!mine.length) return;
+      live.add(g);
+      const sec = section(g, byKey.get(mine[0]));
+      paintHead(sec, g, mine.length, idx, order.length);
+      // A tile without cells takes the first free 1×1 within the group's
+      // width (or a new row); a group with none at all gets arranged.
+      if (mine.every((k) => !cells[k])) {
+        const n = mine.length, s = n <= 2 && m.cols >= 4 ? 2 : 1, per = Math.max(1, Math.floor(m.cols / s));
+        mine.forEach((k, i) => { cells[k] = { x: (i % per) * s, y: Math.floor(i / per) * s, w: s, h: s }; });
+        changed = true;
+      }
+      for (const k of mine) {
+        if (cells[k]) continue;
+        cells[k] = firstFree(mine.filter((x) => cells[x]).map((x) => cells[x]), m.cols);
+        changed = true;
+      }
+      // Cells carried over from another column count (or older data) may
+      // overlap: push the later ones down.
+      const fixed = unoverlap(Object.fromEntries(mine.map((k) => [k, cells[k]])));
+      for (const [k, r] of Object.entries(fixed)) { cells[k] = r; changed = true; }
+      const rects = mine.map((k) => cells[k]);
+      const wc = Math.max(1, ...rects.map((r) => r.x + r.w)), hc = Math.max(1, ...rects.map((r) => r.y + r.h));
+      sec.body.style.gridTemplateColumns = `repeat(${wc}, var(--cw))`;
+      sec.body.style.gridTemplateRows = `repeat(${hc}, var(--ch))`;
+      sec.el.style.width = `calc(${wc} * var(--cw) + ${(wc - 1) * SNAP_GAP}px)`;
+      if (grid.children[idx] !== sec.el) grid.insertBefore(sec.el, grid.children[idx] || null);
+      mine.forEach((k) => {
+        const el = tiles.get(k).el, r = cells[k];
+        el.style.gridColumn = `${r.x + 1} / span ${r.w}`;
+        el.style.gridRow = `${r.y + 1} / span ${r.h}`;
+        // Cells place it; only move a tile that is in another container
+        // (moving a node blurs the reply box you are typing in).
+        if (el.parentNode !== sec.body) sec.body.append(el);
+      });
+    });
+    for (const [g, sec] of sections) if (!live.has(g)) { sec.el.remove(); sections.delete(g); }
+    if (changed) commitCells();
   };
+  // unSnap puts the tiles back as the grid's own children (整列 / maximised).
+  const unSnap = () => {
+    for (const [, t] of tiles) { t.el.style.gridRow = ""; t.el.style.gridColumn = ""; t.el.style.transform = ""; }
+    for (const [, sec] of sections) sec.el.remove();
+    sections.clear();
+    grid.querySelectorAll(".gsec").forEach((x) => x.remove());
+  };
+  const layoutMode = () => (snapMode && !maxKey ? "snap" : "auto");
+  const setMode = (m) => {
+    snapMode = m;
+    try { localStorage.setItem("ccdash.gridMode", m ? "snap" : "auto"); } catch {}
+    modeAuto.classList.toggle("on", !m);
+    modeSnap.classList.toggle("on", m);
+    resetBtn.hidden = !m;
+    render();
+  };
+  const modeAuto = h("button", { class: "btn small", title: "タイルを画面いっぱいに自動で並べる（グループ順）", onclick: () => setMode(false) }, "整列");
+  const modeSnap = h("button", { class: "btn small", title: "マス目にはめて、動かす・大きさを変える", onclick: () => setMode(true) }, "マス目");
+  const resetBtn = h("button", { class: "btn small", title: "全グループを並べ直す", onclick: () => {
+    for (const g of groupOrder(items)) { const ks = groupTiles(g); ks.forEach((k) => delete cells[k]); }
+    commitCells();
+    relayout();
+  } }, "並べ直す");
+  // Drag (header) / resize (corner) in マス目: the tile follows the pointer,
+  // a ghost shows the cells it will take, and on release it snaps there;
+  // tiles in the way are pushed down (one of the same size swaps instead).
   grid.addEventListener("pointerdown", (e) => {
-    if (!free) return;
+    if (layoutMode() !== "snap" || e.button !== 0) return;
     const el = e.target.closest(".tile");
-    if (!el || el.classList.contains("max")) return;
-    el.style.zIndex = String(++zTop);
+    const k = el && keyOfEl(el);
+    if (!k || !cells[k]) return;
     const resizing = e.target.closest(".tile-resize");
-    const dragging = !resizing && e.target.closest(".tile-head") && !e.target.closest("a, button, input");
+    const dragging = !resizing && e.target.closest(".term-bar, .tile-head") && !e.target.closest("a, button, input, textarea, select");
     if (!resizing && !dragging) return;
     e.preventDefault();
-    const sx = e.clientX, sy = e.clientY;
-    const ox = el.offsetLeft, oy = el.offsetTop, ow = el.offsetWidth, oh = el.offsetHeight;
-    const W = grid.clientWidth, H = grid.scrollHeight;
+    const body = el.parentNode, sec = body.closest(".gsec"), g = sec?.dataset.group;
+    const m = metrics(), stepX = m.cw + SNAP_GAP, stepY = m.ch + SNAP_GAP;
+    const r0 = { ...cells[k] }, sx = e.clientX, sy = e.clientY;
+    const ghost = h("div", { class: "snap-ghost" });
+    body.append(ghost);
     grid.classList.add("moving");
+    el.classList.add("lifted");
+    let target = { ...r0 };
+    const show = () => {
+      ghost.style.gridColumn = `${target.x + 1} / span ${target.w}`;
+      ghost.style.gridRow = `${target.y + 1} / span ${target.h}`;
+      // Let the section grow while the ghost reaches past its edge.
+      const others = groupTiles(g).filter((x) => x !== k).map((x) => cells[x]);
+      const wc = Math.max(target.x + target.w, ...others.map((r) => r.x + r.w)), hc = Math.max(target.y + target.h, ...others.map((r) => r.y + r.h));
+      body.style.gridTemplateColumns = `repeat(${wc}, var(--cw))`;
+      body.style.gridTemplateRows = `repeat(${Math.max(hc, r0.y + r0.h)}, var(--ch))`;
+      sec.style.width = `calc(${wc} * var(--cw) + ${(wc - 1) * SNAP_GAP}px)`;
+    };
+    show();
     const move = (ev) => {
       const dx = ev.clientX - sx, dy = ev.clientY - sy;
       if (resizing) {
-        el.style.width = Math.min(W - ox, Math.max(220, ow + dx)) + "px";
-        el.style.height = Math.max(160, oh + dy) + "px";
+        const w = Math.max(1, Math.min(m.cols - r0.x, Math.round((r0.w * stepX + dx) / stepX)));
+        const hh = Math.max(1, Math.min(6, Math.round((r0.h * stepY + dy) / stepY)));
+        target = { ...r0, w, h: hh };
+        el.style.width = (r0.w * stepX - SNAP_GAP + dx) + "px";
+        el.style.height = (r0.h * stepY - SNAP_GAP + dy) + "px";
+        el.style.zIndex = "5";
       } else {
-        el.style.left = Math.min(Math.max(0, ox + dx), Math.max(0, W - ow)) + "px";
-        el.style.top = Math.min(Math.max(0, oy + dy), Math.max(0, H - 40)) + "px";
+        target = { ...r0, x: Math.max(0, Math.min(m.cols - r0.w, Math.round(r0.x + dx / stepX))), y: Math.max(0, Math.round(r0.y + dy / stepY)) };
+        el.style.transform = `translate(${dx}px, ${dy}px)`;
       }
+      show();
     };
     const up = () => {
-      grid.classList.remove("moving");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      saveRect(el);
+      window.removeEventListener("pointercancel", up);
+      grid.classList.remove("moving");
+      el.classList.remove("lifted");
+      ghost.remove();
+      Object.assign(el.style, { transform: "", width: "", height: "", zIndex: "" });
+      if (target.x !== r0.x || target.y !== r0.y || target.w !== r0.w || target.h !== r0.h) {
+        const peers = Object.fromEntries(groupTiles(g).filter((x) => x !== k).map((x) => [x, cells[x]]));
+        Object.assign(cells, settleCells(peers, k, r0, target));
+        commitCells();
+      }
+      relayout();
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   });
   // Double-clicking a tile's title maximizes it over the grid; again (or
   // Esc) restores. The choice survives the 4 s refresh.
@@ -2714,7 +2975,7 @@ function gridPage() {
     }
     if (!found) maxKey = null;
     grid.classList.toggle("has-max", !!maxKey);
-    relayout();
+    placeTiles();
     if (maxKey) tiles.get(maxKey)?.scrollLog?.();
   };
   grid.addEventListener("tile-close", (e) => {
@@ -2722,8 +2983,7 @@ function gridPage() {
     if (!k) return;
     if (auto) pinAuto(k); else gridList.put(k, false);
     items = items.filter((x) => x !== k);
-    delete rects[k];
-    store.set(rects);
+    if (cells[k]) { delete cells[k]; commitCells(); }
     if (maxKey === k) maxKey = null;
     tiles.get(k)?.el.remove();
     tiles.get(k)?.destroy();
@@ -2776,10 +3036,29 @@ function gridPage() {
     h("button", { class: "btn primary", onclick: () => pick() }, icon("plus"), "セッションを追加"));
   mount.append(h("div", { class: "grid-page" },
     h("div", { class: "row grid-top" }, h("h1", { class: "grow" }, "グリッド"), count, addBtn,
-      h("div", { class: "seg" }, modeAuto, modeFree), resetBtn), empty, grid));
-  setMode(free);
+      h("div", { class: "seg" }, modeAuto, modeSnap), resetBtn), empty, grid));
   // render places a tile for each listed key the hub knows, in list order
   // (a session on an offline device comes back with the device).
+  // placeTiles puts the tiles where the layout wants them: in マス目, into
+  // their group's section; in 整列 (or with one maximised), as the grid's
+  // own children in group order.
+  const placeTiles = () => {
+    const snapNow = layoutMode() === "snap";
+    grid.classList.toggle("snap", snapNow);
+    if (snapNow) { placeSnap(); return; }
+    if (sections.size) unSnap();
+    let i = 0;
+    for (const k of groupedItems()) {
+      const t = tiles.get(k);
+      if (!t) continue;
+      // Keep order, but only move a tile that is out of place: moving a
+      // node blurs the reply box you are typing in.
+      const at = grid.children[i];
+      if (at !== t.el) grid.insertBefore(t.el, at || null);
+      i++;
+    }
+    layoutGrid(grid, grid.childElementCount);
+  };
   const render = () => {
     const byKey = new Map(all.map((c) => [keyOf(c), c]));
     const shown = [];
@@ -2787,12 +3066,8 @@ function gridPage() {
       const c = byKey.get(k);
       if (!c) continue;
       let t = tiles.get(k);
-      if (!t) { t = gridTile(c); tiles.set(k, t); }
+      if (!t) { t = gridTile(c); tiles.set(k, t); grid.append(t.el); }
       t.update(c);
-      // Keep list order, but only move a tile that is out of place: moving
-      // a node blurs the reply box you are typing in.
-      const at = grid.children[shown.length];
-      if (at !== t.el) grid.insertBefore(t.el, at || null);
       shown.push(c);
     }
     for (const [k, t] of tiles) if (!byKey.has(k) || !items.includes(k)) { t.el.remove(); t.destroy(); tiles.delete(k); }
@@ -2802,6 +3077,7 @@ function gridPage() {
     const working = shown.filter((c) => c.session.status === "active").length;
     count.textContent = (auto && shown.length ? "自動（要対応・作業中・未確認） · " : "") + `${shown.length} 件 · 要対応 ${needs} · 作業中 ${working}`;
   };
+  setMode(snapMode);
   const tick = async () => {
     all = await api("/api/active?all=1");
     gridList.settle(all);
@@ -3651,7 +3927,10 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     const wc = waitChip(session);
     if (wc) { waitEl.className = wc.className; waitEl.title = wc.title; waitEl.textContent = wc.textContent; }
     waitEl.hidden = !wc;
-    if (compact) root.classList.toggle("unseen", !!session?.unseen);
+    if (compact) {
+      root.classList.toggle("unseen", !!session?.unseen);
+      root.classList.toggle("just-new", justNew(id, session));
+    }
 
     const title = session ? (session.num ? sref(session, id) + " " : "") + sessionTitle(session) : sid ? sid : "新規セッション";
     titleEl.textContent = title;
@@ -4130,6 +4409,15 @@ function updateBadge(b) {
     else navigator.clearAppBadge?.()?.catch?.(() => {});
   } catch {}
   document.title = needs + done > 0 ? `(${needs + done}) ${BASE_TITLE}` : BASE_TITLE;
+  // The phone's tab bar carries the same count on セッション.
+  const tabA = document.querySelector('#tabbar a[data-tab="sessions"]');
+  if (tabA) {
+    let bd = tabA.querySelector(".tb-badge");
+    if (!bd) { bd = h("span", { class: "tb-badge" }); tabA.append(bd); }
+    bd.hidden = needs + done === 0;
+    bd.textContent = needs + done > 99 ? "99+" : String(needs + done);
+    bd.classList.toggle("needs", needs > 0);
+  }
   const el = $("#att");
   if (!el) return;
   el.hidden = needs + done === 0;
