@@ -771,10 +771,10 @@ func sessionsCmd(rf *remoteFlags) *cobra.Command {
 				return nil
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "#\tSTATUS\tSESSION\tTITLE\tCWD\tBRANCH\tLAST_SEEN\tPENDING")
+			fmt.Fprintln(tw, "REF\tSTATUS\tSESSION\tTITLE\tCWD\tBRANCH\tLAST_SEEN\tPENDING")
 			for _, s := range ss {
-				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
-					s.Num,
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
+					s.Ref(),
 					s.Status,
 					shortID(s.SessionID),
 					shorten(s.DisplayTitle(), 40),
