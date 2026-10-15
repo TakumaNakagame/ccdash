@@ -2732,6 +2732,19 @@ function unoverlap(rects, first = null) {
   }
   return out;
 }
+// scaleCells fits rects laid out in a w0×h0 box into a w×h one, scaling
+// each edge and snapping it to cells (at least 1×1, inside the width), then
+// pushing down whatever would overlap.
+function scaleCells(rects, w0, h0, w, h) {
+  const sc = (v, a, b) => Math.round((v * b) / Math.max(1, a));
+  const out = {};
+  for (const [k, r] of Object.entries(rects)) {
+    const x = Math.min(w - 1, sc(r.x, w0, w)), y = sc(r.y, h0, h);
+    const x2 = Math.min(w, Math.max(x + 1, sc(r.x + r.w, w0, w))), y2 = Math.max(y + 1, sc(r.y + r.h, h0, h));
+    out[k] = { x, y, w: x2 - x, h: y2 - y };
+  }
+  return Object.assign(out, unoverlap(out));
+}
 // settleCells puts tile k at target (it was at from) among its peers and
 // returns every rect that changed: one peer of the same size under it swaps
 // into k's old place; otherwise peers in the way are pushed down, top to
@@ -2775,10 +2788,12 @@ function gridPage() {
   // Two layouts. 整列: the tiles fill the screen (layoutGrid). マス目: a grid
   // of cells the tiles snap into — 1×1 at least, any w×h — dragged by the
   // header and resized from the corner. Either way the tiles stay with their
-  // group (groupKeyOf: project, else the list's group): in マス目 each group
-  // is a section of its own that its tiles can't leave, sections can be
-  // reordered and arranged on their own, and narrow ones sit side by side.
-  // Cells and order are per browser (screens differ), per column count.
+  // group (groupKeyOf: project, else the list's group). In マス目 a group of
+  // two or more is a framed box of cells its tiles can't leave: the box
+  // resizes from its own corner (its tiles scale with it), and boxes and
+  // lone tiles are dragged (box header / lone tile's header) to reorder;
+  // narrow ones sit side by side. A group of one is just its tile.
+  // Cells, box sizes and order are per browser (screens differ), per column count.
   let snapMode = false;
   try { snapMode = ["snap", "free"].includes(localStorage.getItem("ccdash.gridMode")); } catch {}
   const snap = gridSnapStore.get();
@@ -2819,8 +2834,9 @@ function gridPage() {
     let sec = sections.get(g);
     if (!sec) {
       const body = h("div", { class: "gsec-body" });
-      const head = h("div", { class: "gsec-head" });
-      sec = { el: h("div", { class: "gsec", "data-group": g }, head, body), head, body };
+      const head = h("div", { class: "gsec-head", title: "ドラッグでグループを移動" });
+      const grip = h("div", { class: "gsec-resize", title: "ドラッグでグループの大きさを変更（中のタイルも合わせて変わる）" });
+      sec = { el: h("div", { class: "gsec", "data-group": g }, head, body, grip), head, body };
       sections.set(g, sec);
     }
     const color = c.session.project ? projectColorOf(c.session.project, c.session.project_color) : "";
@@ -2848,8 +2864,19 @@ function gridPage() {
     for (const [k, r] of Object.entries(from)) { const w = Math.min(r.w, cols); out[k] = { x: Math.min(r.x, cols - w), y: r.y, w, h: r.h }; }
     return out;
   };
-  let cells = {}, curCols = 0;
+  let cells = {}, curCols = 0, boxes = {};
   const commitCells = () => { snap.layouts[curCols] = cells; saveSnap(); };
+  // A group box's own size (cells) for this column count, carried over
+  // (clamped) from the nearest count like the tiles' cells.
+  const boxesFor = (cols) => {
+    snap.boxes ||= {};
+    if (snap.boxes[cols]) return snap.boxes[cols];
+    const counts = Object.keys(snap.boxes).map(Number).sort((a, b) => Math.abs(a - cols) - Math.abs(b - cols));
+    const out = {};
+    for (const [g, b] of Object.entries(counts.length ? snap.boxes[counts[0]] : {})) out[g] = { w: Math.min(b.w, cols), h: b.h };
+    return out;
+  };
+  const commitBoxes = () => { snap.boxes ||= {}; snap.boxes[curCols] = boxes; saveSnap(); };
   const groupTiles = (g) => { const byKey = byKeyNow(); return groupedItems().filter((k) => tiles.has(k) && byKey.get(k) && groupKeyOf(byKey.get(k)) === g); };
   // arrangeGroup packs a group's tiles row by row: 2×2 while they fit in
   // two rows of the width, else 1×1.
@@ -2858,12 +2885,14 @@ function gridPage() {
     const s = curCols >= 2 && n * 4 <= curCols * 2 * 2 && n <= 2 ? 2 : curCols >= 4 && n <= curCols / 2 ? 2 : 1;
     const per = Math.max(1, Math.floor(curCols / s));
     keys.forEach((k, i) => { cells[k] = { x: (i % per) * s, y: Math.floor(i / per) * s, w: s, h: s }; });
+    delete boxes[g];
     commitCells();
+    commitBoxes();
     relayout();
   };
   const placeSnap = () => {
     const m = metrics();
-    if (m.cols !== curCols) { curCols = m.cols; cells = cellsFor(curCols); }
+    if (m.cols !== curCols) { curCols = m.cols; cells = cellsFor(curCols); boxes = boxesFor(curCols); }
     grid.style.setProperty("--cw", m.cw + "px");
     grid.style.setProperty("--ch", m.ch + "px");
     const byKey = byKeyNow(), order = groupOrder(items);
@@ -2875,7 +2904,11 @@ function gridPage() {
       if (!mine.length) return;
       live.add(g);
       const sec = section(g, byKey.get(mine[0]));
-      paintHead(sec, g, mine.length, idx, order.length);
+      // A group of one is just its tile: no frame, no header, at the box's origin.
+      const lone = mine.length === 1;
+      sec.el.classList.toggle("lone", lone);
+      if (lone && cells[mine[0]] && (cells[mine[0]].x || cells[mine[0]].y)) { cells[mine[0]] = { ...cells[mine[0]], x: 0, y: 0 }; changed = true; }
+      if (!lone) paintHead(sec, g, mine.length, idx, order.length);
       // A tile without cells takes the first free 1×1 within the group's
       // width (or a new row); a group with none at all gets arranged.
       if (mine.every((k) => !cells[k])) {
@@ -2893,7 +2926,9 @@ function gridPage() {
       const fixed = unoverlap(Object.fromEntries(mine.map((k) => [k, cells[k]])));
       for (const [k, r] of Object.entries(fixed)) { cells[k] = r; changed = true; }
       const rects = mine.map((k) => cells[k]);
-      const wc = Math.max(1, ...rects.map((r) => r.x + r.w)), hc = Math.max(1, ...rects.map((r) => r.y + r.h));
+      // A box is as big as the operator made it, and never smaller than its tiles.
+      const box = !lone && boxes[g] || { w: 1, h: 1 };
+      const wc = Math.min(m.cols, Math.max(box.w, ...rects.map((r) => r.x + r.w))), hc = Math.max(box.h, ...rects.map((r) => r.y + r.h));
       sec.body.style.gridTemplateColumns = `repeat(${wc}, var(--cw))`;
       sec.body.style.gridTemplateRows = `repeat(${hc}, var(--ch))`;
       sec.el.style.width = `calc(${wc} * var(--cw) + ${(wc - 1) * SNAP_GAP}px)`;
@@ -2929,21 +2964,110 @@ function gridPage() {
   const modeAuto = h("button", { class: "btn small", title: "タイルを画面いっぱいに自動で並べる（グループ順）", onclick: () => setMode(false) }, "整列");
   const modeSnap = h("button", { class: "btn small", title: "マス目にはめて、動かす・大きさを変える", onclick: () => setMode(true) }, "マス目");
   const resetBtn = h("button", { class: "btn small", title: "全グループを並べ直す", onclick: () => {
-    for (const g of groupOrder(items)) { const ks = groupTiles(g); ks.forEach((k) => delete cells[k]); }
+    for (const g of groupOrder(items)) { const ks = groupTiles(g); ks.forEach((k) => delete cells[k]); delete boxes[g]; }
     commitCells();
+    commitBoxes();
     relayout();
   } }, "並べ直す");
   // Drag (header) / resize (corner) in マス目: the tile follows the pointer,
   // a ghost shows the cells it will take, and on release it snaps there;
   // tiles in the way are pushed down (one of the same size swaps instead).
+  // reorderBox drags a group box (or a lone tile) and drops it before or
+  // after the box under the pointer.
+  const reorderBox = (e, sec) => {
+    e.preventDefault();
+    const g = sec.dataset.group, sx = e.clientX, sy = e.clientY;
+    let target = null, after = false;
+    grid.classList.add("moving");
+    sec.classList.add("lifted");
+    const clear = () => grid.querySelectorAll(".drop-before, .drop-after").forEach((x) => x.classList.remove("drop-before", "drop-after"));
+    const move = (ev) => {
+      sec.style.transform = `translate(${ev.clientX - sx}px, ${ev.clientY - sy}px)`;
+      const under = document.elementsFromPoint(ev.clientX, ev.clientY).map((x) => x.closest?.(".gsec")).find((x) => x && x !== sec && grid.contains(x));
+      clear();
+      target = under || null;
+      if (target) {
+        const r = target.getBoundingClientRect();
+        after = ev.clientX > r.left + r.width / 2;
+        target.classList.add(after ? "drop-after" : "drop-before");
+      }
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      grid.classList.remove("moving");
+      sec.classList.remove("lifted");
+      sec.style.transform = "";
+      clear();
+      if (target) {
+        const tg = target.dataset.group, o = snap.order.filter((x) => x !== g);
+        o.splice(o.indexOf(tg) + (after ? 1 : 0), 0, g);
+        snap.order = o;
+        saveSnap();
+      }
+      relayout();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+  // resizeBox drags a group box's corner: the box snaps to cells, and on
+  // release its tiles scale with it (then nothing may overlap).
+  const resizeBox = (e, sec) => {
+    e.preventDefault();
+    const g = sec.dataset.group, keys = groupTiles(g);
+    const m = metrics(), stepX = m.cw + SNAP_GAP, stepY = m.ch + SNAP_GAP;
+    const w0 = Math.round((sec.querySelector(".gsec-body").offsetWidth + SNAP_GAP) / stepX);
+    const h0 = Math.round((sec.querySelector(".gsec-body").offsetHeight + SNAP_GAP) / stepY);
+    const sx = e.clientX, sy = e.clientY;
+    let w = w0, hh = h0;
+    const ghost = h("div", { class: "box-ghost" });
+    sec.append(ghost);
+    grid.classList.add("moving");
+    const show = () => {
+      ghost.style.width = `calc(${w} * var(--cw) + ${(w - 1) * SNAP_GAP}px)`;
+      ghost.style.height = `calc(${hh} * var(--ch) + ${(hh - 1) * SNAP_GAP}px)`;
+    };
+    show();
+    const move = (ev) => {
+      w = Math.max(1, Math.min(m.cols, Math.round((w0 * stepX + ev.clientX - sx) / stepX)));
+      hh = Math.max(1, Math.min(12, Math.round((h0 * stepY + ev.clientY - sy) / stepY)));
+      show();
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      grid.classList.remove("moving");
+      ghost.remove();
+      if (w !== w0 || hh !== h0) {
+        Object.assign(cells, scaleCells(Object.fromEntries(keys.map((k) => [k, cells[k]])), w0, h0, w, hh));
+        boxes[g] = { w, h: hh };
+        commitCells();
+        commitBoxes();
+      }
+      relayout();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
   grid.addEventListener("pointerdown", (e) => {
     if (layoutMode() !== "snap" || e.button !== 0) return;
+    const box = e.target.closest(".gsec");
+    if (box && !box.classList.contains("lone")) {
+      if (e.target.closest(".gsec-resize")) return resizeBox(e, box);
+      if (e.target.closest(".gsec-head") && !e.target.closest("button")) return reorderBox(e, box);
+    }
     const el = e.target.closest(".tile");
     const k = el && keyOfEl(el);
     if (!k || !cells[k]) return;
     const resizing = e.target.closest(".tile-resize");
     const dragging = !resizing && e.target.closest(".term-bar, .tile-head") && !e.target.closest("a, button, input, textarea, select");
     if (!resizing && !dragging) return;
+    // A lone tile has nowhere to go inside its box: dragging it moves the box.
+    if (dragging && box?.classList.contains("lone")) return reorderBox(e, box);
     e.preventDefault();
     const body = el.parentNode, sec = body.closest(".gsec"), g = sec?.dataset.group;
     const m = metrics(), stepX = m.cw + SNAP_GAP, stepY = m.ch + SNAP_GAP;
@@ -2958,7 +3082,8 @@ function gridPage() {
       ghost.style.gridRow = `${target.y + 1} / span ${target.h}`;
       // Let the section grow while the ghost reaches past its edge.
       const others = groupTiles(g).filter((x) => x !== k).map((x) => cells[x]);
-      const wc = Math.max(target.x + target.w, ...others.map((r) => r.x + r.w)), hc = Math.max(target.y + target.h, ...others.map((r) => r.y + r.h));
+      const bx = !sec.classList.contains("lone") && boxes[g] || { w: 1, h: 1 };
+      const wc = Math.max(bx.w, target.x + target.w, ...others.map((r) => r.x + r.w)), hc = Math.max(bx.h, target.y + target.h, ...others.map((r) => r.y + r.h));
       body.style.gridTemplateColumns = `repeat(${wc}, var(--cw))`;
       body.style.gridTemplateRows = `repeat(${Math.max(hc, r0.y + r0.h)}, var(--ch))`;
       sec.style.width = `calc(${wc} * var(--cw) + ${(wc - 1) * SNAP_GAP}px)`;
@@ -4593,11 +4718,16 @@ function taskDetail(d, t, ctx) {
 }
 
 // taskList renders a list into el and keeps it fresh. opts: only (device
-// id, "" = all), buckets (keys to show), compact, bucket (cleanup list).
+// id, "" = all), pick (a function giving the device to narrow the loaded
+// lists to, "" = all), onLists (called with every loaded list), buckets
+// (keys to show), compact, bucket (cleanup list).
 function taskList(el, opts = {}) {
-  const ctx = { open: new Set(), multi: false, compact: !!opts.compact, lists: [] };
+  const ctx = { open: new Set(), multi: false, compact: !!opts.compact, lists: [], all: [] };
   ctx.paint = () => {
     if (deferWhileSelecting(el, ctx.paint)) return;
+    const pick = opts.pick?.() || "";
+    ctx.lists = pick ? ctx.all.filter((l) => l.dev.id === pick) : ctx.all;
+    if (pick && !ctx.lists.length) ctx.lists = ctx.all;
     const groups = mergeTasks(ctx.lists, opts.buckets);
     ctx.multi = ctx.lists.length > 1;
     if (!ctx.lists.length) { el.replaceChildren(h("div", { class: "muted small task-empty" }, "タスクを返す端末がありません（ccdash を更新すると使えます）")); return; }
@@ -4608,7 +4738,8 @@ function taskList(el, opts = {}) {
     opts.onCount?.(groups.reduce((n, g) => n + g.rows.filter((r) => !taskFinished(r.t)).length, 0));
   };
   ctx.refresh = async () => {
-    try { ctx.lists = await loadTaskLists(opts.only ?? taskScope()); } catch (e) { if (e.status !== 401) console.warn(e); return; }
+    try { ctx.all = await loadTaskLists(opts.only ?? taskScope()); } catch (e) { if (e.status !== 401) console.warn(e); return; }
+    opts.onLists?.(ctx.all);
     ctx.paint();
   };
   el.replaceChildren(h("div", { class: "muted small task-empty" }, "読み込み中…"));
@@ -4618,9 +4749,13 @@ function taskList(el, opts = {}) {
 
 // The side pane (wide screens): docked right like the preview sidebar, on
 // every page including the grid; the header button opens / closes it and
-// the choice is kept per browser.
+// the choice is kept per browser. It lists every online host's tasks
+// whatever the page (a session's work crosses hosts); the host chips
+// narrow it, kept per browser.
 let taskPane = null;
 const tasksOpenKey = "ccdash.tasksOpen";
+const taskHostKey = "ccdash.taskHost";
+let taskHost = (() => { try { return localStorage.getItem(taskHostKey) || ""; } catch { return ""; } })();
 function setTaskPane(on) {
   try { localStorage.setItem(tasksOpenKey, on ? "1" : "0"); } catch {}
   $("#taskstoggle")?.classList.toggle("on", on);
@@ -4635,17 +4770,35 @@ function setTaskPane(on) {
   if (taskPane) return taskPane.list.refresh();
   const body = h("div", { class: "task-body" });
   const title = h("span", { class: "grow" }, "タスク");
-  const scope = h("span", { class: "muted small" });
+  const chips = h("div", { class: "tabs hosts task-hosts", hidden: true });
   const el = h("aside", { id: "taskpane", "aria-label": "タスク" }, taskHandle(),
-    h("div", { class: "task-bar" }, title, scope,
+    h("div", { class: "task-bar" }, title,
       h("button", { class: "btn small icon", title: "更新", "aria-label": "更新", onclick: () => taskPane?.list.refresh() }, icon("restart")),
       h("button", { class: "btn small icon", title: "閉じる", "aria-label": "閉じる", onclick: () => setTaskPane(false) }, icon("x"))),
-    body);
+    chips, body);
   document.body.append(el);
   document.body.classList.add("tasks-open");
   const stop = [];
-  taskPane = { el, stop, scopeEl: scope, titleEl: title, only: null, list: null };
-  taskPane.list = taskList(body, { only: null, bucket: stop, onCount: (n) => { title.textContent = `タスク ${n}`; } });
+  taskPane = { el, stop, titleEl: title, list: null };
+  const paintChips = (lists) => {
+    chips.hidden = lists.length < 2;
+    if (chips.hidden) return chips.replaceChildren();
+    if (taskHost && !lists.some((l) => l.dev.id === taskHost)) taskHost = ""; // that host went offline
+    const open = (l) => (l.list.tasks || []).filter((t) => !taskFinished(t)).length;
+    const chip = (v, label, n) => h("button", {
+      class: "tab" + (taskHost === v ? " on" : ""),
+      onclick: () => {
+        if (taskHost === v) return;
+        taskHost = v;
+        try { localStorage.setItem(taskHostKey, v); } catch {}
+        paintChips(lists);
+        taskPane?.list.paint();
+      },
+    }, label, h("span", { class: "count" }, n));
+    chips.replaceChildren(chip("", "すべて", lists.reduce((n, l) => n + open(l), 0)),
+      ...lists.map((l) => chip(l.dev.id, (l.dev.letter ? l.dev.letter + " " : "") + (l.dev.name || l.dev.id), open(l))));
+  };
+  taskPane.list = taskList(body, { only: "", pick: () => taskHost, onLists: paintChips, bucket: stop, onCount: (n) => { title.textContent = `タスク ${n}`; } });
   paintTaskScope();
   requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
 }
@@ -4715,14 +4868,11 @@ function taskHandle() {
   return handle;
 }
 
-// paintTaskScope follows the route: a device's own list inside it, all of
-// them elsewhere.
+// paintTaskScope follows the route for the pane's width only: the list is
+// every host's on every page.
 function paintTaskScope() {
   if (!taskPane) return;
   followTasksRatio();
-  const only = taskScope();
-  taskPane.scopeEl.textContent = only ? (deviceCache.get(only)?.name || "") : (me?.local ? "" : "すべての端末");
-  if (taskPane.only !== only) { taskPane.only = only; taskPane.list.refresh(); }
 }
 
 function installTaskPane() {

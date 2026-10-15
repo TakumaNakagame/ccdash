@@ -103,7 +103,10 @@ first one. Now:
   (links are session ids), and session rows list their tasks as refs from
   every host. `add_task` takes `host` (default this machine);
   `task_context` and `sync_tasks` stay this machine's.
-- **Portal:** the task list already merged every online device; rows now
-  show the ref with the letter and "について、" copies it. The Android app
+- **Portal:** rows show the ref with the letter and "について、" copies it.
+  The side pane lists every online device's tasks on every page — inside
+  a device's page it used to show only that device's, which hid the tasks
+  a session there worked on elsewhere; host chips (kept per browser)
+  narrow it instead. The Android app
   gets the same list (ccdash-android).
 - **The TUI stays single-host** and keeps "#11".

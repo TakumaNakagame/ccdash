@@ -519,8 +519,22 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 /* マス目: one section per group (its tiles can't leave it), each a grid of
    fixed cells (--cw × --ch, set by gridPage); narrow sections sit side by
    side. The tile follows the pointer while a ghost shows where it lands. */
-.grid.snap { display: flex; flex-wrap: wrap; align-content: flex-start; align-items: flex-start; gap: 22px 12px; padding: 4px 6px 6px; }
-.gsec { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
+.grid.snap { display: flex; flex-wrap: wrap; align-content: flex-start; align-items: flex-start; gap: 30px 12px; padding: 10px 8px 20px; }
+.gsec { display: flex; flex-direction: column; gap: 6px; max-width: 100%; position: relative; }
+/* A group of two or more: a frame round its box (drawn outside, so it takes
+   no room from the cells), a header to drag it by, a corner to resize it. */
+.gsec:not(.lone) { border-radius: var(--r-lg); box-shadow: 0 0 0 4px color-mix(in srgb, var(--proj) 10%, var(--chip)), 0 0 0 5px color-mix(in srgb, var(--proj) 45%, var(--line)); }
+.gsec.lone > .gsec-head, .gsec.lone > .gsec-resize { display: none; }
+.grid.snap .gsec-head { cursor: grab; touch-action: none; }
+.gsec-resize { position: absolute; right: -11px; bottom: -11px; width: 20px; height: 20px; cursor: nwse-resize; touch-action: none; z-index: 3; border-radius: 50%;
+  background: var(--panel); border: 2px solid color-mix(in srgb, var(--proj) 60%, var(--muted)); }
+.gsec-resize:hover { border-color: var(--accent); }
+.gsec.lifted { z-index: 6; opacity: .9; }
+.gsec.drop-before { box-shadow: -10px 0 0 -6px var(--accent); }
+.gsec.drop-after { box-shadow: 10px 0 0 -6px var(--accent); }
+.gsec:not(.lone).drop-before { box-shadow: 0 0 0 4px color-mix(in srgb, var(--proj) 10%, var(--chip)), -10px 0 0 -4px var(--accent); }
+.gsec:not(.lone).drop-after { box-shadow: 0 0 0 4px color-mix(in srgb, var(--proj) 10%, var(--chip)), 10px 0 0 -4px var(--accent); }
+.box-ghost { position: absolute; left: 0; bottom: auto; top: 32px; border: 2px dashed var(--accent); border-radius: var(--r-md); background: color-mix(in srgb, var(--accent) 8%, transparent); pointer-events: none; z-index: 4; }
 .gsec-head { display: flex; align-items: center; gap: 8px; min-width: 0; height: 26px; padding: 0 2px 0 8px; font-size: var(--fs-sm); box-shadow: inset 3px 0 0 var(--proj); }
 .gsec-head .proj-dot { width: 9px; height: 9px; border-radius: 3px; background: var(--proj); flex: none; }
 .gsec-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -882,6 +896,8 @@ body.tasks-resizing .task-handle::before, body.tasks-resizing .task-handle::afte
 body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #restartbar, body.tasks-open:not(.side-open) main#view { margin-right: var(--tasks-w); }
 .task-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 14px; min-height: 48px; border-bottom: 1px solid var(--line); font-weight: 700; }
 #taskpane .task-body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 8px 24px; }
+#taskpane .task-hosts { flex: none; margin: 0; padding: 8px 24px 6px 10px; border-bottom: 1px solid var(--line); }
+#taskpane .task-hosts[hidden] { display: none; }
 
 /* Folded session list (wide screens). */
 .split.folded { grid-template-columns: 0 0 1fr; }
