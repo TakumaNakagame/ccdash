@@ -304,6 +304,15 @@ pre.bang-cmd { white-space: pre-wrap; word-break: break-all; background: var(--t
 .bucket { padding: 4px 14px; font-size: 12px; color: var(--muted); background: var(--chip); border-top: 1px solid var(--line); }
 .list .bucket:first-child { border-top: 0; }
 .chat-log .older { align-self: center; font-size: 12px; }
+/* Times: each message's own under it (on its side), and a divider with the
+   date when the day changes or the time after a long pause. */
+.msg-time { font-size: 11px; line-height: 1.2; color: var(--muted); margin-top: -6px; font-variant-numeric: tabular-nums; }
+.msg-time.mine { align-self: flex-end; padding-right: 4px; }
+.msg-time.theirs { align-self: flex-start; padding-left: 2px; }
+.chat-divider { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; color: var(--muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.chat-divider::before, .chat-divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.chat-divider span { white-space: nowrap; }
+.tile.compact .msg-time { margin-top: -4px; font-size: 10.5px; }
 
 /* image attachments */
 .composer .col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }

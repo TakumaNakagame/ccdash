@@ -1952,9 +1952,14 @@ function decodeEntries(b64) {
 }
 
 function parseTranscript(entries, opts = {}) {
-  const items = [];
+  const raw = [];
   const tools = new Map(); // tool_use id → item
+  // Every item carries its entry's time (at, ms) for the chat's times and
+  // day / gap dividers (chatTimeline).
+  let at = 0;
+  const items = { push: (it) => raw.push(Object.assign(it, at ? { at } : {})) };
   for (const e of entries) {
+    at = e.timestamp ? Date.parse(e.timestamp) || 0 : 0;
     // A message sent while Claude was working is recorded as a
     // queued_command attachment, not a user turn.
     // Only human-sent ones: background-task notifications use the same
@@ -2022,7 +2027,37 @@ function parseTranscript(entries, opts = {}) {
       }
     }
   }
-  return items;
+  return raw;
+}
+
+// ---- chat times ----
+
+// A gap this long between two messages gets a divider with the time, like a
+// messaging app; a new day always gets one with the date.
+const CHAT_GAP_MS = 60 * 60 * 1000;
+const WEEK_JA = "日月火水木金土";
+function dayKey(t) { const d = new Date(t); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; }
+function hhmm(t) { const d = new Date(t); return `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`; }
+// dayLabel: 今日 / 昨日 / 10月14日（火） / 2025年12月3日（水）.
+function dayLabel(t) {
+  const d = new Date(t), now = new Date();
+  if (dayKey(t) === dayKey(now)) return "今日";
+  if (dayKey(t) === dayKey(now.getTime() - 86400000)) return "昨日";
+  const md = `${d.getMonth() + 1}月${d.getDate()}日（${WEEK_JA[d.getDay()]}）`;
+  return d.getFullYear() === now.getFullYear() ? md : `${d.getFullYear()}年${md}`;
+}
+// chatDivider says what comes before an item at time t after one at prev:
+// the day when it changed, the time after a long gap, else nothing.
+function chatDivider(prev, t) {
+  if (!t) return "";
+  if (!prev || dayKey(prev) !== dayKey(t)) return dayLabel(t) + " " + hhmm(t);
+  if (t - prev >= CHAT_GAP_MS) return hhmm(t);
+  return "";
+}
+// The messages that show their own time: what you typed and Claude's replies.
+const TIMED_KINDS = new Set(["user", "assistant", "image", "bashout", "files"]);
+function msgTime(it) {
+  return h("div", { class: "msg-time " + (it.kind === "user" || it.role === "user" ? "mine" : "theirs"), title: new Date(it.at).toLocaleString("ja-JP") }, hhmm(it.at));
 }
 
 function toolArg(name, inp) {
@@ -3789,18 +3824,25 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
       next.get(sig).push(node);
       return node;
     };
-    const nodes = items.map((it) => {
+    let prevAt = 0;
+    const nodes = items.flatMap((it) => {
+      // A new day, or a long pause, gets a divider; messages their time.
+      const div = chatDivider(prevAt, it.at);
+      if (it.at) prevAt = it.at;
+      const out = div ? [keep("d" + div + it.at, () => h("div", { class: "chat-divider", role: "separator" }, h("span", {}, div)))] : [];
       // A pending question's card is cached by askCard itself (its picks
       // and typed text live in it); renderItem refreshes its button.
-      if (it.kind === "tool" && it.name === "AskUserQuestion" && it.result == null) return renderItem(it, askCtx);
-      return keep("i" + sigOf(it), () => {
+      if (it.kind === "tool" && it.name === "AskUserQuestion" && it.result == null) return [...out, renderItem(it, askCtx)];
+      out.push(keep("i" + sigOf(it), () => {
         const el = renderItem(it, askCtx);
         if (el?.tagName === "DETAILS" && it.kind === "tool" && it.id) {
           el.dataset.tool = it.id;
           if (toolOpen.has(it.id)) el.open = toolOpen.get(it.id);
         }
         return el;
-      });
+      }));
+      if (it.at && TIMED_KINDS.has(it.kind)) out.push(keep("t" + sigOf(it), () => msgTime(it)));
+      return out;
     }).filter(Boolean);
     if (hasOlder && nodes.length) {
       nodes.unshift(keep("o" + loadingOlder, () => h("button", { class: "btn older", disabled: loadingOlder, onclick: loadOlder },
