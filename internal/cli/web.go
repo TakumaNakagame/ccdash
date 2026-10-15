@@ -74,9 +74,12 @@ See docs/hub.md ("Local portal") and docs/decisions/0005-local-portal.md.`,
 			if !foreground && !underSupervisor() {
 				return startWebDaemon(port, collector, !noOpen)
 			}
+			stopTracing := startTracing(cmd.Context(), "ccdash-collector")
+			defer stopTracing()
 			err = runWeb(cmd.Context(), port, collector, !noOpen && os.Getenv(webReexecEnv) == "")
 			if errors.Is(err, server.ErrRestart) {
 				_ = os.Setenv(webReexecEnv, "1")
+				stopTracing()
 				return reexecSelf()
 			}
 			if errors.Is(err, errCollectorStopped) {

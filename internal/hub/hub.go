@@ -39,6 +39,7 @@ import (
 
 	"github.com/takumanakagame/ccmanage/internal/buildinfo"
 	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/takumanakagame/ccmanage/internal/tracing"
 	"github.com/takumanakagame/ccmanage/internal/tunnel"
 )
 
@@ -95,7 +96,8 @@ type deviceConn struct {
 	tokenHash string // the token the tunnel came in with (revoked → dropped)
 	since     time.Time
 	remote    string
-	transport *http.Transport
+	transport *http.Transport   // the tunnel dialer (idle conns are closed on drop)
+	rt        http.RoundTripper // transport + tracing: what requests go through
 	proxy     *httputil.ReverseProxy
 }
 
@@ -105,7 +107,8 @@ func newDeviceConn(open func() (net.Conn, error), since time.Time, remote string
 		MaxIdleConnsPerHost: 8,
 		IdleConnTimeout:     60 * time.Second,
 	}
-	return &deviceConn{open: open, since: since, remote: remote, transport: tr, proxy: newDeviceProxy(tr)}
+	rt := tracing.Transport(tr)
+	return &deviceConn{open: open, since: since, remote: remote, transport: tr, rt: rt, proxy: newDeviceProxy(rt)}
 }
 
 // New opens the hub's store and prepares the handlers.
@@ -243,7 +246,7 @@ func (h *Hub) ListenAndServe(ctx context.Context) error {
 
 // Serve serves on ln until ctx ends.
 func (h *Hub) Serve(ctx context.Context, ln net.Listener) error {
-	srv := &http.Server{Handler: h.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: tracing.Handler(h.Handler()), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -972,7 +975,7 @@ func (h *Hub) resizePTY(dc *deviceConn, key string, cols, rows int) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Transport: dc.transport, Timeout: 10 * time.Second}).Do(req)
+	resp, err := (&http.Client{Transport: dc.rt, Timeout: 10 * time.Second}).Do(req)
 	if err == nil {
 		resp.Body.Close()
 	}

@@ -30,8 +30,11 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/takumanakagame/ccmanage/internal/tracing"
 )
 
 // ErrRestart is what ListenAndServe returns after POST /api/restart: the
@@ -140,11 +143,14 @@ func (s *Server) resumeSaved() {
 	if json.Unmarshal(b, &list) != nil {
 		return
 	}
+	ctx, end := tracing.Span(context.Background(), "collector.resume_saved",
+		attribute.Int("ccdash.sessions", len(list)))
+	defer end(nil)
 	for i, e := range list {
 		if i > 0 {
 			time.Sleep(2 * time.Second)
 		}
-		if _, _, _, err := s.startPTY(ptyStartReq{SessionID: e.SessionID, ResumeID: e.SessionID, Cwd: e.Cwd, Cols: e.Cols, Rows: e.Rows}); err != nil {
+		if _, _, _, err := s.startPTY(ctx, ptyStartReq{SessionID: e.SessionID, ResumeID: e.SessionID, Cwd: e.Cwd, Cols: e.Cols, Rows: e.Rows}); err != nil {
 			log.Printf("resume %s: %v", e.SessionID, err)
 			continue
 		}
@@ -199,7 +205,7 @@ func (s *Server) handlePTYRestart(w http.ResponseWriter, r *http.Request, id str
 	case <-entry.sess.ChildExit():
 	case <-time.After(5 * time.Second):
 	}
-	key, _, code, err := s.startPTY(ptyStartReq{SessionID: sid, ResumeID: sid, Cwd: sess.Cwd, Cols: cols, Rows: rows})
+	key, _, code, err := s.startPTY(r.Context(), ptyStartReq{SessionID: sid, ResumeID: sid, Cwd: sess.Cwd, Cols: cols, Rows: rows})
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
@@ -244,8 +250,10 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 // restartNow saves the hosted sessions and stops the server with
 // ErrRestart a moment later (so a reply, and the hub's relay of it, goes
 // out first).
-func (s *Server) restartNow(ctx context.Context) (int, error) {
-	n, err := s.saveResumeList(ctx)
+func (s *Server) restartNow(ctx context.Context) (n int, err error) {
+	ctx, end := tracing.Span(ctx, "collector.restart")
+	defer func() { end(err) }()
+	n, err = s.saveResumeList(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("save resume list: %w", err)
 	}
