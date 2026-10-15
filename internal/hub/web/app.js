@@ -4478,6 +4478,9 @@ const TASK_STATUS = { todo: "未着手", doing: "進行中", waiting: "待ち", 
 const TASK_PLAN = [["today", "今日"], ["tomorrow", "明日"], ["week", "今週"], ["nextweek", "来週"], ["none", "未定"]];
 const taskFinished = (t) => t.status === "done" || t.status === "cancelled";
 const shortDay = (d) => { const m = /^\d{4}-(\d\d)-(\d\d)$/.exec(d || ""); return m ? `${+m[1]}/${+m[2]}` : d; };
+// taskRef names a task across hosts: the device's letter + "#11" ("B#11"),
+// as ccdash mcp takes it; "#11" while the device has no letter.
+const taskRef = (d, t) => (d.letter || deviceCache.get(d.id)?.letter || "") + "#" + t.id;
 
 // taskScope: the device the current page is about, "" for all of them.
 function taskScope() {
@@ -4489,7 +4492,7 @@ function taskScope() {
 // online one; a device whose collector has no task routes is left out.
 async function loadTaskLists(only) {
   let devs;
-  if (only) devs = [{ id: only, name: deviceCache.get(only)?.name || "" }];
+  if (only) devs = [{ id: only, name: deviceCache.get(only)?.name || "", letter: deviceCache.get(only)?.letter || "" }];
   else {
     const ds = await api("/api/devices");
     ds.forEach((d) => deviceCache.set(d.id, d));
@@ -4535,7 +4538,7 @@ async function taskNewSession(d, t) {
       cwd = ss.filter((s) => s.project === t.project && s.cwd).sort((a, b) => (b.last_seen || "").localeCompare(a.last_seen || ""))[0]?.cwd || "";
     } catch {}
   }
-  newSession(d.id, { cwd, project: t.project || "", prompt: `#${t.id} について、` });
+  newSession(d.id, { cwd, project: t.project || "", prompt: `${taskRef(d, t)} について、` });
 }
 
 function taskRow({ dev: d, t, today }, ctx) {
@@ -4554,7 +4557,7 @@ function taskRow({ dev: d, t, today }, ctx) {
   const head = h("div", { class: "task-main", role: "button", tabindex: "0",
     onclick: () => { open ? ctx.open.delete(key) : ctx.open.add(key); ctx.paint(); },
     onkeydown: (e) => { if (e.key === "Enter") e.currentTarget.click(); } },
-    h("div", { class: "task-title" + (fin ? " fin" : "") + (t.priority === 1 && !fin ? " p1" : "") }, h("span", { class: "num mono" }, "#" + t.id), " ", t.title),
+    h("div", { class: "task-title" + (fin ? " fin" : "") + (t.priority === 1 && !fin ? " p1" : "") }, h("span", { class: "num mono" }, taskRef(d, t)), " ", t.title),
     meta.length ? h("div", { class: "task-meta" }, ...meta) : null);
   return h("div", { class: "task" + (open ? " open" : "") }, check, head, open ? taskDetail(d, t, ctx) : null);
 }
@@ -4563,7 +4566,7 @@ function taskDetail(d, t, ctx) {
   const act = (patch, msg) => async () => { await editTask(d, t, patch, msg); ctx.refresh(); };
   const plans = h("div", { class: "seg" }, ...TASK_PLAN.map(([v, label]) => {
     const on = v === "none" ? !t.plan : t.bucket === v || (v === "today" && t.bucket === "today");
-    return h("button", { class: "btn small" + (on ? " on" : ""), onclick: act({ plan: v }, `#${t.id} のやる日: ${label}`) }, label);
+    return h("button", { class: "btn small" + (on ? " on" : ""), onclick: act({ plan: v }, `${taskRef(d, t)} のやる日: ${label}`) }, label);
   }));
   const statuses = h("div", { class: "seg" }, ...["todo", "doing", "waiting", "cancelled"].map((s) =>
     h("button", { class: "btn small" + (t.status === s ? " on" : ""), onclick: act({ status: s }) }, TASK_STATUS[s])));
@@ -4579,9 +4582,9 @@ function taskDetail(d, t, ctx) {
     t.note ? h("div", { class: "task-note" }, t.note) : null,
     links.length ? h("div", { class: "task-links" }, ...links) : null,
     h("div", { class: "row wrap" },
-      h("button", { class: "btn small", onclick: () => copy(`#${t.id} について、`) }, "「#" + t.id + " について、」をコピー"),
+      h("button", { class: "btn small", onclick: () => copy(`${taskRef(d, t)} について、`) }, "「" + taskRef(d, t) + " について、」をコピー"),
       h("button", { class: "btn small", onclick: () => taskNewSession(d, t) }, icon("plus"), "このタスクで新規セッション"),
-      taskFinished(t) ? h("button", { class: "btn small", onclick: act({ archived: true }, `#${t.id} をアーカイブしました`) }, "アーカイブ") : null),
+      taskFinished(t) ? h("button", { class: "btn small", onclick: act({ archived: true }, `${taskRef(d, t)} をアーカイブしました`) }, "アーカイブ") : null),
     h("div", { class: "task-tl" },
       tl.length ? null : h("div", { class: "muted small" }, "進捗はまだありません"),
       ...tl.map((e) => h("div", { class: "tl-row" },
