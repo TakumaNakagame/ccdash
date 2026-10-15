@@ -2978,6 +2978,7 @@ function gridPage() {
     e.preventDefault();
     const g = sec.dataset.group, sx = e.clientX, sy = e.clientY;
     let target = null, after = false;
+    window.getSelection()?.removeAllRanges();
     grid.classList.add("moving");
     sec.classList.add("lifted");
     const clear = () => grid.querySelectorAll(".drop-before, .drop-after").forEach((x) => x.classList.remove("drop-before", "drop-after"));
