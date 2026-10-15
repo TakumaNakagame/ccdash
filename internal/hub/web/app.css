@@ -487,7 +487,8 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .pick-item:hover { border-color: var(--accent); }
 .grid-page .empty .btn { margin-top: 8px; }
 .grid-page { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 8px 10px 10px; }
-.grid-top { margin-bottom: 6px; flex: none; }
+.grid-top { margin-bottom: 6px; flex: none; flex-wrap: wrap; row-gap: 6px; }
+.grid-top h1 { min-width: 5em; }
 .grid-top h1 { font-size: 15px; }
 .grid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); grid-auto-rows: 360px; gap: 10px; align-content: start; }
 .tile { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); overflow: hidden; }
@@ -500,21 +501,34 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .chip.dev { flex: none; }
 @media (max-width: 640px) { .grid-page { padding: 8px; } }
 
-/* grid: free placement (draggable, resizable windows) */
+/* grid: layout switch (整列 / マス目) */
 .seg { display: inline-flex; }
 .seg .btn { border-radius: 0; }
 .seg .btn:first-child { border-radius: 8px 0 0 8px; }
 .seg .btn:last-child { border-radius: 0 8px 8px 0; border-left: 0; }
 .seg .btn.on, .grid-top .btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.grid.free { display: block; position: relative; }
-.grid.free > .tile { position: absolute; box-shadow: 0 6px 24px rgb(0 0 0 / .25); }
-.grid.free .tile-head { cursor: grab; }
-.grid.free.moving, .grid.free.moving .tile-head { cursor: grabbing; user-select: none; }
+/* マス目: one section per group (its tiles can't leave it), each a grid of
+   fixed cells (--cw × --ch, set by gridPage); narrow sections sit side by
+   side. The tile follows the pointer while a ghost shows where it lands. */
+.grid.snap { display: flex; flex-wrap: wrap; align-content: flex-start; align-items: flex-start; gap: 22px 12px; padding: 4px 6px 6px; }
+.gsec { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
+.gsec-head { display: flex; align-items: center; gap: 8px; min-width: 0; height: 26px; padding: 0 2px 0 8px; font-size: var(--fs-sm); box-shadow: inset 3px 0 0 var(--proj); }
+.gsec-head .proj-dot { width: 9px; height: 9px; border-radius: 3px; background: var(--proj); flex: none; }
+.gsec-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gsec-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); color: var(--muted); cursor: pointer; }
+.gsec-btn:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+.gsec-btn:disabled { opacity: .35; cursor: default; }
+.gsec-btn .ic { width: 14px; height: 14px; }
+.gsec-body { display: grid; gap: 12px; position: relative; }
+.gsec-body > .tile { min-width: 0; }
+.grid.snap .term-bar { cursor: grab; touch-action: none; }
+.grid.snap.moving, .grid.snap.moving .term-bar { cursor: grabbing; user-select: none; }
+.tile.lifted { z-index: 5; box-shadow: 0 10px 30px rgb(0 0 0 / .3); opacity: .92; transition: none; }
+.snap-ghost { border: 2px dashed var(--accent); border-radius: var(--r-md); background: color-mix(in srgb, var(--accent) 10%, transparent); pointer-events: none; z-index: 1; }
 .tile-resize { display: none; }
-.grid.free .tile-resize { display: block; position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize;
+.grid.snap .tile-resize { display: block; position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; touch-action: none; z-index: 2;
   background: linear-gradient(135deg, transparent 50%, var(--muted) 50%, var(--muted) 60%, transparent 60%, transparent 72%, var(--muted) 72%, var(--muted) 82%, transparent 82%); opacity: .7; }
 .tile { position: relative; }
-.grid.free.has-max > .tile.max { left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; z-index: 1000 !important; }
 
 /* Session color (sessionColor): a bar on the left of list rows, grid tiles
    and the chat title, so a session is recognizable at a glance. */
@@ -623,6 +637,11 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .tile.compact { container-type: inline-size; }
 @container (max-width: 380px) {
   .tile.compact .chip.dev, .tile.compact .mic { display: none; }
+}
+/* A 1×1 cell in マス目: the header's buttons squeeze instead of spilling. */
+@container (max-width: 340px) {
+  .tile.compact .term-bar { gap: 4px; padding-left: 6px; padding-right: 6px; }
+  .tile.compact .term-bar .btn.small { padding-left: 5px; padding-right: 5px; }
 }
 
 /* ---------- App shell: native-app feel (docs/design.md) ---------- */
@@ -934,3 +953,32 @@ body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #res
 .host-pick select { min-width: 0; }
 .attach-off { color: var(--bad); }
 .home-actions { margin: 4px 0 16px; }
+
+/* Unread (NEW): a session that moved since you last looked must stand out
+   at a glance in a long list and among many tiles — the one place a row
+   gets a tinted ground (docs/design.md). The accent tint + ring says "read
+   me"; 要対応 (warn) still wins on a tile. It flashes once when it turns
+   unread (justNew). */
+.item.srow.unseen { background: color-mix(in srgb, var(--accent) 12%, var(--panel)); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 65%, transparent), inset 4px 0 0 var(--accent); }
+.item.srow.unseen.in-project { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 65%, transparent), inset 4px 0 0 var(--proj); }
+.item.srow.unseen:hover { background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
+.item.srow.unseen .sub { color: var(--text); opacity: .8; }
+.item.srow.unseen.selected { background: color-mix(in srgb, var(--accent) 20%, var(--panel)); }
+.tile.unseen { border-color: var(--accent); box-shadow: 0 0 0 1.5px var(--accent), 0 0 18px -4px color-mix(in srgb, var(--accent) 60%, transparent); }
+.tile.unseen .term-bar { background: color-mix(in srgb, var(--accent) 16%, var(--panel)); }
+.tile.needs { border-color: var(--warn); box-shadow: 0 0 0 1.5px var(--warn); }
+.tile.needs .term-bar { background: color-mix(in srgb, var(--warn) 14%, var(--panel)); }
+.item.srow.just-new, .tile.just-new { animation: newflash 1.2s ease-out 2; }
+@keyframes newflash {
+  0% { background-color: color-mix(in srgb, var(--accent) 45%, var(--panel)); }
+  100% { background-color: color-mix(in srgb, var(--accent) 12%, var(--panel)); }
+}
+@media (prefers-reduced-motion: reduce) { .item.srow.just-new, .tile.just-new { animation: none; } }
+.bucket.new { display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 14px; color: var(--accent); font-weight: 700; font-size: var(--fs-sm); }
+.bucket.new .ic { width: 15px; height: 15px; }
+.bucket.new .btn { font-weight: 600; }
+.tab .count.new { opacity: 1; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-weight: 700; text-align: center; }
+#tabbar a { position: relative; }
+.tb-badge { position: absolute; top: 3px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center; }
+.tb-badge.needs { background: var(--warn); color: #111; }
+.tb-badge[hidden] { display: none; }

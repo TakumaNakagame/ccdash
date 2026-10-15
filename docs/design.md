@@ -41,7 +41,12 @@ Japanese body text gets `line-height: 1.6`; UI chrome (rows, buttons) 1.4.
 - **Colour encodes one thing each.** Session colour = a small dot before the
   title. Project colour = a 3px gutter on its rows and the dot in its band.
   Status = `--ok/--warn/--bad`. No tinted row backgrounds, no full-colour
-  bands, no two stripes side by side.
+  bands, no two stripes side by side. The one exception is **unread (NEW)**:
+  a session that moved since you last looked gets an accent-tinted ground and
+  ring on its list row and grid tile (a 要対応 tile is the same in `--warn`),
+  flashing once as it turns unread — the operator asked to see at a glance
+  which sessions replied. On a phone the list also lifts unread rows into a
+  新着 block at the top (「新着を上に」).
 - **Status is words, in Japanese.** 作業中 / 待機中 / 停止 / 要対応 / 未確認 —
   not `active` / `idle` / `stopped` pills. A dot + muted text; only 要対応 and
   NEW may be filled, because they ask for action.
@@ -49,7 +54,7 @@ Japanese body text gets `line-height: 1.6`; UI chrome (rows, buttons) 1.4.
   section titles in caps). Headings are sentence-case Japanese in `--fs-sm`
   600 `--muted`.
 - **One card style.** Bordered `--panel` on `--bg`, `--r-md`, no shadow.
-  Shadows only on things that float (dialogs, free-placed grid tiles, toast).
+  Shadows only on things that float (dialogs, a grid tile being dragged, toast).
 - **Touch:** on `(pointer: coarse)` every control is at least 40px high
   (44px for icon-only buttons); keep 8px between neighbours. Respect
   `env(safe-area-inset-*)` at the top bar and the composer.
