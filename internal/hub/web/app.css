@@ -545,7 +545,8 @@ select.mode { border: 1px solid var(--line); background: var(--panel); border-ra
 .gsec-body { display: grid; gap: 12px; position: relative; }
 .gsec-body > .tile { min-width: 0; }
 .grid.snap .term-bar { cursor: grab; touch-action: none; }
-.grid.snap.moving, .grid.snap.moving .term-bar { cursor: grabbing; user-select: none; }
+.grid.snap.moving, .grid.snap.moving .term-bar, .grid.snap.moving .gsec-head { cursor: grabbing; }
+.grid.moving, .grid.moving * { user-select: none; -webkit-user-select: none; }
 .tile.lifted { z-index: 5; box-shadow: 0 10px 30px rgb(0 0 0 / .3); opacity: .92; transition: none; }
 .snap-ghost { border: 2px dashed var(--accent); border-radius: var(--r-md); background: color-mix(in srgb, var(--accent) 10%, transparent); pointer-events: none; z-index: 1; }
 .tile-resize { display: none; }
