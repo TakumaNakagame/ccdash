@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/takumanakagame/ccmanage/internal/db"
 	"github.com/takumanakagame/ccmanage/internal/model"
 	"github.com/takumanakagame/ccmanage/internal/store"
+	"github.com/takumanakagame/ccmanage/internal/tasks"
 )
 
 // fakeHub plays the hub for this machine ("laptop", device A): it knows
@@ -27,6 +29,16 @@ type fakeHub struct {
 	titles  map[string]string
 	started []map[string]any
 	attach  bool
+	posts   map[string]string // B's task writes: path → body
+}
+
+// serverTasks is B's to-do list: #11 worked on by this machine's lap-1,
+// and #3, which this machine has too.
+func serverTasks() model.TaskList {
+	return model.TaskList{Today: "2026-10-16", Buckets: []model.TaskBucket{{Key: "today", Heading: "今日"}}, Tasks: []model.Task{
+		{ID: 11, Key: "INFRA-7", Title: "ノードを入れ替える", Priority: 2, Status: "doing", Bucket: "today", Sessions: []string{"lap-1"}},
+		{ID: 3, Title: "B の 3", Priority: 3, Status: "todo", Bucket: "today"},
+	}}
 }
 
 func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +88,24 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		j([]any{})
 	case p == "/api/d/B/api/projects", p == "/api/d/B/api/approvals":
 		j([]any{})
+	case p == "/api/d/B/api/tasks" && r.Method == "GET":
+		j(serverTasks())
+	case strings.HasPrefix(p, "/api/d/B/api/tasks/") && r.Method == "GET":
+		for _, t := range serverTasks().Tasks {
+			if p == "/api/d/B/api/tasks/"+strconv.FormatInt(t.ID, 10) {
+				j(t)
+				return
+			}
+		}
+		http.Error(w, "no task", 404)
+	case strings.HasPrefix(p, "/api/d/B/api/tasks") && r.Method == "POST":
+		b, _ := io.ReadAll(r.Body)
+		f.posts[strings.TrimPrefix(p, "/api/d/B")] = string(b)
+		t := serverTasks().Tasks[0]
+		if p == "/api/d/B/api/tasks" {
+			t.ID = 12
+		}
+		j(t)
 	case p == "/api/d/B/api/restart", p == "/api/d/B/api/usage":
 		j(map[string]any{})
 	default:
@@ -100,7 +130,7 @@ func multiHostServer(t *testing.T, peer bool) (*Server, *fakeHub, *db.DB) {
 			t.Fatal(err)
 		}
 	}
-	f := &fakeHub{peer: peer, titles: map[string]string{}, attach: true}
+	f := &fakeHub{peer: peer, titles: map[string]string{}, attach: true, posts: map[string]string{}}
 	hs := httptest.NewServer(f)
 	t.Cleanup(hs.Close)
 	s := New(store.NewLocal(d), "test", false).WithHubURL(hs.URL).WithFleet(NewFleet(hs.URL, "ccdh_tok"))
@@ -228,5 +258,76 @@ func TestSplitRef(t *testing.T) {
 		if h != want[0] || r != want[1] {
 			t.Errorf("splitRef(%q) = %q %q", in, h, r)
 		}
+	}
+}
+
+// TestMultiHostTasks: list_tasks merges the hosts' lists with "B#11" refs,
+// refs and bare ids find the right host (this machine first), edits go to
+// the task's own host by id, and session rows name tasks on other hosts.
+func TestMultiHostTasks(t *testing.T) {
+	s, f, d := multiHostServer(t, true)
+	ctx := context.Background()
+	for _, title := range []string{"ローカルの 1", "ローカルの 2", "ローカルの 3"} {
+		if _, err := d.AddTask(ctx, tasks.Input{Title: title, Plan: "today"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := call(t, s, "list_tasks", `{}`)
+	for _, want := range []string{`"ref": "A#1"`, `"ref": "B#11"`, `"host": "server"`, `"sessions": [
+    "A1"`, `"matched": 5`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("list_tasks lacks %s: %s", want, out)
+		}
+	}
+	if out := call(t, s, "list_tasks", `{"host":"server"}`); strings.Contains(out, "A#1") || !strings.Contains(out, `"matched": 2`) {
+		t.Errorf("list_tasks host=server: %s", out)
+	}
+
+	for args, want := range map[string]string{
+		`{"task":"B#11"}`:         "ノードを入れ替える",
+		`{"task":"#11"}`:          "ノードを入れ替える", // not here: the one host that has it
+		`{"task":"INFRA-7"}`:      "ノードを入れ替える",
+		`{"task":"#3"}`:           "ローカルの 3", // here first
+		`{"task":"3","host":"B"}`: "B の 3",
+		`{"task":"server#3"}`:     "B の 3",
+		`{"task":"a#1"}`:          "ローカルの 1",
+	} {
+		if out := call(t, s, "get_task", args); !strings.Contains(out, want) {
+			t.Errorf("get_task %s: want %q in %s", args, want, out)
+		}
+	}
+	for args, want := range map[string]string{
+		`{"task":"#99"}`:                 "not on the other hosts",
+		`{"task":"C#1"}`:                 "offline",
+		`{"task":"B#11","host":"local"}`: "is a task of host server",
+	} {
+		if _, err := s.call(ctx, "get_task", json.RawMessage(args)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("get_task %s: want %q, got %v", args, want, err)
+		}
+	}
+
+	s.self = func() string { return "lap-1" }
+	call(t, s, "add_task_note", `{"task":"B#11","text":"cp03 を入れ替えた"}`)
+	call(t, s, "set_task_status", `{"task":"INFRA-7","status":"waiting","why":"CI 待ち"}`)
+	call(t, s, "add_task", `{"title":"B に足す","host":"B"}`)
+	if b := f.posts["/api/tasks/11/notes"]; !strings.Contains(b, "cp03") {
+		t.Errorf("note went elsewhere: %v", f.posts)
+	}
+	if b := f.posts["/api/tasks/11"]; !strings.Contains(b, `"waiting"`) || !strings.Contains(b, "lap-1") {
+		t.Errorf("status patch: %v", f.posts)
+	}
+	if b := f.posts["/api/tasks"]; !strings.Contains(b, "B に足す") || !strings.Contains(b, "lap-1") {
+		t.Errorf("add_task on B: %v", f.posts)
+	}
+	if lt, _ := d.ListTasks(ctx, false); len(lt) != 3 {
+		t.Errorf("a remote write touched this machine's list: %d tasks", len(lt))
+	}
+	if _, err := s.call(ctx, "order_tasks", json.RawMessage(`{"tasks":["A#1","B#11"]}`)); err == nil || !strings.Contains(err.Error(), "different hosts") {
+		t.Errorf("order across hosts: %v", err)
+	}
+
+	if out := call(t, s, "list_sessions", `{"host":"local"}`); !strings.Contains(out, `"tasks": [
+    "B#11"`) {
+		t.Errorf("lap-1's row lacks B#11: %s", out)
 	}
 }

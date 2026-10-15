@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strconv"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,19 +14,26 @@ import (
 )
 
 // The to-do list's tools (docs/decisions/0006-tasks.md). Tasks are named
-// by id ("11" / "#11") or key. Edits from a session link that session to
-// the task, so "which sessions worked on #11" fills itself in.
+// by ref ("B#11", see taskhosts.go), id ("11" / "#11") or key. Edits from a
+// session link that session to the task, so "which sessions worked on #11"
+// fills itself in — across hosts too.
 
-var taskRef = map[string]any{"type": "string", "description": `task id ("11" or "#11") or key (Jira key, PR URL …)`}
+var taskRef = map[string]any{"type": "string", "description": `task ref as list_tasks shows it ("B#11" = host B's task 11), "#11" / "11" (this machine's; if it has none, the one other host that does), or key (Jira key, PR URL …)`}
+
+var (
+	hostTasks   = map[string]any{"type": "string", "description": `only this host's list (a name or letter from list_hosts); default = every host this machine can reach`}
+	hostTaskRef = map[string]any{"type": "string", "description": `the host of a bare "#11" or key (a name or letter from list_hosts); refs like "B#11" already name their host`}
+	hostAddTask = map[string]any{"type": "string", "description": `whose list to add it to (a name or letter from list_hosts); default = this machine`}
+)
 
 var planArg = map[string]any{"type": "string", "description": "today / tomorrow (next weekday) / week (this Friday) / nextweek (next Monday) / YYYY-MM-DD / none"}
 
 var taskReadTools = []map[string]any{
 	{
 		"name": "list_tasks",
-		"description": "The operator's to-do list on this machine, bucketed by the day they plan to work on each task " +
-			"(today — including carried-over ones —, tomorrow, this week, next week, later, unplanned). Open tasks by default. " +
-			`When the operator says "#11" or "11 について", that is task 11 here (unless the context says a PR / Jira number).`,
+		"description": "The operator's to-do list — every reachable host's, merged (each machine keeps its own; rows carry host and ref, e.g. \"B#11\") — " +
+			"bucketed by the day they plan to work on each task (today — including carried-over ones —, tomorrow, this week, next week, later, unplanned). Open tasks by default. " +
+			`When the operator says "#11" or "11 について", that is task 11 here — or, if this machine has none, on the one host that has it; "B#11" is host B's (unless the context says a PR / Jira number).`,
 		"inputSchema": schema(map[string]any{
 			"bucket":           map[string]any{"type": "string", "enum": tasks.BucketKeys()},
 			"project":          map[string]any{"type": "string"},
@@ -46,7 +53,7 @@ var taskReadTools = []map[string]any{
 	},
 	{
 		"name": "task_context",
-		"description": "For an automated sync: the open tasks with the Slack threads, Jira keys and PRs pulled out of their links, " +
+		"description": "For an automated sync of this machine's list: the open tasks with the Slack threads, Jira keys and PRs pulled out of their links, " +
 			"the refs already in each timeline, and `since` (the last sync) to look for new activity from.",
 		"inputSchema": schema(map[string]any{}),
 		"annotations": readOnlyHint,
@@ -56,7 +63,7 @@ var taskReadTools = []map[string]any{
 var taskWriteTools = []map[string]any{
 	{
 		"name": "add_task",
-		"description": "Add a task to the to-do list. Give it a key when it has one (Jira key, PR URL, misc:<slug>) so automated syncs recognise it. " +
+		"description": "Add a task to the to-do list (this machine's unless host says otherwise). Give it a key when it has one (Jira key, PR URL, misc:<slug>) so automated syncs recognise it. " +
 			"project is a ccdash project (created on first use). The calling session is linked to the task.",
 		"inputSchema": required(map[string]any{
 			"title":    map[string]any{"type": "string", "description": "what to do, in the operator's language"},
@@ -131,7 +138,7 @@ var taskWriteTools = []map[string]any{
 	},
 	{
 		"name":        "order_tasks",
-		"description": "Put tasks in this order at the top of their bucket (pass the ids of one bucket).",
+		"description": "Put tasks in this order at the top of their bucket (pass the refs of one bucket, all on one host).",
 		"inputSchema": required(map[string]any{"tasks": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}}, "tasks"),
 		"annotations": writeHint,
 	},
@@ -143,7 +150,7 @@ var taskWriteTools = []map[string]any{
 	},
 	{
 		"name": "sync_tasks",
-		"description": "For an automated sync (after task_context): merge what you found. Tasks match by key. The operator's decisions win: " +
+		"description": "For an automated sync of this machine's list (after task_context): merge what you found. Tasks match by key. The operator's decisions win: " +
 			"title, priority and note are never overwritten; a plan set by hand today isn't moved; replan needs a why; a status other than done changes " +
 			"only when the same call brings new timeline entries; a finished task is never reopened; a new task's project is kept only if it exists.",
 		"inputSchema": required(map[string]any{
@@ -169,6 +176,21 @@ var taskWriteTools = []map[string]any{
 	},
 }
 
+func init() {
+	for _, t := range append(append([]map[string]any(nil), taskReadTools...), taskWriteTools...) {
+		props := t["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		switch t["name"] {
+		case "list_tasks":
+			props["host"] = hostTasks
+		case "add_task":
+			props["host"] = hostAddTask
+		case "task_context", "sync_tasks":
+		default:
+			props["host"] = hostTaskRef
+		}
+	}
+}
+
 func statusKeys() []string {
 	return []string{model.TaskTodo, model.TaskDoing, model.TaskWaiting, model.TaskDone, model.TaskCancelled}
 }
@@ -189,6 +211,7 @@ func isTaskTool(name string) (known, write bool) {
 
 type taskArgs struct {
 	Task            string               `json:"task"`
+	Host            string               `json:"host"`
 	Tasks           []string             `json:"tasks"`
 	Bucket          string               `json:"bucket"`
 	Project         *string              `json:"project"`
@@ -253,7 +276,7 @@ func (s *Server) callTask(ctx context.Context, name string, raw json.RawMessage)
 		out, err = s.listTasks(ctx, a)
 	case "get_task":
 		if err = needTask(); err == nil {
-			out, err = s.getTask(ctx, a.Task)
+			out, err = s.getTask(ctx, a.Task, a.Host)
 		}
 	case "task_context":
 		out, err = s.st.TaskContext(ctx)
@@ -261,7 +284,7 @@ func (s *Server) callTask(ctx context.Context, name string, raw json.RawMessage)
 		out, err = s.addTask(ctx, a)
 	case "update_task":
 		if err = needTask(); err == nil {
-			out, err = s.patchTask(ctx, a.Task, tasks.Patch{Title: a.Title, Key: a.Key, Priority: a.Priority, Due: a.Due,
+			out, err = s.patchTask(ctx, a.Task, a.Host, tasks.Patch{Title: a.Title, Key: a.Key, Priority: a.Priority, Due: a.Due,
 				Project: a.Project, Note: a.Note, AddLinks: a.AddLinks, RemoveLinks: a.RemoveLinks})
 		}
 	case "set_task_status":
@@ -271,14 +294,14 @@ func (s *Server) callTask(ctx context.Context, name string, raw json.RawMessage)
 				yes := true
 				p.Archived = &yes
 			}
-			out, err = s.patchTask(ctx, a.Task, p)
+			out, err = s.patchTask(ctx, a.Task, a.Host, p)
 		}
 	case "plan_task":
 		if err = needTask(); err == nil {
 			if a.Plan == nil {
 				return nil, true, fmt.Errorf("plan is required")
 			}
-			out, err = s.patchTask(ctx, a.Task, tasks.Patch{Plan: a.Plan, Why: a.Why})
+			out, err = s.patchTask(ctx, a.Task, a.Host, tasks.Patch{Plan: a.Plan, Why: a.Why})
 		}
 	case "add_task_note":
 		if err = needTask(); err == nil {
@@ -289,11 +312,11 @@ func (s *Server) callTask(ctx context.Context, name string, raw json.RawMessage)
 			out, err = s.linkTask(ctx, a)
 		}
 	case "order_tasks":
-		out, err = s.orderTasks(ctx, a.Tasks)
+		out, err = s.orderTasks(ctx, a.Tasks, a.Host)
 	case "archive_task":
 		if err = needTask(); err == nil {
 			v := a.Archived == nil || *a.Archived
-			out, err = s.patchTask(ctx, a.Task, tasks.Patch{Archived: &v})
+			out, err = s.patchTask(ctx, a.Task, a.Host, tasks.Patch{Archived: &v})
 		}
 	case "sync_tasks":
 		var res tasks.SyncResult
@@ -307,6 +330,8 @@ func (s *Server) callTask(ctx context.Context, name string, raw json.RawMessage)
 // taskRow is a task as list_tasks shows it: everything but the timeline,
 // which shrinks to its latest entry.
 type taskRow struct {
+	Ref         string   `json:"ref"`
+	Host        string   `json:"host,omitempty"`
 	ID          int64    `json:"id"`
 	Key         string   `json:"key,omitempty"`
 	Title       string   `json:"title"`
@@ -326,48 +351,84 @@ type taskRow struct {
 }
 
 func (s *Server) listTasks(ctx context.Context, a taskArgs) (any, error) {
-	l, err := s.st.ListTasks(ctx, a.IncludeArchived)
+	hs, offline, err := s.hostsFor(ctx, a.Host)
+	if err != nil {
+		return nil, err
+	}
+	ls, errs, err := s.taskListsOn(ctx, hs, a.IncludeArchived)
 	if err != nil {
 		return nil, err
 	}
 	now := s.now()
 	today := tasks.DateString(tasks.Day(now))
-	refs := s.sessionRefs(ctx)
+	var sessions map[string]located
 	limit := a.Limit
 	if limit <= 0 {
 		limit = 100
 	}
 	q := strings.ToLower(strings.TrimSpace(a.Query))
-	rows := []taskRow{}
-	matched := 0
-	for _, t := range l.Tasks {
-		if t.Finished() && !a.IncludeFinished && !t.Archived ||
-			a.Bucket != "" && t.Bucket != a.Bucket ||
-			a.Project != nil && t.Project != *a.Project ||
-			a.Status != "" && t.Status != a.Status ||
-			q != "" && !strings.Contains(taskText(t), q) {
-			continue
-		}
-		matched++
-		if len(rows) >= limit {
-			continue
-		}
-		r := taskRow{ID: t.ID, Key: t.Key, Title: t.Title, Priority: t.Priority, Status: t.Status, Bucket: t.Bucket,
-			Plan: t.Plan, CarriedOver: tasks.CarriedOver(t, now), Due: t.Due, Overdue: !t.Finished() && t.Due != "" && t.Due < today,
-			Project: t.Project, Archived: t.Archived, Links: len(t.Links)}
-		if n := len(t.Timeline); n > 0 {
-			r.Latest, r.LatestAt = clip(t.Timeline[n-1].Text, 200), t.Timeline[n-1].At
-		}
-		for _, sid := range t.Sessions {
-			r.Sessions = append(r.Sessions, refs.of(sid))
-		}
-		rows = append(rows, r)
+	type ranked struct {
+		r      taskRow
+		bucket int
 	}
+	order := map[string]int{}
+	for i, k := range tasks.BucketKeys() {
+		order[k] = i
+	}
+	var all []ranked
 	headings := map[string]string{}
-	for _, b := range l.Buckets {
-		headings[b.Key] = b.Heading
+	for i, l := range ls {
+		h := hs[i]
+		for _, b := range l.Buckets {
+			if headings[b.Key] == "" {
+				headings[b.Key] = b.Heading
+			}
+		}
+		for _, t := range l.Tasks {
+			if t.Finished() && !a.IncludeFinished && !t.Archived ||
+				a.Bucket != "" && t.Bucket != a.Bucket ||
+				a.Project != nil && t.Project != *a.Project ||
+				a.Status != "" && t.Status != a.Status ||
+				q != "" && !strings.Contains(taskText(t), q) && !strings.EqualFold(q, taskRefOn(h, t.ID)) {
+				continue
+			}
+			r := taskRow{Ref: taskRefOn(h, t.ID), ID: t.ID, Key: t.Key, Title: t.Title, Priority: t.Priority, Status: t.Status, Bucket: t.Bucket,
+				Plan: t.Plan, CarriedOver: tasks.CarriedOver(t, now), Due: t.Due, Overdue: !t.Finished() && t.Due != "" && t.Due < today,
+				Project: t.Project, Archived: t.Archived, Links: len(t.Links)}
+			if len(hs) > 1 {
+				r.Host = hostLabel(h)
+			}
+			if n := len(t.Timeline); n > 0 {
+				r.Latest, r.LatestAt = clip(t.Timeline[n-1].Text, 200), t.Timeline[n-1].At
+			}
+			if len(t.Sessions) > 0 && sessions == nil {
+				sessions = s.sessionIndex(ctx)
+			}
+			for _, sid := range t.Sessions {
+				if l, ok := sessions[sid]; ok && l.ref() != "" {
+					r.Sessions = append(r.Sessions, l.ref())
+				} else {
+					r.Sessions = append(r.Sessions, sid)
+				}
+			}
+			all = append(all, ranked{r, order[t.Bucket]})
+		}
 	}
-	return map[string]any{"today": l.Today, "buckets": headings, "matched": matched, "tasks": rows}, nil
+	// Each host's list is in its own order; across hosts, bucket by bucket.
+	sort.SliceStable(all, func(i, j int) bool { return all[i].bucket < all[j].bucket })
+	rows := []taskRow{}
+	for _, x := range all {
+		if len(rows) >= limit {
+			break
+		}
+		rows = append(rows, x.r)
+	}
+	res := map[string]any{"today": today, "buckets": headings, "matched": len(all), "tasks": rows}
+	if len(hs) > 1 {
+		res["hosts"] = hostNames(hs)
+	}
+	noteHosts(res, offline, errs)
+	return res, nil
 }
 
 func taskText(t model.Task) string {
@@ -378,54 +439,39 @@ func taskText(t model.Task) string {
 	return strings.ToLower(strings.Join(parts, " "))
 }
 
-// sessionRefIndex maps session ids to "#N" (falling back to the id).
-type sessionRefIndex map[string]string
-
-func (r sessionRefIndex) of(sid string) string {
-	if v := r[sid]; v != "" {
-		return v
-	}
-	return sid
-}
-
-func (s *Server) sessionRefs(ctx context.Context) sessionRefIndex {
-	out := sessionRefIndex{}
-	for _, archived := range []bool{false, true} {
-		ss, err := s.st.ListSessions(ctx, archived)
-		if err != nil {
-			continue
-		}
-		for _, x := range ss {
-			out[x.SessionID] = x.Ref()
-		}
-	}
-	return out
-}
-
-func (s *Server) getTask(ctx context.Context, ref string) (any, error) {
-	t, err := s.st.GetTask(ctx, ref)
+func (s *Server) getTask(ctx context.Context, ref, hostArg string) (any, error) {
+	ht, err := s.locateTask(ctx, ref, hostArg)
 	if err != nil {
 		return nil, err
 	}
-	return s.taskOut(ctx, t), nil
+	return s.taskOut(ctx, ht), nil
 }
 
-// taskOut is a whole task with its sessions spelled out.
-func (s *Server) taskOut(ctx context.Context, t model.Task) map[string]any {
+// taskOut is a whole task with its ref and its sessions spelled out.
+func (s *Server) taskOut(ctx context.Context, ht hostTask) map[string]any {
 	now := s.now()
-	out := map[string]any{"task": t, "bucket": tasks.BucketOf(t, now)}
+	t := ht.t
+	out := map[string]any{"ref": ht.ref(), "task": t, "bucket": tasks.BucketOf(t, now)}
+	if !ht.h.self {
+		out["host"] = hostLabel(ht.h)
+	}
 	if tasks.CarriedOver(t, now) {
 		out["carried_over"] = true
 	}
 	if len(t.Sessions) > 0 {
+		idx := s.sessionIndex(ctx)
 		var ss []map[string]any
 		for _, sid := range t.Sessions {
-			x, err := s.findSession(ctx, sid)
-			if err != nil {
+			l, ok := idx[sid]
+			if !ok {
 				ss = append(ss, map[string]any{"session_id": sid})
 				continue
 			}
-			row := map[string]any{"ref": x.Ref(), "title": x.DisplayTitle(), "status": string(x.Status), "session_id": x.SessionID}
+			x := l.x
+			row := map[string]any{"ref": l.ref(), "title": x.DisplayTitle(), "status": string(x.Status), "session_id": x.SessionID}
+			if !l.h.self {
+				row["host"] = hostLabel(l.h)
+			}
 			if s.hubURL != "" {
 				row["url"] = s.hubURL + "/s/" + url.PathEscape(x.SessionID)
 			}
@@ -436,36 +482,46 @@ func (s *Server) taskOut(ctx context.Context, t model.Task) map[string]any {
 	return out
 }
 
-// withSelf adds the calling session to the patch, when it can tell.
+// withSelf adds the calling session to the patch, when it can tell. The
+// session may live on another host than the task: links are session ids.
 func (s *Server) withSelf(p *tasks.Patch) {
 	if sid := s.self(); sid != "" {
 		p.AddSessions = append(p.AddSessions, sid)
 	}
 }
 
-func (s *Server) patchTask(ctx context.Context, ref string, p tasks.Patch) (any, error) {
-	p.Source = tasks.SourceClaude
-	s.withSelf(&p)
-	t, err := s.st.UpdateTask(ctx, ref, p)
+func (s *Server) patchTask(ctx context.Context, ref, hostArg string, p tasks.Patch) (any, error) {
+	ht, err := s.locateTask(ctx, ref, hostArg)
 	if err != nil {
 		return nil, err
 	}
-	return s.taskOut(ctx, t), nil
+	p.Source = tasks.SourceClaude
+	s.withSelf(&p)
+	t, err := ht.h.st.UpdateTask(ctx, ht.id(), p)
+	if err != nil {
+		return nil, ht.h.explain(err)
+	}
+	return s.taskOut(ctx, hostTask{t, ht.h}), nil
 }
 
+// resolveSessionIDs turns session refs into ids, on whichever host they run.
 func (s *Server) resolveSessionIDs(ctx context.Context, refs []string) ([]string, error) {
 	var ids []string
 	for _, r := range refs {
-		x, err := s.findSession(ctx, r)
+		l, err := s.locate(ctx, r, "")
 		if err != nil {
 			return nil, err
 		}
-		ids = append(ids, x.SessionID)
+		ids = append(ids, l.x.SessionID)
 	}
 	return ids, nil
 }
 
 func (s *Server) addTask(ctx context.Context, a taskArgs) (any, error) {
+	h, err := s.hostNamed(ctx, a.Host)
+	if err != nil {
+		return nil, err
+	}
 	in := tasks.Input{Links: a.Links, Source: tasks.SourceClaude}
 	if a.Title != nil {
 		in.Title = *a.Title
@@ -496,11 +552,11 @@ func (s *Server) addTask(ctx context.Context, a taskArgs) (any, error) {
 		ids = append(ids, sid)
 	}
 	in.Sessions = ids
-	t, err := s.st.AddTask(ctx, in)
+	t, err := h.st.AddTask(ctx, in)
 	if err != nil {
-		return nil, err
+		return nil, h.explain(err)
 	}
-	return s.taskOut(ctx, t), nil
+	return s.taskOut(ctx, hostTask{t, h}), nil
 }
 
 func (s *Server) addTaskNote(ctx context.Context, a taskArgs) (any, error) {
@@ -517,16 +573,20 @@ func (s *Server) addTaskNote(ctx context.Context, a taskArgs) (any, error) {
 	if src == "" {
 		src = tasks.SourceClaude
 	}
-	t, err := s.st.AddTaskNote(ctx, a.Task, model.TaskNote{At: at, Source: src, Text: a.Text, Link: a.Link, Ref: a.Ref})
+	ht, err := s.locateTask(ctx, a.Task, a.Host)
 	if err != nil {
 		return nil, err
 	}
+	t, err := ht.h.st.AddTaskNote(ctx, ht.id(), model.TaskNote{At: at, Source: src, Text: a.Text, Link: a.Link, Ref: a.Ref})
+	if err != nil {
+		return nil, ht.h.explain(err)
+	}
 	if sid := s.self(); sid != "" {
-		if t2, err := s.st.UpdateTask(ctx, strconv.FormatInt(t.ID, 10), tasks.Patch{AddSessions: []string{sid}, Source: tasks.SourceClaude}); err == nil {
+		if t2, err := ht.h.st.UpdateTask(ctx, ht.id(), tasks.Patch{AddSessions: []string{sid}, Source: tasks.SourceClaude}); err == nil {
 			t = t2
 		}
 	}
-	return s.taskOut(ctx, t), nil
+	return s.taskOut(ctx, hostTask{t, ht.h}), nil
 }
 
 func (s *Server) linkTask(ctx context.Context, a taskArgs) (any, error) {
@@ -537,52 +597,45 @@ func (s *Server) linkTask(ctx context.Context, a taskArgs) (any, error) {
 	if len(a.Links) == 0 && len(ids) == 0 {
 		return nil, fmt.Errorf("links or sessions is required")
 	}
+	ht, err := s.locateTask(ctx, a.Task, a.Host)
+	if err != nil {
+		return nil, err
+	}
 	p := tasks.Patch{Source: tasks.SourceClaude}
 	if a.Unlink {
 		p.RemoveLinks, p.RemoveSessions = a.Links, ids
 	} else {
 		p.AddLinks, p.AddSessions = a.Links, ids
 	}
-	t, err := s.st.UpdateTask(ctx, a.Task, p)
+	t, err := ht.h.st.UpdateTask(ctx, ht.id(), p)
 	if err != nil {
-		return nil, err
+		return nil, ht.h.explain(err)
 	}
-	return s.taskOut(ctx, t), nil
+	return s.taskOut(ctx, hostTask{t, ht.h}), nil
 }
 
-func (s *Server) orderTasks(ctx context.Context, refs []string) (any, error) {
+func (s *Server) orderTasks(ctx context.Context, refs []string, hostArg string) (any, error) {
 	if len(refs) == 0 {
 		return nil, fmt.Errorf("tasks is required")
 	}
+	var on host
 	ids := make([]int64, 0, len(refs))
-	for _, r := range refs {
-		t, err := s.st.GetTask(ctx, r)
+	out := make([]string, 0, len(refs))
+	for i, r := range refs {
+		ht, err := s.locateTask(ctx, r, hostArg)
 		if err != nil {
 			return nil, err
 		}
-		ids = append(ids, t.ID)
-	}
-	if err := s.st.OrderTasks(ctx, ids); err != nil {
-		return nil, err
-	}
-	return map[string]any{"ordered": ids}, nil
-}
-
-// tasksBySession maps session ids to the open tasks linked to them, for
-// the session rows.
-func (s *Server) tasksBySession(ctx context.Context) map[string][]int64 {
-	l, err := s.st.ListTasks(ctx, false)
-	if err != nil {
-		return nil
-	}
-	out := map[string][]int64{}
-	for _, t := range l.Tasks {
-		if t.Finished() {
-			continue
+		if i == 0 {
+			on = ht.h
+		} else if !sameHost(on, ht.h) {
+			return nil, fmt.Errorf("order_tasks orders one host's list: %s and %s are on different hosts", out[0], ht.ref())
 		}
-		for _, sid := range t.Sessions {
-			out[sid] = append(out[sid], t.ID)
-		}
+		ids = append(ids, ht.t.ID)
+		out = append(out, ht.ref())
 	}
-	return out
+	if err := on.st.OrderTasks(ctx, ids); err != nil {
+		return nil, on.explain(err)
+	}
+	return map[string]any{"ordered": out}, nil
 }

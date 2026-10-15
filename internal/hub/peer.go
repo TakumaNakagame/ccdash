@@ -45,16 +45,20 @@ type peerRoute struct {
 // peerDeviceRoutes is what a peer may ask of a device (the path after
 // /api/d/{id}). Reads: sessions, a transcript tail, approvals (to show
 // what is pending — never to decide), projects, usage, the restart state,
-// the hosted PTYs, the device's info and its directory listing. Writes:
-// the session edits the portal makes, starting / stopping a hosted claude
-// and the (scheduled) collector restart.
+// the hosted PTYs, the device's info, its directory listing and its task
+// list. Writes: the session edits the portal makes, starting / stopping a
+// hosted claude, the (scheduled) collector restart and the person-sized
+// task edits (add, patch, note, order — never sync or import, and only by
+// numeric id).
 var peerDeviceRoutes = []peerRoute{
 	{"GET", regexp.MustCompile(`^/api/(sessions|approvals|projects|usage|restart)$`), false},
 	{"GET", regexp.MustCompile(`^/api/sessions/[^/]+/transcript$`), false},
 	{"GET", regexp.MustCompile(`^/pty/?$`), false},
 	{"GET", regexp.MustCompile(`^/hub/(info|dirs)$`), false},
+	{"GET", regexp.MustCompile(`^/api/tasks(/[^/]+)?$`), false},
 	{"POST", regexp.MustCompile(`^/api/sessions/[^/]+/(archive|favorite|later|grid|color|title|project|seen)$`), true},
 	{"POST", regexp.MustCompile(`^/api/projects/(color|rename|order)$`), true},
+	{"POST", regexp.MustCompile(`^/api/tasks(/order|/[0-9]+(/notes)?)?$`), true},
 	{"POST", regexp.MustCompile(`^/pty/start$`), true},
 	{"DELETE", regexp.MustCompile(`^/pty/[^/]+$`), true},
 	{"POST", regexp.MustCompile(`^/api/restart$`), true},

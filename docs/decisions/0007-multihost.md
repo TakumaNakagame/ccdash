@@ -52,7 +52,8 @@ list / stop / resume / retitle a session on host Y).
   `schedule_restart`, the project tools, `archive_finished`) default to
   this machine. Session numbers are per host: a bare `#N` stays this
   machine's; another host's is `<host>#N` (that is what `ref` shows), a
-  session id is searched everywhere. Tasks and `set_status` stay local.
+  session id is searched everywhere. `set_status` stays local; tasks
+  joined later (addendum below).
   Without a hub, with peer access off, or under `-r`, nothing changes.
 - **Portal:** `#/s` is one list of every online host's sessions (host chip
   on each row; host filter chips above; `#/d/<dev>` = the same list
@@ -67,8 +68,8 @@ list / stop / resume / retitle a session on host Y).
 - Only the hub needs updating for the portal and the peer route; devices
   need the new binary only where `ccdash mcp` should reach other hosts
   (MCP servers are spawned per claude session, so no collector restart).
-- The Android app still has the device-first navigation; porting the
-  cross-host list and host picker there is separate work.
+- The Android app got the cross-host list and host picker in its own
+  repo (ccdash-android #6), and the task list later (addendum below).
 
 ## Addendum (2026-10-15): host letters
 
@@ -80,3 +81,29 @@ notifications. The hub sends the letter on the tunnel dial; the collector
 keeps it in hub.json and stamps it on listed rows. MCP accepts "B22"
 (the host is found by letter), still takes "#N" / N for this machine and
 "<host>#N". A machine not joined to a hub keeps "#N".
+
+## Addendum (2026-10-16): tasks across hosts
+
+Each machine still keeps its own list (0006), but sessions moved between
+machines (the PC → LXC move) and kept working on tasks that live on the
+first one. Now:
+
+- **Peers reach tasks.** `peerDeviceRoutes` adds `GET /api/tasks[/{id}]`
+  (read) and, with `control`, `POST /api/tasks`, `/api/tasks/order`,
+  `/api/tasks/<digits>` and `/api/tasks/<digits>/notes` — never `sync` or
+  `import`, and writes only by numeric id.
+- **A task's ref is `<letter>#<id>`** ("B#11"): the host letter, then the
+  task's usual "#11", so it never collides with a session ref ("B11").
+  MCP also takes `<host>#11` and a `host` argument.
+- **MCP:** `list_tasks` without `host` merges every reachable host's list
+  (bucket by bucket; rows carry `ref` and `host`). A bare "#11" or key is
+  this machine's, or — when this machine has none — the one other host
+  that has it (several → an error listing their refs). Edits go to the
+  task's host; the calling session is linked whichever host it runs on
+  (links are session ids), and session rows list their tasks as refs from
+  every host. `add_task` takes `host` (default this machine);
+  `task_context` and `sync_tasks` stay this machine's.
+- **Portal:** the task list already merged every online device; rows now
+  show the ref with the letter and "について、" copies it. The Android app
+  gets the same list (ccdash-android).
+- **The TUI stays single-host** and keeps "#11".

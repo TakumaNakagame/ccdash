@@ -71,8 +71,10 @@ change status with set_task_status (with why), and set the day with plan_task wh
 operator decides it. Edits from a session link that session to the task. There is no
 delete: done / cancelled tasks are archived. Writes to Jira, Slack or GitHub are not done
 here — use those services' own tools and keep the links on the task.
-Task ids are "#11"; sessions are "A231" (letter + number). A bare "#11" from the operator most
-often means a task; if both a task and a session fit and the context doesn't decide, ask.
+Each machine keeps its own list; list_tasks merges every reachable host's. A task's ref is the
+host's letter + "#" + id ("B#11"); sessions are "A231" (letter + number, no "#"). A bare "#11"
+is this machine's task 11 (or, if it has none, the one host that has it). A bare "#11" from the
+operator most often means a task; if both a task and a session fit and the context doesn't decide, ask.
 
 Status rule — follow it in every session that has these tools: the operator juggles many
 sessions and can't tell which ones wait on them. Right before you end a turn (the message
@@ -601,31 +603,31 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 
 // sessionRow is the compact view of a session the tools return.
 type sessionRow struct {
-	Ref       string  `json:"ref,omitempty"`
-	Host      string  `json:"host,omitempty"` // the hub device name of its collector (multi-host)
-	HostLetter string `json:"host_letter,omitempty"` // the hub's letter for that host (its sessions are <letter>N)
-	Title     string  `json:"title"`
-	Project   string  `json:"project,omitempty"`
-	Group     string  `json:"group,omitempty"`
-	Status    string  `json:"status"`
-	Attention string  `json:"attention,omitempty"`
-	Reason    string  `json:"attention_reason,omitempty"`
-	Pending   int     `json:"pending_approvals,omitempty"`
-	Cwd       string  `json:"cwd"`
-	Branch    string  `json:"branch,omitempty"`
-	Account   string  `json:"account,omitempty"`
-	LastSeen  string  `json:"last_seen"`
-	Ago       string  `json:"last_seen_ago"`
-	Pinned    bool    `json:"pinned,omitempty"`
-	New       bool    `json:"new_since_seen,omitempty"` // progress since the operator last looked
-	Later     bool    `json:"watch_later,omitempty"`
-	Grid      bool    `json:"on_grid,omitempty"`         // on the grid shared by the TUI (V) and the portal
-	Wait      string  `json:"declared_status,omitempty"` // what the session said it hands back (set_status)
-	WaitNote  string  `json:"declared_note,omitempty"`
-	Archived  bool    `json:"archived,omitempty"`
-	SessionID string  `json:"session_id"`
-	URL       string  `json:"url,omitempty"`   // the session's chat in the hub portal
-	Tasks     []int64 `json:"tasks,omitempty"` // open tasks this session worked on
+	Ref        string   `json:"ref,omitempty"`
+	Host       string   `json:"host,omitempty"`        // the hub device name of its collector (multi-host)
+	HostLetter string   `json:"host_letter,omitempty"` // the hub's letter for that host (its sessions are <letter>N)
+	Title      string   `json:"title"`
+	Project    string   `json:"project,omitempty"`
+	Group      string   `json:"group,omitempty"`
+	Status     string   `json:"status"`
+	Attention  string   `json:"attention,omitempty"`
+	Reason     string   `json:"attention_reason,omitempty"`
+	Pending    int      `json:"pending_approvals,omitempty"`
+	Cwd        string   `json:"cwd"`
+	Branch     string   `json:"branch,omitempty"`
+	Account    string   `json:"account,omitempty"`
+	LastSeen   string   `json:"last_seen"`
+	Ago        string   `json:"last_seen_ago"`
+	Pinned     bool     `json:"pinned,omitempty"`
+	New        bool     `json:"new_since_seen,omitempty"` // progress since the operator last looked
+	Later      bool     `json:"watch_later,omitempty"`
+	Grid       bool     `json:"on_grid,omitempty"`         // on the grid shared by the TUI (V) and the portal
+	Wait       string   `json:"declared_status,omitempty"` // what the session said it hands back (set_status)
+	WaitNote   string   `json:"declared_note,omitempty"`
+	Archived   bool     `json:"archived,omitempty"`
+	SessionID  string   `json:"session_id"`
+	URL        string   `json:"url,omitempty"`   // the session's chat in the hub portal
+	Tasks      []string `json:"tasks,omitempty"` // open tasks this session worked on, as refs ("B#11"), on any host
 }
 
 func (s *Server) row(l located) sessionRow {
@@ -913,9 +915,7 @@ func (s *Server) listSessions(ctx context.Context, hostArg, project, query strin
 		matched++
 		if len(out) < limit {
 			r := s.row(l)
-			if l.h.self {
-				r.Tasks = byTask[x.SessionID]
-			}
+			r.Tasks = byTask[x.SessionID]
 			out = append(out, r)
 		}
 	}
@@ -941,8 +941,8 @@ func matches(l located, q string) bool {
 }
 
 // findSession resolves "#N", "N" or a session id (archived ones too) on
-// this machine's collector — for the tools that only work here (tasks,
-// set_status). The others use locate (hosts.go).
+// this machine's collector — for the tools that only work here
+// (set_status). The others use locate (hosts.go).
 func (s *Server) findSession(ctx context.Context, ref string) (model.Session, error) {
 	ref = strings.TrimSpace(ref)
 	if l, n, ok := letterRef(ref); ok && strings.EqualFold(l, s.selfLetter()) {
@@ -980,9 +980,7 @@ func (s *Server) getSession(ctx context.Context, ref, hostArg string, n int) (an
 	}
 	n = min(n, 200)
 	row := s.row(l)
-	if l.h.self {
-		row.Tasks = s.tasksBySession(ctx)[x.SessionID]
-	}
+	row.Tasks = s.tasksBySession(ctx)[x.SessionID]
 	out := map[string]any{"session": row}
 	if aps, err := st.ListPendingApprovals(ctx); err == nil {
 		var mine []map[string]any
