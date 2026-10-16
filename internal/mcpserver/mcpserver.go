@@ -754,7 +754,7 @@ func (s *Server) overview(ctx context.Context, hostArg string) (any, error) {
 			}
 		}
 		if rs, err := h.st.RestartStatus(ctx); err == nil && rs.Pending {
-			restarts[hostLabel(h)] = restartView(rs)
+			restarts[hostLabel(h)] = s.restartView(h, rs)
 		}
 		if u, err := h.st.UsageSummary(ctx, 1); err == nil {
 			usage[hostLabel(h)] = map[string]any{
@@ -1482,15 +1482,23 @@ func (s *Server) resumeSession(ctx context.Context, ref, hostArg, prompt, mode s
 	return out, nil
 }
 
-// restartView is a scheduled restart as the tools report it.
-func restartView(rs model.RestartState) map[string]any {
-	waiting := make([]string, len(rs.Waiting))
+// restartView is a scheduled restart as the tools report it: each session
+// it waits for carries its ref, and its portal url when there is a hub, so
+// the operator can go and finish it.
+func (s *Server) restartView(h host, rs model.RestartState) map[string]any {
+	waiting := make([]map[string]any, len(rs.Waiting))
 	for i, b := range rs.Waiting {
-		ref := b.SessionID
-		if b.Num > 0 {
-			ref = fmt.Sprintf("#%d", b.Num)
+		row := map[string]any{
+			"session": located{x: model.Session{SessionID: b.SessionID, Num: b.Num}, h: h}.ref(),
+			"why":     b.Why,
 		}
-		waiting[i] = ref + " " + b.Why
+		if b.Title != "" {
+			row["title"] = b.Title
+		}
+		if s.hubURL != "" {
+			row["url"] = s.hubURL + "/s/" + url.PathEscape(b.SessionID)
+		}
+		waiting[i] = row
 	}
 	out := map[string]any{
 		"pending":         rs.Pending,
@@ -1524,7 +1532,7 @@ func (s *Server) scheduleRestart(ctx context.Context, hostArg string, cancel boo
 		if err != nil {
 			return nil, fmt.Errorf("cancel the restart on %s (is the ccdash collector running?): %w", hostLabel(h), err)
 		}
-		return withHost(restartView(rs)), nil
+		return withHost(s.restartView(h, rs)), nil
 	}
 	if err := s.attachOn(ctx, h, "restarting the collector"); err != nil {
 		return nil, err
@@ -1536,5 +1544,5 @@ func (s *Server) scheduleRestart(ctx context.Context, hostArg string, cancel boo
 	if err != nil {
 		return nil, fmt.Errorf("schedule the restart on %s (is the ccdash collector running? it must run as `ccdash server` to restart itself): %w", hostLabel(h), err)
 	}
-	return withHost(restartView(rs)), nil
+	return withHost(s.restartView(h, rs)), nil
 }

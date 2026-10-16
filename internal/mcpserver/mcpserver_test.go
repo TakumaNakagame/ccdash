@@ -508,10 +508,11 @@ func TestScheduleRestart(t *testing.T) {
 		}
 	}))
 	defer ts.Close()
-	s := New(store.NewRemote(ts.URL, "tok"), "test", false)
+	s := New(store.NewRemote(ts.URL, "tok"), "test", false).WithHubURL("https://hub.example")
 	ctx := context.Background()
 	out, err := s.call(ctx, "schedule_restart", json.RawMessage(`{"timeout_minutes":30}`))
-	if err != nil || posted["when"] != "idle" || posted["by"] != "mcp" || posted["timeout_min"] != float64(30) || !strings.Contains(out, "#7 作業中") {
+	if err != nil || posted["when"] != "idle" || posted["by"] != "mcp" || posted["timeout_min"] != float64(30) ||
+		!strings.Contains(out, `"session": "#7"`) || !strings.Contains(out, `"url": "https://hub.example/s/x"`) {
 		t.Fatalf("schedule: err=%v posted=%v out=%s", err, posted, out)
 	}
 	if out, _ := s.call(ctx, "overview", nil); !strings.Contains(out, "restart_pending") {
