@@ -633,7 +633,14 @@ machine never accepts inbound connections — its collector dials out.
   pin (`f`), archive (`x`) and generate a title (`ctrl+t`).
   **Archive** on the session list shows the archived ones.
 - In the session list, project members are grouped under a band in the
-  project's color, their rows tinted with a project stripe.
+  project's color, their rows tinted with a project stripe. With several
+  hosts, a project name is one band (and one grid group) whatever host its
+  sessions run on, in the color of the host with the first letter; sessions on
+  different hosts can be put in the same project.
+- The session list always merges every host. A host is picked only when a
+  session is started (a project band's ＋ defaults to the host that project
+  used last). To see one host only, pick it under ⚙ Display → "Hosts in
+  the session list" (a device page opened from Home shows just that one).
 - **New session** takes an optional first message; typing `/` lists the
   device's skills and slash commands (project ones move the directory to
   their project), like the TUI's `S`.
@@ -685,8 +692,13 @@ machine never accepts inbound connections — its collector dials out.
   today / 7 days with a daily bar chart; the TUI header shows today. On a
   subscription this is an estimate at list price, not your bill.
 - Above the input: **quick commands** (tap to send; ✎ edits them, shared
-  across browsers), 🎤 voice input, `/` completion, and new sessions take a
-  permission mode (manual / acceptEdits / auto / plan).
+  across browsers), 🎤 voice input, `/` completion (the **/** button left
+  of the input opens the list at any time; with text already typed the
+  command goes in front of it), and new sessions take a permission mode
+  (manual / acceptEdits / auto / plan).
+- In a session ccdash hosts, tap the model name in the status line (or pick
+  `/model` from the completion) for a model menu — default / Opus / Sonnet /
+  Haiku / Fable / Opus Plan / any model id; it sends `/model <name>`.
 - **Subagents**: when a session has run subagents (the Agent tool), a bar
   under the chat header shows how many are running; open it for each one's
   type, description, elapsed time and latest tool call, and tap one for its

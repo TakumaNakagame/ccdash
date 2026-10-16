@@ -110,3 +110,26 @@ first one. Now:
   narrow it instead. The Android app
   gets the same list (ccdash-android).
 - **The TUI stays single-host** and keeps "#11".
+
+## Addendum (2026-10-16): projects merge, hosts move out of the way
+
+The list still read as "per host": project bands split by host ("web ·
+hostA", "web · hostB"), the grid grouped the same way, and host chips sat
+above the list. Now:
+
+- **A project name is one group across hosts** in the portal's list and
+  grid. Storage does not change — each host keeps its own `projects` row
+  and members — the portal merges by name: the block's order is the lowest
+  of the hosts' orders, ▲▼ moves it on every host that has it, and
+  the color shown is the one of the host with the first letter (`unifyProjectColors`); changing the
+  color or joining another host's project copies the color to the hosts
+  that have it (`shareProjectColor`, never creating the project elsewhere).
+  The project picker lists every online host's projects, and a selection
+  across hosts can go into one project. A band's ＋ starts on the host its
+  most recent session used; the new-session dialog keeps the project when
+  another host is picked.
+- **The host filter is a setting** (⚙ 表示 → セッション一覧に出すホスト),
+  not chips on the list; `#/d/<dev>` narrows only that page and no longer
+  changes the saved choice. A chat's back button returns to the list it
+  came from instead of the host's page.
+- The TUI and MCP stay per host.

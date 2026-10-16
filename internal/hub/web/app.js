@@ -400,7 +400,7 @@ function route() {
   // narrowed to that host (the filter sticks until changed).
   const inList = parts[0] === "s" || (inDevice && !parts[2]);
   if (inList) {
-    if (inDevice) setHostFilter(parts[1]);
+    setHostFilter(inDevice ? parts[1] : savedHostFilter(), false);
     listHash = location.hash;
   }
   paintTaskScope();
@@ -778,26 +778,79 @@ function newFirstOn() {
   try { const v = localStorage.getItem(NEW_FIRST_KEY); if (v) return v === "1"; } catch {}
   return matchMedia("(pointer: coarse)").matches;
 }
+// With several hosts a project is one block whatever host its sessions run
+// on (each host keeps its own order; the block takes the lowest).
 function projectsFirst(rows) {
   const t = (v) => (v ? new Date(v).getTime() : 0);
   if (!rows.some((s) => s.project)) return rows;
+  const ord = new Map();
+  for (const s of rows) if (s.project) ord.set(s.project, Math.min(ord.get(s.project) ?? Infinity, s.project_order || 0));
   const inP = rows.filter((s) => s.project).sort((a, b) =>
     a.project === b.project ? (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (t(b.first_seen) - t(a.first_seen)) || ((b.num || 0) - (a.num || 0))
-      : ((a.project_order || 0) - (b.project_order || 0)) || a.project.localeCompare(b.project));
+      : (ord.get(a.project) - ord.get(b.project)) || a.project.localeCompare(b.project));
   return [...inP, ...rows.filter((s) => !s.project)];
+}
+// unifyProjectColors gives every session of a project the same color in a
+// list mixing hosts: each host stores its own copy of the project, and a
+// copy made on first use there may have drawn another color. The first
+// host's wins — by host letter (A, B, … in registration order), so the list
+// and the grid agree whatever order their rows came in; shareProjectColor
+// keeps the copies in step.
+function unifyProjectColors(rows, get = (x) => x) {
+  const best = new Map(); // project → { letter, color }
+  for (const x of rows) {
+    const s = get(x);
+    if (!s.project) continue;
+    const l = s.host_letter || "~", cur = best.get(s.project);
+    if (!cur || l < cur.letter) best.set(s.project, { letter: l, color: s.project_color || "" });
+  }
+  for (const x of rows) {
+    const s = get(x);
+    if (s.project) s.project_color = best.get(s.project).color;
+  }
+  return rows;
+}
+// shareProjectColor copies a project's color from one host to the other
+// online hosts that have the project (never creating it where it isn't).
+async function shareProjectColor(from, name, color = "") {
+  try {
+    if (!color) color = ((await dev(from).get("/api/projects")) || []).find((p) => p.name === name)?.color || "";
+    if (!/^#[0-9a-f]{6}$/i.test(color)) return;
+    const ds = (await onlineDevices()).filter((d) => d.online && d.id !== from);
+    await Promise.all(ds.map(async (d) => {
+      const has = ((await dev(d.id).get("/api/projects").catch(() => [])) || []).find((p) => p.name === name);
+      if (has && has.color !== color) await dev(d.id).post("/api/projects/color", { project: name, color }).catch(() => {});
+    }));
+  } catch {}
+}
+// projectRecent: a project's most recently seen session (any host) — where
+// a new session in it starts by default.
+function projectRecent(rows, name) {
+  return rows.filter((x) => x.project === name).sort((a, b) => new Date(b.last_seen || 0) - new Date(a.last_seen || 0))[0];
 }
 // projectPicker: choose a project for one or more sessions. Existing
 // projects (GET /api/projects — also the ones whose sessions are all
 // archived) are chips in their colors; typing filters them, and a name
 // that isn't listed is created on 作成. pick(name) receives "" for 外す.
+// The chips are every online host's projects, merged by name: a project
+// is one set of sessions whatever hosts they run on (a host creates its
+// copy on first use).
 async function projectPicker(id, { current = "", count = 1 } = {}, pick) {
-  let projects = [];
-  try { projects = (await dev(id).get("/api/projects")) || []; } catch (e) { toast(e.message); }
+  let ids = [id];
+  try { ids = [...new Set([id, ...(await onlineDevices()).filter((d) => d.online).map((d) => d.id)])]; } catch {}
+  const per = await Promise.all(ids.map((d) => dev(d).get("/api/projects").catch((e) => { if (d === id) toast(e.message); return []; })));
+  const byName = new Map();
+  for (const p of per.flat().filter(Boolean)) {
+    const m = byName.get(p.name);
+    if (m) m.sessions = (m.sessions || 0) + (p.sessions || 0);
+    else byName.set(p.name, { ...p });
+  }
+  const projects = [...byName.values()];
   dialog((body, close) => {
     const input = h("input", { class: "grow", placeholder: "プロジェクトを検索、または新しい名前を入力" });
     const chips = h("div", { class: "proj-chips" });
     const create = h("button", { type: "button", class: "btn primary" }, "作成");
-    const choose = (name) => { close(); pick(name); };
+    const choose = (name) => { close(); pick(name, byName.get(name)?.color || ""); };
     const paint = () => {
       const q = input.value.trim();
       const ql = q.toLowerCase();
@@ -909,15 +962,17 @@ function saveTab(id, g) { try { localStorage.setItem(tabKey(id), g); } catch {} 
 // ---------- sessions (every host) ----------
 
 // The session list covers every online host at once; a host is a session's
-// attribute (a chip on its row), not a page you enter first. hostFilter
-// narrows the list to one host — chips above the list, or #/d/<host> —
-// and is remembered per browser. With one host in view the page also
-// shows that host's own things (status, usage, settings, restart).
+// attribute (a chip on its row), not a page you enter first — the host is
+// picked only when a session is started (newSession). hostFilter narrows
+// the list to one host: a setting in 表示 (lookDialog), remembered per
+// browser, or — for that page only — #/d/<host> (a host's own page from
+// ホーム, with its status, usage, settings, restart).
 const ALL_HOSTS = "*";
-let hostFilter = (() => { try { return localStorage.getItem("ccdash.hostFilter") || ALL_HOSTS; } catch { return ALL_HOSTS; } })();
-function setHostFilter(v) {
+function savedHostFilter() { try { return localStorage.getItem("ccdash.hostFilter") || ALL_HOSTS; } catch { return ALL_HOSTS; } }
+let hostFilter = savedHostFilter();
+function setHostFilter(v, persist = true) {
   hostFilter = v || ALL_HOSTS;
-  try { localStorage.setItem("ccdash.hostFilter", hostFilter); } catch {}
+  if (persist) try { localStorage.setItem("ccdash.hostFilter", hostFilter); } catch {}
 }
 // The list a session's back button / swipe returns to.
 let listHash = "#/s";
@@ -951,13 +1006,12 @@ async function devicePage(opts = {}) {
   let devs = [];
   try { devs = await onlineDevices(); } catch {}
   // A filter naming a host that is gone falls back to every host.
-  if (hostFilter !== ALL_HOSTS && devs.length && !devs.some((d) => d.id === hostFilter)) setHostFilter(ALL_HOSTS);
+  if (hostFilter !== ALL_HOSTS && devs.length && !devs.some((d) => d.id === hostFilter)) setHostFilter(ALL_HOSTS, hostFilter === savedHostFilter());
   const single = hostFilter !== ALL_HOSTS ? hostFilter : "";
   const onlyOne = !single && devs.filter((d) => d.online).length === 1 && devs.length === 1 ? devs[0].id : "";
   const one = single || onlyOne; // the host this page is about, if just one
   const name = one ? await deviceName(one) : "セッション";
   if (!opts.compact) crumbs({ text: "ホーム", href: "#/" }, { text: single ? name : "セッション" });
-  const hostChips = h("div", { class: "tabs hosts" });
   const approvals = h("div");
   const spawns = h("div");
   const tabs = h("div", { class: "tabs" });
@@ -1039,14 +1093,20 @@ async function devicePage(opts = {}) {
     paintSel();
     refreshNow();
   };
-  // Projects live on each host: a selection across hosts can't share one.
+  // A project is a name: sessions on several hosts can share one (each
+  // host stores its members; the list and grid merge them by name).
   const setProject = () => {
+    const d0 = picked()[0]?.d;
+    if (!d0) return;
     const hosts = new Set(picked().map((p) => p.d));
-    if (hosts.size > 1) { toast("プロジェクトはホストごとです。1 つのホストのセッションだけを選んでください"); return; }
-    const d0 = [...hosts][0];
-    projectPicker(d0, { count: selected.size }, (pname) =>
-      bulk(pname ? `プロジェクト「${pname}」に追加` : "プロジェクトから外す",
-        (d, sid) => dev(d).post(`/api/sessions/${encodeURIComponent(sid)}/project`, { project: pname })));
+    projectPicker(d0, { count: selected.size }, async (pname, color) => {
+      await bulk(pname ? `プロジェクト「${pname}」に追加` : "プロジェクトから外す",
+        (d, sid) => dev(d).post(`/api/sessions/${encodeURIComponent(sid)}/project`, { project: pname }));
+      if (!pname) return;
+      // One color on every host the project now has.
+      if (!color) color = ((await dev(d0).get("/api/projects").catch(() => [])) || []).find((p) => p.name === pname)?.color || "";
+      if (color) { await Promise.all([...hosts].map((d) => dev(d).post("/api/projects/color", { project: pname, color }).catch(() => {}))); refreshNow(); }
+    });
   };
   const genTitles = async () => {
     const byDev = new Map();
@@ -1100,23 +1160,16 @@ async function devicePage(opts = {}) {
           skillPicker(hid, recentCwds((last?.sessions || []).filter((s) => s._dev === hid)));
         } }, "スキル実行"),
       h("button", { class: "btn primary", onclick: () => newSession(one || "") }, icon("plus"), "新規セッション")),
-    hostChips, status, usageCard, approvals, spawns,
+    single ? h("div", { class: "row host-note muted small" },
+      h("span", { class: "grow" }, `${name} のセッションだけを表示中`),
+      h("button", { class: "btn small", onclick: () => {
+        setHostFilter(ALL_HOSTS, !location.hash.startsWith("#/d/") || savedHostFilter() === single);
+        if (location.hash.startsWith("#/d/")) location.hash = "#/s"; else refreshList();
+      } }, "すべてのホストを表示")) : null,
+    status, usageCard, approvals, spawns,
     tabs,
     h("div", { class: "row", style: "margin-bottom:8px" }, h("label", { class: "search grow" }, icon("search"), filter), liftBtn, archBtn),
     selBar, list, more, settingsBox));
-
-  // Host chips: すべて + every registered host (offline ones dimmed).
-  const paintHosts = () => {
-    if (devs.length < 2) { hostChips.replaceChildren(); hostChips.hidden = true; return; }
-    hostChips.hidden = false;
-    const chip = (v, label, d) => h("button", {
-      class: "tab" + (hostFilter === v ? " on" : "") + (d && !d.online ? " off" : ""),
-      title: d && !d.online ? "オフライン" : "",
-      onclick: () => { if (hostFilter === v) return; setHostFilter(v); refreshList(); },
-    }, d?.online ? h("span", { class: "dot on" }) : null, label,
-      hostFilter === ALL_HOSTS && d?.online ? h("span", { class: "count" }, (last?.sessions || []).filter((s) => s._dev === v).length) : null);
-    hostChips.replaceChildren(chip(ALL_HOSTS, "すべてのホスト"), ...devs.map((d) => chip(d.id, d.name, d)));
-  };
 
   let last = null, tab = loadTab(one || ALL_HOSTS), limit = 100, briefs = {}, briefsAt = 0, shownTab = null;
   const render = () => {
@@ -1128,7 +1181,6 @@ async function devicePage(opts = {}) {
     const autoRepo = Object.values(infos).every((i) => i?.autoRepoTabs !== false);
     const groups = uniqueGroups(sessions, autoRepo);
     if (!groups.includes(tab)) tab = "";
-    paintHosts();
 
     tabs.replaceChildren(...groups.map((g) => {
       const n = g ? sessions.filter((s) => groupOf(s) === g).length : sessions.length;
@@ -1162,20 +1214,23 @@ async function devicePage(opts = {}) {
     let bk = null;
     visible = ordered.slice(0, limit).map(sessKey);
     for (const s of ordered.slice(0, limit)) {
-      // Projects are per host: two hosts' "web" are two blocks.
-      const b = lift && s.unseen ? "\0new" : s.later ? "\0later" : s.project ? "\0" + s._dev + "\0" + s.project : dateBucket(s);
+      // A project is one block across hosts: two hosts' "web" merge.
+      const b = lift && s.unseen ? "\0new" : s.later ? "\0later" : s.project ? "\0p\0" + s.project : dateBucket(s);
       if (b !== bk) {
         bk = b;
         out.push(b === "\0new" ? h("div", { class: "bucket new" }, icon("bell"), `新着 ${freshRows.length}`, h("span", { class: "grow" }),
           h("button", { type: "button", class: "btn small", title: "新着をすべて既読にする", onclick: (e) => { e.stopPropagation(); markAllSeen(freshRows); } }, "すべて既読"))
           : s.later ? h("div", { class: "bucket later" }, icon("clock"), "あとで見る")
           : s.project
-          ? projectHeader(multi ? `${s.project} · ${s._devName}` : s.project, projectColorOf(s.project, s.project_color),
-            ordered.filter((x) => x.project === s.project && x._dev === s._dev),
-            // The project's directory: where its most recent session works.
-            () => newSession(s._dev, { cwd: s.cwd, project: s.project }),
+          ? projectHeader(s.project, projectColorOf(s.project, s.project_color),
+            ordered.filter((x) => x.project === s.project),
+            // The project's directory: where its most recent session works
+            // (on that session's host; the dialog can switch hosts).
+            () => { const r = projectRecent(ordered, s.project); newSession(r._dev, { cwd: r.cwd, project: s.project }); },
             async (delta) => {
-              try { await dev(s._dev).post("/api/projects/order", { project: s.project, delta }); refreshNow(); } catch (e) { toast(e.message); }
+              // Each host keeps its own order: move the project on all of them.
+              const hosts = [...new Set(ordered.filter((x) => x.project === s.project).map((x) => x._dev))];
+              try { await Promise.all(hosts.map((d) => dev(d).post("/api/projects/order", { project: s.project, delta }))); refreshNow(); } catch (e) { toast(e.message); }
             })
           : h("div", { class: "bucket" }, b));
       }
@@ -1237,6 +1292,7 @@ async function devicePage(opts = {}) {
       for (const p of r.ptys) ptys.push(Object.assign(p, { _dev: r.id }));
       infos[r.id] = r.info;
     }
+    unifyProjectColors(sessions);
     last = { sessions, ptys, infos };
     // Model / context / cost per row: a transcript scan, so not every tick.
     if (Date.now() - briefsAt > 30000) {
@@ -1669,16 +1725,15 @@ function newSession(id, preset = {}) {
       path.value = id === presetHost && preset.cwd ? preset.cwd : info?.newSessionDir || "";
       load(path.value);
     });
+    // A project spans hosts, so it goes with the session whichever host
+    // is picked (that host creates its copy of the project).
     const projectNote = h("p", { class: "muted small", hidden: !preset.project }, `プロジェクト「${preset.project || ""}」に入ります`);
-    hostSel.addEventListener("change", () => { projectNote.hidden = !preset.project || id !== presetHost; });
     const start = async (e) => {
       e.preventDefault();
       let first = prompt.value.trim();
       if (first.startsWith("-")) first = " " + first;
       try {
-        // A project belongs to its host: on another host the session
-        // starts outside it.
-        const project = id === presetHost ? preset.project || "" : "";
+        const project = preset.project || "";
         const r = await dev(id).post("/pty/start", { cwd: path.value, cols: 120, rows: 36, prompt: first, permissionMode: mode.value, project });
         try { localStorage.setItem("ccdash.newSessionHost", id); } catch {}
         close();
@@ -2551,7 +2606,11 @@ function sessionMenu(id, s, groups, refresh) {
     const projColor = projectColorOf(s.project, s.project_color);
     const postProjectColor = async (color, done) => {
       close();
-      try { await d.post("/api/projects/color", { project: s.project, color }); toast(done); refresh(); } catch (e) { toast(e.message); }
+      try {
+        await d.post("/api/projects/color", { project: s.project, color });
+        await shareProjectColor(id, s.project, color === "random" ? "" : color);
+        toast(done); refresh();
+      } catch (e) { toast(e.message); }
     };
     body.append(
       h("h1", {}, (s.num ? sref(s, id) + " " : "") + sessionTitle(s)),
@@ -2575,7 +2634,11 @@ function sessionMenu(id, s, groups, refresh) {
         h("span", { class: "grow" }),
         h("button", { type: "button", class: "btn", onclick: () => {
           close();
-          projectPicker(id, { current: s.project || "" }, (v) => post("/project", { project: v }, v ? `プロジェクト「${v}」に入れました` : "プロジェクトから外しました"));
+          projectPicker(id, { current: s.project || "" }, async (v, color) => {
+            await post("/project", { project: v }, v ? `プロジェクト「${v}」に入れました` : "プロジェクトから外しました");
+            // Joining another host's project: take its color here too.
+            if (v && color) d.post("/api/projects/color", { project: v, color }).then(refresh).catch(() => {});
+          });
         } }, s.project ? "変更…" : "プロジェクトに入れる…")),
       s.project ? h("label", {}, `プロジェクト「${s.project}」の色（TUI の P と共通）`) : null,
       s.project ? h("div", { class: "swatches" },
@@ -2714,17 +2777,16 @@ const gridSnapStore = {
   },
   set(v) { try { localStorage.setItem("ccdash.gridSnap", JSON.stringify(v)); } catch {} },
 };
-// groupKeyOf: the group a grid tile belongs to — its project (projects are
-// per host), else the session list's group (repo / directory).
+// groupKeyOf: the group a grid tile belongs to — its project, else the
+// session list's group (repo / directory). A project name means one group
+// whichever hosts its sessions run on, like the session list's bands.
 function groupKeyOf(c) {
   const s = c.session;
-  return s.project ? `p\t${c.device_id}\t${s.project}` : `g\t${groupOf(s)}`;
+  return s.project ? `p\t${s.project}` : `g\t${groupOf(s)}`;
 }
-function groupLabelOf(c, all) {
+function groupLabelOf(c) {
   const s = c.session;
-  if (!s.project) return groupOf(s) || "その他";
-  const hosts = new Set((all || []).map((x) => x.device_id));
-  return hosts.size > 1 ? `${s.project} · ${c.device_name}` : s.project;
+  return s.project || groupOf(s) || "その他";
 }
 const cellsOverlap = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 // firstFree: the first 1×1 cell no rect covers — row by row within the
@@ -2860,7 +2922,7 @@ function gridPage() {
     }
     const color = c.session.project ? projectColorOf(c.session.project, c.session.project_color) : "";
     sec.el.style.setProperty("--proj", color || "var(--line)");
-    sec.label = groupLabelOf(c, all);
+    sec.label = groupLabelOf(c);
     return sec;
   };
   const paintHead = (sec, g, n, idx, total) => {
@@ -3259,7 +3321,7 @@ function gridPage() {
   };
   setMode(snapMode);
   const tick = async () => {
-    all = await api("/api/active?all=1");
+    all = unifyProjectColors((await api("/api/active?all=1")) || [], (c) => c.session);
     gridList.settle(all);
     if (!legacyDone) {
       // A list this browser kept before the grid moved onto the devices:
@@ -3311,10 +3373,46 @@ const fmtDur = (ms) => {
   return m >= 60 ? `${Math.floor(m / 60)}h${m % 60}m` : `${m}m`;
 };
 
+// modelPart: the status line's model name; with onModel it is a button
+// that opens the model menu (modelMenu).
+function modelPart(label, onModel) {
+  if (!onModel) return h("span", { class: "st-model" }, "◆ " + label);
+  return h("button", { type: "button", class: "st-model", title: "モデルを切り替える", onclick: (e) => { e.stopPropagation(); onModel(); } }, "◆ " + label, icon("down"));
+}
+
+// MODELS are the choices of the model menu: what `/model <arg>` accepts
+// (Claude Code's aliases, or a full model id).
+const MODELS = [
+  { arg: "default", label: "既定", note: "アカウントの推奨モデル" },
+  { arg: "opus", label: "Opus", note: "最上位（opus の最新）", fam: "opus" },
+  { arg: "sonnet", label: "Sonnet", note: "速さと性能のバランス（sonnet の最新）", fam: "sonnet" },
+  { arg: "haiku", label: "Haiku", note: "軽く速い（haiku の最新）", fam: "haiku" },
+  { arg: "claude-fable-5-1", label: "Fable 5.1", note: "claude-fable-5-1", fam: "fable" },
+  { arg: "opusplan", label: "Opus Plan", note: "計画は Opus、実行は Sonnet" },
+];
+// modelMenu: pick a model; pick(arg) types `/model <arg>` into the session.
+function modelMenu(current, pick) {
+  dialog((body, close) => {
+    const cur = (current || "").toLowerCase();
+    const other = h("input", { class: "grow mono", placeholder: "モデル ID（例: claude-sonnet-5-5）", autocomplete: "off" });
+    const go = (arg) => { arg = arg.trim(); if (!arg) return; close(); pick(arg); };
+    other.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); go(other.value); } });
+    body.append(h("h1", {}, "モデルを切り替え"),
+      current ? h("p", { class: "muted small" }, `いまのモデル: ${current}`) : null,
+      h("div", { class: "dirlist skills model-list" }, MODELS.map((m) => h("div", {
+        class: m.fam && cur.includes(m.fam) ? "on" : null, onclick: () => go(m.arg),
+      }, h("b", {}, m.label), h("span", { class: "muted small mono" }, " /model " + m.arg), h("div", { class: "muted small" }, m.note)))),
+      h("label", {}, "ほかのモデル"),
+      h("div", { class: "row" }, other, h("button", { type: "button", class: "btn", onclick: () => go(other.value) }, "切り替え")),
+      h("p", { class: "muted small" }, "セッションに /model を送ります。次の応答から新しいモデルになります。"),
+      h("div", { class: "actions" }, h("button", { class: "btn" }, "閉じる")));
+  });
+}
+
 // liveStatusParts: the chat's status line from Claude Code's statusLine
 // JSON (see https://code.claude.com/docs/en/statusline).
-function liveStatusParts(st) {
-  const out = [h("span", { class: "st-model" }, "◆ " + (st.model?.display_name || modelName(st.model?.id)))];
+function liveStatusParts(st, onModel) {
+  const out = [modelPart(st.model?.display_name || modelName(st.model?.id), onModel)];
   const cw = st.context_window;
   if (cw?.context_window_size) {
     const u = cw.current_usage;
@@ -3332,8 +3430,8 @@ function liveStatusParts(st) {
 }
 
 // statusParts: the chat's status line for a SessionUsage.
-function statusParts(u) {
-  const out = [h("span", { class: "st-model" }, "◆ " + modelName(u.model))];
+function statusParts(u, onModel) {
+  const out = [modelPart(modelName(u.model), onModel)];
   if (u.context) {
     const win = contextWindow(u.context);
     out.push(ctxPart((u.context / win) * 100, u.context, win));
@@ -3725,7 +3823,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
       maxBtn, menuBtn,
       h("button", { class: "btn small icon tile-close", type: "button", title: "グリッドから外す", "aria-label": "グリッドから外す", onclick: () => root.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })) }, icon("x")))
     : h("div", { class: "term-bar" },
-      h("a", { class: "btn small icon", href: `#/d/${id}`, "aria-label": "戻る", title: "戻る" }, icon("back")), titleEl, freshEl, waitEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
+      h("a", { class: "btn small icon", href: listHash, "aria-label": "戻る", title: "戻る", onclick: (e) => { e.preventDefault(); goBack(); } }, icon("back")), titleEl, freshEl, waitEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
   if (compact) titleEl.addEventListener("dblclick", () => root.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, "読み込み中…"));
   const scroller = h("div", { class: "chat" }, log);
@@ -3782,23 +3880,46 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   const micBtn = speechSupported() ? h("button", { type: "button", class: "btn attach mic", title: "音声入力", "aria-label": "音声入力" }, icon("mic")) : null;
   micBtn?.addEventListener("click", () => toggleDictation(micBtn, input, autosize));
   bucket.push(() => stopDictation());
-  // "/" completion: skills and slash commands of this device.
+  // "/" completion: skills and slash commands of this device — typed at
+  // the start of the message, or any time from the "/" button (with text
+  // already typed, the command goes in front of it).
   const slashBox = h("div", { class: "slash-box", hidden: true });
-  let slashList = null;
+  let slashList = null, slashOpen = false;
   const showSlash = async () => {
     const v = input.value;
-    if (!v.startsWith("/") || /\s/.test(v)) { slashBox.hidden = true; return; }
+    const typed = v.startsWith("/") && !/\s/.test(v);
+    if (!typed && !slashOpen) { slashBox.hidden = true; return; }
     if (!slashList) {
       const skills = (await d.get(`/hub/skills?dir=${encodeURIComponent(session?.cwd || "")}`).catch(() => [])) || [];
-      slashList = [...BUILTIN_SLASH, ...skills.map((k) => ({ name: k.name, description: k.description }))];
+      slashList = [...BUILTIN_SLASH, ...skills.filter((k) => !BUILTIN_SLASH.some((b) => b.name === k.name)).map((k) => ({ name: k.name, description: k.description }))];
     }
-    const q = v.slice(1).toLowerCase();
-    const hits = slashList.filter((k) => k.name.toLowerCase().includes(q) || (k.description || "").toLowerCase().includes(q)).slice(0, 30);
+    const q = typed ? v.slice(1).toLowerCase() : "";
+    const hits = filterSkills(slashList, q).slice(0, q ? 30 : 80);
     slashBox.hidden = !hits.length;
-    slashBox.replaceChildren(...hits.map((k) => h("div", { onclick: () => { input.value = "/" + k.name + " "; slashBox.hidden = true; autosize(); input.focus(); } },
+    slashBox.replaceChildren(...hits.map((k) => h("div", { onclick: () => pickSlash(k) },
       h("b", {}, "/" + k.name), k.description ? h("span", { class: "muted small" }, " " + k.description) : null)));
   };
-  input.addEventListener("input", showSlash);
+  const closeSlash = () => { slashOpen = false; slashBox.hidden = true; slashBtn.classList.remove("on"); };
+  const pickSlash = (k) => {
+    closeSlash();
+    // /model opens the portal's own menu instead of Claude Code's picker.
+    if (k.name === "model" && /^(\/\S*)?$/.test(input.value.trim())) { input.value = ""; keepDraft(); autosize(); return openModelMenu(); }
+    const rest = input.value.startsWith("/") ? input.value.replace(/^\/\S*\s?/, "") : input.value;
+    input.value = "/" + k.name + " " + rest;
+    autosize();
+    keepDraft();
+    input.focus();
+    input.setSelectionRange(k.name.length + 2, k.name.length + 2);
+  };
+  const slashBtn = h("button", { type: "button", class: "btn attach slash", title: "スラッシュコマンド・スキル", "aria-label": "スラッシュコマンド・スキル", onclick: () => {
+    if (slashOpen || (!slashBox.hidden && input.value.startsWith("/"))) { closeSlash(); return; }
+    if (!input.value.trim()) { input.value = "/"; autosize(); input.focus(); showSlash(); return; }
+    slashOpen = true;
+    slashBtn.classList.add("on");
+    showSlash();
+  } }, "/");
+  input.addEventListener("input", () => { if (slashOpen && !input.value.trim()) closeSlash(); showSlash(); });
+  input.addEventListener("keydown", (e) => { if (e.key === "Escape" && !slashBox.hidden) { e.preventDefault(); closeSlash(); } });
   // Quick commands: one tap sends a saved prompt.
   const quickRow = h("div", { class: "quick-row" });
   const sendQuick = (text) => { input.value = text; autosize(); composer.requestSubmit(); };
@@ -3806,7 +3927,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     ...cmds.map((c) => h("button", { type: "button", class: "chip quick", title: c, onclick: () => sendQuick(c) }, c.length > 18 ? c.slice(0, 18) + "…" : c)),
     h("button", { type: "button", class: "chip quick edit", title: "クイックコマンドを編集", "aria-label": "クイックコマンドを編集", onclick: () => editQuick(paintQuick) }, icon("edit")));
   api("/api/quick").then(paintQuick).catch(() => {});
-  const composer = h("form", { class: "composer" }, attachBtn, micBtn, h("div", { class: "grow col" }, thumbs, slashBox, input), fileInput, h("div", { class: "row" }, stopBtn, sendBtn));
+  const composer = h("form", { class: "composer" }, attachBtn, micBtn, slashBtn, h("div", { class: "grow col" }, thumbs, slashBox, input), fileInput, h("div", { class: "row" }, stopBtn, sendBtn));
   for (const ev of ["dragover", "drop"]) {
     scroller.addEventListener(ev, (e) => {
       if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
@@ -3818,16 +3939,34 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   // by ccdash's statusLine hook: model, context window, cost, lines, time,
   // rate limits), or — when none arrived lately — model · context · cost
   // from the transcript. Tap for the token / cost breakdown.
-  const statusLine = h("button", { type: "button", class: "chat-status", hidden: true, title: "トークンと API 換算コストの内訳", onclick: () => lastUsage && usageDialog(lastUsage, "このセッションの使用量") });
+  const statusLine = h("div", { class: "chat-status", hidden: true, role: "button", tabindex: "0", title: "トークンと API 換算コストの内訳", onclick: () => lastUsage && usageDialog(lastUsage, "このセッションの使用量") });
+  statusLine.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target === statusLine) { e.preventDefault(); statusLine.click(); } });
+  // The model name opens the model menu, which types `/model <arg>`.
+  function openModelMenu() {
+    const fresh = liveSt?.data;
+    const current = fresh?.model?.display_name || fresh?.model?.id || (lastUsage?.model ? modelName(lastUsage.model) : "");
+    modelMenu(current, async (arg) => {
+      if (!hosted || !ptyKey) return toast("このセッションは ccdash 上で動いていないため切り替えできません", 4000);
+      if (promptEl.childElementCount) return toast("Claude が選択を待っています。先に上のカードで回答してください", 4000);
+      haptic();
+      try {
+        await d.post(`/pty/${encodeURIComponent(ptyKey)}/input`, { text: "/model " + arg, submit: true });
+        toast(`/model ${arg} を送りました`);
+        statusSig = "";
+        setTimeout(poll, 800);
+      } catch (e) { toast(e.message); }
+    });
+  }
   let liveSt = null, statusSig = "";
   const paintStatus = () => {
     const fresh = liveSt && Date.now() - new Date(liveSt.at) < 15 * 60000 ? liveSt.data : null;
-    const sig = fresh ? "s:" + JSON.stringify([fresh.model, fresh.context_window, fresh.cost, fresh.rate_limits])
-      : lastUsage ? "u:" + JSON.stringify([lastUsage.model, lastUsage.context, lastUsage.total?.cost]) : "";
+    const sig = (hosted ? "h" : "") + (fresh ? "s:" + JSON.stringify([fresh.model, fresh.context_window, fresh.cost, fresh.rate_limits])
+      : lastUsage ? "u:" + JSON.stringify([lastUsage.model, lastUsage.context, lastUsage.total?.cost]) : "");
     if (sig === statusSig) return;
     statusSig = sig;
-    statusLine.hidden = !sig;
-    statusLine.replaceChildren(...(fresh ? liveStatusParts(fresh) : lastUsage ? statusParts(lastUsage) : []));
+    statusLine.hidden = !fresh && !lastUsage;
+    const onModel = hosted ? openModelMenu : null;
+    statusLine.replaceChildren(...(fresh ? liveStatusParts(fresh, onModel) : lastUsage ? statusParts(lastUsage, onModel) : []));
   };
   root = h("div", { class: compact ? "tile chat-wrap compact" : "chat-wrap" }, bar, agentBar, agentList, scroller,
     h("div", { class: "chat-bottom" }, approvalsEl, promptEl, h("div", { class: "quick-bar" }, quickRow, statusLine), composer),
@@ -4414,10 +4553,26 @@ function lookDialog() {
       document.documentElement.classList.toggle("no-beam", !beam.checked);
       refreshBeams();
     });
+    // Which hosts the session list shows (normally all of them, merged).
+    const hostSel = h("select", { class: "mode", "aria-label": "一覧に出すホスト" }, h("option", { value: ALL_HOSTS }, "すべてのホスト（まとめて表示）"));
+    const hostBox = h("div", { hidden: true }, h("label", {}, "セッション一覧に出すホスト"), hostSel,
+      h("p", { class: "muted small" }, "新規セッションはこの設定に関係なく、起動するときにホストを選べます。"));
+    onlineDevices().then((ds) => {
+      if (ds.length < 2 && savedHostFilter() === ALL_HOSTS) return;
+      const cur = savedHostFilter();
+      hostSel.append(...ds.map((d) => h("option", { value: d.id, selected: d.id === cur }, d.name + (d.online ? "" : "（オフライン）"))));
+      hostSel.value = cur;
+      hostBox.hidden = false;
+    }).catch(() => {});
+    hostSel.addEventListener("change", () => {
+      setHostFilter(hostSel.value);
+      if (location.hash === "#/s" || location.hash.startsWith("#/d/")) refreshList();
+    });
     body.append(h("h1", {}, "表示"),
       h("label", {}, "テーマ"), seg,
       h("label", {}, "アクセントカラー"), sw,
       h("label", { class: "check" }, beam, "作業中のセッションの枠をアニメーションする"),
+      hostBox,
       h("p", { class: "muted small" }, "この設定はアカウントごとに保存され、ブラウザとアプリで共通です（アニメーションのみこの端末だけ）。"),
       h("div", { class: "actions" }, h("button", { class: "btn primary" }, "閉じる")));
   });
