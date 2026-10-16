@@ -472,3 +472,27 @@ func TestOnlyPromptsBumpLastSeen(t *testing.T) {
 		t.Fatalf("discovery upsert did not set last_seen: %v", got)
 	}
 }
+
+// TestPermissionRequestDialogTools: AskUserQuestion / ExitPlanMode answer
+// at once with no decision and leave no approval row — their own dialog is
+// the prompt, so an approval would only duplicate it.
+func TestPermissionRequestDialogTools(t *testing.T) {
+	s, d, tok := newTestServer(t)
+	for _, tool := range []string{"AskUserQuestion", "ExitPlanMode"} {
+		body := []byte(`{"session_id":"sess-q","hook_event_name":"PermissionRequest","tool_name":"` + tool + `","tool_input":{}}`)
+		rec := do(t, s, http.MethodPost, "/hooks/permission-request", tok, body)
+		if rec.status != http.StatusOK {
+			t.Fatalf("%s: status = %d body=%s", tool, rec.status, rec.body)
+		}
+		if bytes.Contains(rec.body, []byte("hookSpecificOutput")) {
+			t.Fatalf("%s: got a decision: %s", tool, rec.body)
+		}
+	}
+	aps, err := d.ListPendingApprovals(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aps) != 0 {
+		t.Fatalf("approvals = %+v, want none", aps)
+	}
+}
