@@ -1382,7 +1382,7 @@ function restartPendingDialog(id, rs) {
       catch (e) { toast(e.message); cancel.disabled = false; }
     });
     body.append(h("h1", {}, "再起動を予約中です"),
-      h("div", { class: "muted small" }, restartWaitText(rs)),
+      restartWaitText(id, rs, close),
       h("div", { class: "actions" }, h("button", { class: "btn", value: "cancel", formnovalidate: true }, "閉じる"), cancel));
   });
 }
@@ -1392,12 +1392,22 @@ function restartPendingDialog(id, rs) {
 // {"when":"idle"}) gets a warning under the header on every page: its
 // hosted sessions will be stopped and resumed once none of them is busy.
 // The hub carries the state per device (/api/devices → restart).
-function restartWaitText(rs) {
+// restartWaitText: each session the restart waits for links to its chat,
+// so the operator can go and finish (or answer) it. onNav runs on a click
+// (a dialog closes itself).
+function restartWaitText(id, rs, onNav) {
   const w = rs.waiting || [];
-  const ref = (b) => (b.num ? "#" + b.num : (b.session_id || "").slice(0, 8));
-  const list = w.slice(0, 3).map((b) => `${ref(b)} ${b.why}`).join("、") + (w.length > 3 ? ` ほか ${w.length - 3} 件` : "");
-  return (w.length ? `作業中のセッションが終わり次第、再起動します（待ち: ${list}）。` : "まもなく再起動します。") +
-    `ホスト中の ${rs.hosted} 件はいったん止まり、自動で再開されます。`;
+  const tail = `ホスト中の ${rs.hosted} 件はいったん止まり、自動で再開されます。`;
+  if (!w.length) return h("div", { class: "muted small" }, "まもなく再起動します。" + tail);
+  const links = w.map((b) => {
+    const ref = (b.num ? sref({ num: b.num }, id) : "") || (b.session_id || "").slice(0, 8);
+    return h("a", { class: "rn-wait", href: `#/d/${id}/s/${encodeURIComponent(b.session_id)}`,
+      title: b.title || "", onclick: () => onNav?.() },
+      h("b", {}, ref), " ", b.why, b.title ? h("span", { class: "rn-wait-title" }, " — " + b.title) : null);
+  });
+  return h("div", { class: "muted small" },
+    `作業中のセッションが終わり次第、再起動します。${tail}待っているセッション（${w.length} 件）:`,
+    h("div", { class: "rn-waits" }, ...links));
 }
 
 // The hub refreshes a device's state every few seconds (its watch poll),
@@ -1425,7 +1435,7 @@ async function pollRestartBar() {
     return h("div", { class: "restart-note", role: "status" }, icon("restart"),
       h("div", { class: "grow" },
         h("div", { class: "rn-title" }, (ds.length > 1 ? d.name + " の " : "") + "ccdash を再起動予約中"),
-        h("div", { class: "muted small" }, restartWaitText(d.restart))),
+        restartWaitText(d.id, d.restart)),
       cancel);
   }));
 }
