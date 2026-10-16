@@ -121,7 +121,7 @@ above the list. Now:
   grid. Storage does not change — each host keeps its own `projects` row
   and members — the portal merges by name: the block's order is the lowest
   of the hosts' orders, ▲▼ moves it on every host that has it, and
-  the color shown is the first host's (`unifyProjectColors`); changing the
+  the color shown is the one of the host with the first letter (`unifyProjectColors`); changing the
   color or joining another host's project copies the color to the hosts
   that have it (`shareProjectColor`, never creating the project elsewhere).
   The project picker lists every online host's projects, and a selection

@@ -793,14 +793,20 @@ function projectsFirst(rows) {
 // unifyProjectColors gives every session of a project the same color in a
 // list mixing hosts: each host stores its own copy of the project, and a
 // copy made on first use there may have drawn another color. The first
-// host's (registration order) wins; shareProjectColor keeps them in step.
+// host's wins — by host letter (A, B, … in registration order), so the list
+// and the grid agree whatever order their rows came in; shareProjectColor
+// keeps the copies in step.
 function unifyProjectColors(rows, get = (x) => x) {
-  const first = new Map();
+  const best = new Map(); // project → { letter, color }
   for (const x of rows) {
     const s = get(x);
     if (!s.project) continue;
-    if (!first.has(s.project)) first.set(s.project, s.project_color || "");
-    else s.project_color = first.get(s.project);
+    const l = s.host_letter || "~", cur = best.get(s.project);
+    if (!cur || l < cur.letter) best.set(s.project, { letter: l, color: s.project_color || "" });
+  }
+  for (const x of rows) {
+    const s = get(x);
+    if (s.project) s.project_color = best.get(s.project).color;
   }
   return rows;
 }

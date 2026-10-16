@@ -635,7 +635,7 @@ machine never accepts inbound connections — its collector dials out.
 - In the session list, project members are grouped under a band in the
   project's color, their rows tinted with a project stripe. With several
   hosts, a project name is one band (and one grid group) whatever host its
-  sessions run on, in the first registered host's color; sessions on
+  sessions run on, in the color of the host with the first letter; sessions on
   different hosts can be put in the same project.
 - The session list always merges every host. A host is picked only when a
   session is started (a project band's ＋ defaults to the host that project
