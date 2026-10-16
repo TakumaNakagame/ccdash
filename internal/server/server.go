@@ -757,6 +757,10 @@ func (s *Server) handlePostToolFailure(w http.ResponseWriter, r *http.Request) {
 // nothing arrives we let the request fall through with an empty body so
 // Claude shows its own interactive prompt — exactly the pre-Phase-2
 // behavior.
+// dialogTools are the tools whose permission prompt is their own dialog
+// (see handlePermissionRequest). The portal's DIALOG_TOOLS mirrors it.
+var dialogTools = map[string]bool{"AskUserQuestion": true, "ExitPlanMode": true}
+
 func (s *Server) handlePermissionRequest(w http.ResponseWriter, r *http.Request) {
 	p, raw, err := readPayload(r)
 	if err != nil {
@@ -771,6 +775,15 @@ func (s *Server) handlePermissionRequest(w http.ResponseWriter, r *http.Request)
 		Summary:   summarizeToolInput(p.ToolName, p.ToolInput),
 		Payload:   raw,
 	})
+	// AskUserQuestion / ExitPlanMode "ask permission" only because they need
+	// the operator: their dialog is the question / the plan approval itself,
+	// which the TUI's live pane and the portal's cards drive directly. An
+	// approval row would show the same thing twice (and allowing it answers
+	// nothing), so let Claude show its own dialog at once.
+	if dialogTools[p.ToolName] {
+		writeOK(w, nil)
+		return
+	}
 	id, err := s.db.InsertApproval(r.Context(), &model.Approval{
 		SessionID: p.SessionID,
 		Tool:      p.ToolName,

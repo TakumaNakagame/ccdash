@@ -1542,7 +1542,15 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, host
     s.status === "active" ? beamEl() : null);
 }
 
+// DIALOG_TOOLS ask permission only because they need the operator; their
+// dialog is the prompt, answered through the question / screen cards.
+// The collector no longer makes approvals of them (dialogTools in
+// server.go); an older one still holds them for 25 s, so they're hidden
+// here and released by the card that answers them (releaseDialogHold).
+const DIALOG_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
+
 function renderApprovals(el, id, aps, sessions, hostName = "") {
+  aps = (aps || []).filter((a) => !DIALOG_TOOLS.has(a.tool));
   const byId = new Map(sessions.map((s) => [s.session_id, s]));
   // Polled: redraw only when the list changes, so a scrolled tool input or
   // a selection in it stays put.
@@ -1566,6 +1574,17 @@ function renderApprovals(el, id, aps, sessions, hostName = "") {
         h("button", { class: "btn", onclick: () => decide("allow", true) }, "常に許可"),
         h("button", { class: "btn danger", onclick: () => decide("deny") }, "拒否")));
   }));
+}
+
+// releaseDialogHold lets an older collector's held PermissionRequest for a
+// dialog tool go ("allow" without input only lets Claude show its own
+// dialog), so the keys typed next reach it. True when one was released.
+async function releaseDialogHold(d, sid, tool) {
+  if (!sid) return false;
+  const aps = await d.get("/api/approvals").catch(() => null);
+  const held = (aps || []).filter((a) => a.session_id === sid && a.tool === tool);
+  for (const a of held) await d.post(`/approvals/${a.id}/decide`, { behavior: "allow" }).catch(() => {});
+  return held.length > 0;
 }
 
 // newSession picks a directory and starts claude there — optionally with a
@@ -3875,6 +3894,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     answer: async (qs, state) => {
       if (!hosted) throw new Error("ccdash 上で動いていないため回答できません");
       const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+      if (await releaseDialogHold(d, sid, "AskUserQuestion")) await pause(700);
       const send = async (body) => { await d.post(`/pty/${encodeURIComponent(ptyKey)}/input`, body); await pause(300); };
       for (let qi = 0; qi < qs.length; qi++) {
         const q = qs[qi], st = state[qi], n = (q.options || []).length;
