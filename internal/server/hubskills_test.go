@@ -34,7 +34,7 @@ func TestHubSkillsManyDirs(t *testing.T) {
 
 	q := url.Values{"dir": {a, filepath.Join(b, "sub")}}
 	rec := httptest.NewRecorder()
-	handleHubSkills(rec, httptest.NewRequest("GET", "/hub/skills?"+q.Encode(), nil), settings.Settings{})
+	handleHubSkills(rec, httptest.NewRequest("GET", "/hub/skills?"+q.Encode(), nil), settings.Settings{}, "")
 	var rows []struct {
 		Name, Source, Dir string
 	}
