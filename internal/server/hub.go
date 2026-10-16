@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/hashicorp/yamux"
 
@@ -200,7 +202,13 @@ func (s *Server) tunnelHandler(local bool) http.Handler {
 				http.Error(w, "attach is OFF on this device", http.StatusForbidden)
 				return
 			}
-			handleHubSkills(w, r, cfg)
+			transcript := ""
+			if sid := r.URL.Query().Get("session"); sid != "" {
+				if x, ok, err := s.db.GetSession(r.Context(), sid); err == nil && ok {
+					transcript = x.TranscriptPath
+				}
+			}
+			handleHubSkills(w, r, cfg, transcript)
 			return
 		case r.Method == http.MethodGet && r.URL.Path == "/hub/dirs":
 			if !cfg.AttachEnabled {
@@ -349,8 +357,10 @@ const maxSkillDirs = 40
 // start with, like the TUI's skill picker (S): project skills found from
 // ?dir= (repeatable: the portal's skill picker sends recent session
 // directories, like the TUI's) and the new-session directory first, then
-// the user-level ones.
-func handleHubSkills(w http.ResponseWriter, r *http.Request, cfg settings.Settings) {
+// the user-level ones. With ?session=<id> the list that session's own
+// transcript names (Claude Code's skill_listing: bundled skills and
+// plugins too) comes first; transcript is its path from the DB.
+func handleHubSkills(w http.ResponseWriter, r *http.Request, cfg settings.Settings, transcript string) {
 	home, _ := os.UserHomeDir()
 	var dirs []string
 	for i, d := range r.URL.Query()["dir"] {
@@ -364,11 +374,19 @@ func handleHubSkills(w http.ResponseWriter, r *http.Request, cfg settings.Settin
 	if cfg.NewSessionDir != "" {
 		dirs = append(dirs, expandHome(cfg.NewSessionDir, home))
 	}
-	out := []skills.Skill{}
+	all := skills.FromTranscript(transcript)
 	for _, root := range skills.ProjectRoots(dirs, home) {
-		out = append(out, skills.ListProject(root)...)
+		all = append(all, skills.ListProject(root)...)
 	}
-	out = append(out, skills.List(filepath.Join(home, ".claude"))...)
+	all = append(all, skills.List(filepath.Join(home, ".claude"))...)
+	out := []skills.Skill{}
+	seen := map[string]bool{}
+	for _, k := range all {
+		if !seen[k.Name] {
+			seen[k.Name] = true
+			out = append(out, k)
+		}
+	}
 	type row struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -382,32 +400,30 @@ func handleHubSkills(w http.ResponseWriter, r *http.Request, cfg settings.Settin
 	writeOK(w, rows)
 }
 
-// maxUpload bounds one portal image upload.
+// maxUpload bounds one portal upload.
 const maxUpload = 20 << 20
 
-// uploadKeep is how long uploaded images stay on disk; each upload sweeps
+// uploadKeep is how long uploaded files stay on disk; each upload sweeps
 // older ones.
 const uploadKeep = 7 * 24 * time.Hour
 
 var uploadExt = map[string]string{
-	"image/png":  ".png",
-	"image/jpeg": ".jpg",
-	"image/gif":  ".gif",
-	"image/webp": ".webp",
+	"image/png":       ".png",
+	"image/jpeg":      ".jpg",
+	"image/gif":       ".gif",
+	"image/webp":      ".webp",
+	"application/pdf": ".pdf",
 }
 
-// handleHubUpload stores an image sent from the portal under
+// handleHubUpload stores a file sent from the portal under
 // $XDG_STATE_HOME/ccdash/uploads (0600) and returns its path, which the
 // portal then pastes into claude's prompt — Claude Code treats a pasted
-// image path like a drag-and-drop attachment (and can Read it otherwise).
-// Only image types are accepted; the body is the raw file.
+// image path like a drag-and-drop attachment, and Reads any other file
+// (PDF, text, …) from the path. The body is the raw file; X-Filename
+// (URL-encoded) keeps the original name, sanitized, in the stored one.
 func handleHubUpload(w http.ResponseWriter, r *http.Request) {
 	ct, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")
-	ext, ok := uploadExt[strings.TrimSpace(strings.ToLower(ct))]
-	if !ok {
-		http.Error(w, "only png / jpeg / gif / webp images are accepted", http.StatusUnsupportedMediaType)
-		return
-	}
+	name := uploadName(r.Header.Get("X-Filename"), strings.TrimSpace(strings.ToLower(ct)))
 	dir, err := paths.StateDir()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -421,7 +437,7 @@ func handleHubUpload(w http.ResponseWriter, r *http.Request) {
 	sweepUploads(dir)
 	var rnd [6]byte
 	_, _ = rand.Read(rnd[:])
-	path := filepath.Join(dir, time.Now().Format("20060102-150405")+"-"+hex.EncodeToString(rnd[:])+ext)
+	path := filepath.Join(dir, time.Now().Format("20060102-150405")+"-"+hex.EncodeToString(rnd[:])+name)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -436,7 +452,7 @@ func handleHubUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	case n > maxUpload:
 		_ = os.Remove(path)
-		http.Error(w, "image too large (max 20 MB)", http.StatusRequestEntityTooLarge)
+		http.Error(w, "file too large (max 20 MB)", http.StatusRequestEntityTooLarge)
 		return
 	case n == 0:
 		_ = os.Remove(path)
@@ -444,6 +460,50 @@ func handleHubUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeOK(w, map[string]any{"path": path, "size": n})
+}
+
+// uploadName is the stored name's tail: "-<original base>.<ext>" from the
+// sent file name (letters, digits, '.', '-', '_' kept, anything else —
+// spaces, quotes, slashes — becomes '_', so the pasted path stays one
+// shell-safe word), else just the extension the content type implies.
+func uploadName(sent, ct string) string {
+	if v, err := url.QueryUnescape(sent); err == nil {
+		sent = v
+	}
+	sent = filepath.Base(strings.ReplaceAll(sent, "\\", "/"))
+	if sent == "." || sent == "/" {
+		sent = ""
+	}
+	ext := strings.ToLower(filepath.Ext(sent))
+	base := strings.TrimSuffix(sent, filepath.Ext(sent))
+	clean := func(s string, max int) string {
+		var b strings.Builder
+		n := 0
+		for _, c := range s {
+			if n >= max {
+				break
+			}
+			if unicode.IsLetter(c) || unicode.IsDigit(c) || c == '-' || c == '_' || c == '.' {
+				b.WriteRune(c)
+			} else {
+				b.WriteRune('_')
+			}
+			n++
+		}
+		return strings.Trim(b.String(), "._")
+	}
+	ext = clean(strings.TrimPrefix(ext, "."), 10)
+	if ext == "" {
+		if e, ok := uploadExt[ct]; ok {
+			ext = e[1:]
+		} else {
+			ext = "bin"
+		}
+	}
+	if base = clean(base, 60); base != "" {
+		return "-" + base + "." + ext
+	}
+	return "." + ext
 }
 
 func sweepUploads(dir string) {

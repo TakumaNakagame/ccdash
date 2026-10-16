@@ -260,6 +260,7 @@ const ICONS = {
   list: '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
   chevron: '<path d="m15 18-6-6 6-6"/>',
   settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  clip: '<path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>',
   file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
   search: '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>',
   tasks: '<path d="M13 5h8"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/>',
@@ -3479,6 +3480,21 @@ const BUILTIN_SLASH = [
   { name: "review", description: "変更のレビュー" },
   { name: "init", description: "CLAUDE.md を作成" },
   { name: "memory", description: "メモリを編集" },
+  { name: "usage", description: "プランの使用量と上限" },
+  { name: "status", description: "バージョン・モデル・アカウントの状態" },
+  { name: "rewind", description: "会話やコードを前の時点に戻す" },
+  { name: "resume", description: "別の会話を再開" },
+  { name: "export", description: "会話を書き出す" },
+  { name: "add-dir", description: "作業ディレクトリを追加" },
+  { name: "agents", description: "サブエージェントの管理" },
+  { name: "mcp", description: "MCP サーバーの管理" },
+  { name: "hooks", description: "フックの設定" },
+  { name: "permissions", description: "ツールの許可設定" },
+  { name: "plugin", description: "プラグインの管理" },
+  { name: "config", description: "設定" },
+  { name: "doctor", description: "インストールの診断" },
+  { name: "fast", description: "Fast モードの切り替え" },
+  { name: "release-notes", description: "リリースノート" },
 ];
 
 function editQuick(paint) {
@@ -3859,77 +3875,122 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   const input = h("textarea", { rows: 1, placeholder: "メッセージ", enterkeyhint: "send", title: "Enter で送信 / Shift+Enter で改行" });
   const sendBtn = h("button", { class: "btn primary" }, "送信");
   const stopBtn = h("button", { class: "btn", hidden: true, title: "Esc を送って作業を中断", onclick: () => keys("\x1b") }, "中断");
-  // Image attachments: picked (camera on phones), pasted or dropped; shown
-  // as thumbnails until sent.
-  let attachments = []; // { blob, url }
+  // Attachments: picked, pasted or dropped; images shown as thumbnails,
+  // other files (PDF, text, …) as a name card, until sent. Claude Code
+  // turns a pasted image path into [Image #N] and Reads any other path.
+  let attachments = []; // { blob, url, name, image }
   const thumbs = h("div", { class: "thumbs" });
-  const fileInput = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
-  const attachBtn = h("button", { type: "button", class: "btn attach", title: "画像を添付", "aria-label": "画像を添付", onclick: () => fileInput.click() }, icon("image"));
+  const fileInput = h("input", { type: "file", multiple: true, hidden: true });
+  const attachBtn = h("button", { type: "button", class: "btn attach", title: "ファイルを添付（画像・PDF など）", "aria-label": "ファイルを添付", onclick: () => fileInput.click() }, icon("clip"));
   const renderThumbs = () => {
-    thumbs.replaceChildren(...attachments.map((a, i) => h("div", { class: "thumb" },
-      h("img", { src: a.url, alt: "" }),
-      h("button", { type: "button", title: "外す", onclick: () => { URL.revokeObjectURL(a.url); attachments.splice(i, 1); renderThumbs(); }, "aria-label": "外す" }, icon("x")))));
+    thumbs.replaceChildren(...attachments.map((a, i) => h("div", { class: "thumb" + (a.image ? "" : " file"), title: a.name },
+      a.image ? h("img", { src: a.url, alt: "" }) : [icon("file"), h("span", { class: "thumb-name" }, a.name)],
+      h("button", { type: "button", title: "外す", onclick: () => { if (a.url) URL.revokeObjectURL(a.url); attachments.splice(i, 1); renderThumbs(); }, "aria-label": "外す" }, icon("x")))));
   };
   const addFiles = async (files) => {
     for (const f of files) {
-      if (!f.type.startsWith("image/")) continue;
+      if (f.size > 20 * 1024 * 1024 && !f.type.startsWith("image/")) { toast(`${f.name} は大きすぎます（20 MB まで）`); continue; }
+      if (!f.type.startsWith("image/") || f.type === "image/svg+xml") { attachments.push({ blob: f, name: f.name || "file", image: false }); continue; }
       try {
         const blob = await prepareImage(f);
-        attachments.push({ blob, url: URL.createObjectURL(blob) });
+        attachments.push({ blob, url: URL.createObjectURL(blob), name: f.name || "image", image: true });
       } catch (e) { toast("画像を読み込めませんでした: " + e.message); }
     }
     renderThumbs();
   };
   fileInput.addEventListener("change", () => { addFiles([...fileInput.files]); fileInput.value = ""; });
   input.addEventListener("paste", (e) => {
-    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+    const files = [...(e.clipboardData?.files || [])];
     if (files.length) { e.preventDefault(); addFiles(files); }
   });
-  bucket.push(() => attachments.forEach((a) => URL.revokeObjectURL(a.url)));
+  bucket.push(() => attachments.forEach((a) => a.url && URL.revokeObjectURL(a.url)));
   // Voice input (Web Speech API): dictation is appended to the message.
   const micBtn = speechSupported() ? h("button", { type: "button", class: "btn attach mic", title: "音声入力", "aria-label": "音声入力" }, icon("mic")) : null;
   micBtn?.addEventListener("click", () => toggleDictation(micBtn, input, autosize));
   bucket.push(() => stopDictation());
-  // "/" completion: skills and slash commands of this device — typed at
-  // the start of the message, or any time from the "/" button (with text
-  // already typed, the command goes in front of it).
+  // "/" completion: the slash commands and skills this session can run
+  // (its own transcript's list, plus the device's) for the "/word" at the
+  // caret — at the start of the message or after a space anywhere in it.
+  // The "/" button types a "/" at the caret (handy on a phone). ↑↓ move,
+  // Enter / Tab pick, Esc closes until the word changes.
   const slashBox = h("div", { class: "slash-box", hidden: true });
-  let slashList = null, slashOpen = false;
+  let slashList = null, slashHits = [], slashSel = 0, slashTok = null, slashShut = -1;
+  const slashToken = () => {
+    const at = input.selectionStart ?? input.value.length;
+    if (at !== input.selectionEnd) return null;
+    const m = input.value.slice(0, at).match(/(?:^|\s)\/([^\s/]*)$/);
+    return m ? { start: at - m[1].length - 1, end: at, q: m[1].toLowerCase() } : null;
+  };
+  const paintSlash = () => {
+    slashBox.hidden = !slashHits.length;
+    slashBox.replaceChildren(...slashHits.map((k, i) => h("div", { class: i === slashSel ? "sel" : null, onmousedown: (e) => e.preventDefault(), onclick: () => pickSlash(k) },
+      h("b", {}, "/" + k.name), k.description ? h("span", { class: "muted small" }, " " + k.description) : null)));
+    slashBox.querySelector(".sel")?.scrollIntoView({ block: "nearest" });
+  };
   const showSlash = async () => {
-    const v = input.value;
-    const typed = v.startsWith("/") && !/\s/.test(v);
-    if (!typed && !slashOpen) { slashBox.hidden = true; return; }
+    const tok = slashToken();
+    if (!tok || tok.start === slashShut) { slashTok = null; slashHits = []; slashBox.hidden = true; return; }
+    slashShut = -1;
     if (!slashList) {
-      const skills = (await d.get(`/hub/skills?dir=${encodeURIComponent(session?.cwd || "")}`).catch(() => [])) || [];
+      const q = new URLSearchParams({ dir: session?.cwd || "" });
+      if (sid) q.set("session", sid);
+      const skills = (await d.get(`/hub/skills?${q}`).catch(() => [])) || [];
       slashList = [...BUILTIN_SLASH, ...skills.filter((k) => !BUILTIN_SLASH.some((b) => b.name === k.name)).map((k) => ({ name: k.name, description: k.description }))];
     }
-    const q = typed ? v.slice(1).toLowerCase() : "";
-    const hits = filterSkills(slashList, q).slice(0, q ? 30 : 80);
-    slashBox.hidden = !hits.length;
-    slashBox.replaceChildren(...hits.map((k) => h("div", { onclick: () => pickSlash(k) },
-      h("b", {}, "/" + k.name), k.description ? h("span", { class: "muted small" }, " " + k.description) : null)));
+    const now = slashToken(); // the caret may have moved while loading
+    if (!now) { slashBox.hidden = true; return; }
+    if (slashTok?.q !== now.q) slashSel = 0;
+    slashTok = now;
+    slashHits = filterSkills(slashList, now.q).slice(0, now.q ? 30 : 80);
+    paintSlash();
   };
-  const closeSlash = () => { slashOpen = false; slashBox.hidden = true; slashBtn.classList.remove("on"); };
+  const closeSlash = () => { if (slashTok) slashShut = slashTok.start; slashTok = null; slashHits = []; slashBox.hidden = true; };
   const pickSlash = (k) => {
-    closeSlash();
-    // /model opens the portal's own menu instead of Claude Code's picker.
-    if (k.name === "model" && /^(\/\S*)?$/.test(input.value.trim())) { input.value = ""; keepDraft(); autosize(); return openModelMenu(); }
-    const rest = input.value.startsWith("/") ? input.value.replace(/^\/\S*\s?/, "") : input.value;
-    input.value = "/" + k.name + " " + rest;
+    const tok = slashTok || slashToken();
+    slashTok = null; slashHits = []; slashBox.hidden = true;
+    if (!tok) return;
+    const v = input.value;
+    // /model alone opens the portal's own menu instead of Claude Code's picker.
+    if (k.name === "model" && !v.slice(0, tok.start).trim() && !v.slice(tok.end).trim()) { input.value = ""; keepDraft(); autosize(); return openModelMenu(); }
+    const after = v.slice(tok.end).replace(/^\S*/, ""); // the rest of the word being replaced
+    const ins = "/" + k.name + (after.startsWith(" ") ? "" : " ");
+    input.value = v.slice(0, tok.start) + ins + after;
+    const at = tok.start + ins.length + (after.startsWith(" ") ? 1 : 0);
     autosize();
     keepDraft();
     input.focus();
-    input.setSelectionRange(k.name.length + 2, k.name.length + 2);
+    input.setSelectionRange(at, at);
   };
-  const slashBtn = h("button", { type: "button", class: "btn attach slash", title: "スラッシュコマンド・スキル", "aria-label": "スラッシュコマンド・スキル", onclick: () => {
-    if (slashOpen || (!slashBox.hidden && input.value.startsWith("/"))) { closeSlash(); return; }
-    if (!input.value.trim()) { input.value = "/"; autosize(); input.focus(); showSlash(); return; }
-    slashOpen = true;
-    slashBtn.classList.add("on");
+  const slashBtn = h("button", { type: "button", class: "btn attach slash", title: "スラッシュコマンド・スキル（文中にも入れられます）", "aria-label": "スラッシュコマンド・スキル", onmousedown: (e) => e.preventDefault(), onclick: () => {
+    if (!slashBox.hidden) { closeSlash(); return; }
+    const v = input.value;
+    const at = input.selectionStart ?? v.length, end = input.selectionEnd ?? at;
+    const pre = at > 0 && !/\s/.test(v[at - 1]) ? " " : "";
+    input.value = v.slice(0, at) + pre + "/" + v.slice(end);
+    const c = at + pre.length + 1;
+    input.focus();
+    input.setSelectionRange(c, c);
+    autosize();
+    keepDraft();
     showSlash();
   } }, "/");
-  input.addEventListener("input", () => { if (slashOpen && !input.value.trim()) closeSlash(); showSlash(); });
-  input.addEventListener("keydown", (e) => { if (e.key === "Escape" && !slashBox.hidden) { e.preventDefault(); closeSlash(); } });
+  input.addEventListener("input", showSlash);
+  input.addEventListener("click", showSlash);
+  input.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== input) { slashBox.hidden = true; slashTok = null; slashHits = []; } }, 150));
+  input.addEventListener("keydown", (e) => {
+    if (slashBox.hidden || !slashHits.length || e.isComposing || e.keyCode === 229) return;
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeSlash(); }
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      slashSel = (slashSel + (e.key === "ArrowDown" ? 1 : -1) + slashHits.length) % slashHits.length;
+      paintSlash();
+    } else if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      pickSlash(slashHits[slashSel]);
+    }
+  });
+  input.addEventListener("keyup", (e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") showSlash(); });
   // Quick commands: one tap sends a saved prompt.
   const quickRow = h("div", { class: "quick-row" });
   const sendQuick = (text) => { input.value = text; autosize(); composer.requestSubmit(); };
@@ -4186,16 +4247,18 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     sendBtn.disabled = true;
     haptic();
     try {
-      if (attachments.length && !info?.attachEnabled) throw new Error("この端末は attach が OFF のため画像を送れません");
+      if (attachments.length && !info?.attachEnabled) throw new Error("この端末は attach が OFF のためファイルを送れません");
       const paths = [];
       for (const a of attachments) {
-        const r = await fetch(`/api/d/${id}/hub/upload`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": a.blob.type }, body: a.blob });
-        if (!r.ok) throw new Error("画像のアップロードに失敗: " + ((await r.text()).trim() || r.status));
+        const r = await fetch(`/api/d/${id}/hub/upload`, { method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": a.blob.type || "application/octet-stream", "X-Filename": encodeURIComponent(a.name || "") }, body: a.blob });
+        if (!r.ok) throw new Error(`${a.name || "ファイル"} のアップロードに失敗: ` + ((await r.text()).trim() || r.status));
         paths.push((await r.json()).path);
       }
       if (hosted) {
         // Each path as its own paste: Claude Code turns a pasted image
-        // path into an [Image #N] attachment, like drag-and-drop.
+        // path into an [Image #N] attachment, like drag-and-drop; any
+        // other file stays a path it Reads.
         for (const p of paths) {
           await d.post(`/pty/${encodeURIComponent(ptyKey)}/input`, { text: p, paste: true });
           await new Promise((res) => setTimeout(res, 350));

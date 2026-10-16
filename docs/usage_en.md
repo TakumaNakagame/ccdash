@@ -615,9 +615,16 @@ machine never accepts inbound connections — its collector dials out.
 - The session list has a **Latest** tab (everything, newest first, with
   date sections) and one tab per group, like the TUI's strip.
 - **↑ Load older history** at the top of a chat reads further back.
-- **＋** next to the input attaches images (camera on a phone); pasting or
-  dropping an image works too. They're saved on the device under
-  `$XDG_STATE_HOME/ccdash/uploads/` (kept 7 days) and attached to the prompt.
+- The paperclip next to the input attaches files (images, PDFs, text …,
+  20 MB each); pasting or dropping works too. They're saved on the device
+  under `$XDG_STATE_HOME/ccdash/uploads/` with the original name (kept 7
+  days) and their paths go into the prompt (an image becomes
+  `[Image #N]`, anything else Claude reads).
+- Typing `/` in the input lists the slash commands and skills the session
+  can run (its own list from the transcript plus the device's skills) — at
+  the start of the message or after a space anywhere in it; ↑↓ + Enter /
+  Tab or a tap picks, Esc closes. The **/** button types a `/` at the
+  caret.
 - A `! command` line in Claude's reply (a plain `! cmd` line, inline code or
   a `!` line in a code block) gets a **▶ コマンドを実行する** button: a dialog shows the command, and
   **Yes** sends it to that session's claude in `!` (bash) mode. The output

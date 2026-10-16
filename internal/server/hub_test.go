@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -158,11 +159,15 @@ func TestHubTunnelEndToEnd(t *testing.T) {
 		}
 	}
 
-	// Image upload: stored 0600 under the state dir; non-images refused.
-	upload := func(ct, body string) (int, string) {
+	// Upload: stored 0600 under the state dir, any type, the sent name kept
+	// (sanitized) in the stored one.
+	upload := func(ct, body string, name ...string) (int, string) {
 		t.Helper()
 		req, _ := http.NewRequest("POST", "http://device/hub/upload", strings.NewReader(body))
 		req.Header.Set("Content-Type", ct)
+		if len(name) > 0 {
+			req.Header.Set("X-Filename", url.QueryEscape(name[0]))
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -180,8 +185,11 @@ func TestHubTunnelEndToEnd(t *testing.T) {
 	if fi, err := os.Stat(up.Path); err != nil || fi.Mode().Perm() != 0o600 || !strings.HasSuffix(up.Path, ".png") {
 		t.Errorf("uploaded file %s: %v %v", up.Path, fi, err)
 	}
-	if code, _ := upload("text/plain", "hi"); code != http.StatusUnsupportedMediaType {
-		t.Errorf("text upload = %d, want 415", code)
+	code, body = upload("application/pdf", "%PDF-1.4", "見積 書 (v2).PDF")
+	up.Path = ""
+	_ = json.Unmarshal([]byte(body), &up)
+	if code != http.StatusOK || !strings.HasSuffix(up.Path, "-見積_書__v2.pdf") {
+		t.Errorf("pdf upload = %d %s", code, body)
 	}
 
 	if _, err := settings.Set(ctx, d, settings.Defaults(), "hub_enabled", false); err != nil {
@@ -189,5 +197,21 @@ func TestHubTunnelEndToEnd(t *testing.T) {
 	}
 	if code, _ := get("GET", "/api/sessions"); code != http.StatusForbidden {
 		t.Errorf("GET /api/sessions with hub_enabled=0 = %d, want 403", code)
+	}
+}
+
+func TestUploadName(t *testing.T) {
+	for _, c := range []struct{ sent, ct, want string }{
+		{"", "image/png", ".png"},
+		{"", "application/octet-stream", ".bin"},
+		{"report.pdf", "", "-report.pdf"},
+		{"../../etc/passwd", "", "-passwd.bin"},
+		{`C:\\Users\\me\\a b.txt`, "text/plain", "-a_b.txt"},
+		{"$(rm -rf).sh", "", "-rm_-rf.sh"},
+		{".bashrc", "", ".bashrc"},
+	} {
+		if got := uploadName(c.sent, c.ct); got != c.want {
+			t.Errorf("uploadName(%q, %q) = %q, want %q", c.sent, c.ct, got, c.want)
+		}
 	}
 }
