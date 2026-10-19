@@ -23,16 +23,25 @@ for a fully observation-only deployment.
 
 ## Threat model
 
-ccdash is built for a single user (or a small trusted team, via remote
-mode) managing their own Claude Code sessions.
+ccdash is built for a single user managing their own Claude Code sessions,
+from the machines and phones they own (remote mode, hub). Keep every way
+in — hub login (`--allowed-email`), the collector token, device tokens,
+read tokens — to yourself; several addresses or devices are fine as long
+as they are all yours. ccdash does not try to tell people apart, so it
+cannot stop you from handing access to someone else; that use is simply
+unsupported (see the README's "Who it's for").
+
+ccdash runs the official `claude` binary, which signs in through
+Anthropic's own flow; ccdash never reads, stores or relays Claude
+credentials or OAuth tokens.
 
 **Inside the trust boundary** (assumed honest):
 - The local user account running ccdash and `claude`
 - The `claude` binary and its on-disk state under `~/.claude/`
 - Files the operator opens or edits via Claude
-- In remote mode: whoever holds the collector's token, and the network
-  path between the TUI and the collector (see "Explicitly out of scope"
-  below for what that does *not* cover)
+- In remote mode: the operator's own machines holding the collector's
+  token, and the network path between the TUI and the collector (see
+  "Explicitly out of scope" below for what that does *not* cover)
 
 **Outside the trust boundary** (treated as adversarial):
 - Other UNIX users on the same host
@@ -47,9 +56,10 @@ mode) managing their own Claude Code sessions.
 
 ### Explicitly out of scope
 
-- Multi-user / shared-host deployments where operators don't trust each
-  other (remote mode is for one operator's own collector, reachable from
-  their own other machines — not a shared multi-tenant service)
+- Use by more than one person: others prompting or approving your
+  sessions, a Claude account shared by a team or family, or a shared /
+  resold / multi-tenant service (remote mode and the hub are for one
+  operator's own collectors, reached from their own other machines)
 - Public internet exposure of the collector, remote mode or not
 - **No TLS in v1.** Remote mode's HTTP traffic (including the token
   header, prompts, and approval decisions) is unencrypted on the wire —

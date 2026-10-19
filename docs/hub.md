@@ -78,7 +78,9 @@ Every flag also reads an env var (`CCDASH_HUB_PUBLIC_URL`,
 `tailscale serve` adds, against the same `--allowed-email` list — handy for
 running the hub on a workstation reached over your tailnet. Any OIDC provider works; the redirect URI to
 register is `<public-url>/auth/callback`. The hub refuses to start without
-at least one allowed email. Proxies in front of it must pass WebSocket
+at least one allowed email. The hub is for one person: list only your own
+addresses (several are fine, e.g. work and personal) — everyone who logs in
+can prompt, approve and start sessions on every joined device. Proxies in front of it must pass WebSocket
 upgrades and allow long-lived connections (the tunnel pings every 20 s).
 
 **On each device:** open the portal, **Add device**, then
@@ -101,8 +103,8 @@ on); list directories for the new-session picker (attach on). It can never
 reach the hook endpoints, `/shutdown`, or settings writes — so a compromised
 hub cannot switch the device's own safety toggles back on.
 
-**Read tokens (machine clients).** A bot or script that can't do a browser
-login can read the hub with `Authorization: Bearer <token>`. Configure the
+**Read tokens (machine clients).** A bot or script of your own that can't
+do a browser login can read the hub with `Authorization: Bearer <token>`. Configure the
 tokens at start (each ≥ 32 characters, e.g. `openssl rand -hex 32`):
 `CCDASH_HUB_READ_TOKENS` (comma-separated) and/or `--read-token-file`
 (`CCDASH_HUB_READ_TOKEN_FILE`; one per line). A read token may only GET:

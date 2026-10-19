@@ -6,6 +6,11 @@ focuses on workflows, keybindings, and what each surface is for.
 
 > 日本語版: [usage_jp.md](./usage_jp.md)
 
+**Who it's for**: one person managing their own Claude Code sessions from
+the machines and phones they own. Keep it to yourself — don't give anyone
+else the hub login, the collector token or a device token. See the
+README's [Who it's for](../README.md#whos-it-for) for what isn't supported.
+
 ## 1. First-time setup
 
 Install the binary (latest GitHub release):
@@ -579,6 +584,8 @@ The hub is a web page that lists your machines and lets you use each one's
 ccdash from a browser or phone. It runs on a home server
 (`ccdash hub serve`, normally the `ghcr.io/takumanakagame/ccdash` container
 behind your reverse proxy, with OIDC login — see [Hub mode](hub.md)).
+It is for you alone: allow only your own login addresses and join only
+your own machines.
 
 **Joining a machine**
 

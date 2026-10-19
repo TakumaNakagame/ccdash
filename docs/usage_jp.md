@@ -4,6 +4,8 @@
 
 > English: [usage_en.md](./usage_en.md)
 
+**対象**: ccdash は、本人が自分の Claude Code セッションを、自分の PC・サーバー・スマホから管理するためのツールです。自分専用で運用し、他人に操作権限（ハブのログイン、collector のトークン、端末トークン）を渡さないでください。他人が自分のセッションにプロンプトを送ったり承認したりする共同利用、1 つの Claude アカウントをチームや家族で共有する使い方、他人向けの共有・再販・マルチテナントのサービスとしての利用はサポートしません。ccdash は公式の `claude` バイナリを起動するだけで、Claude の認証情報や OAuth トークンを取得・保存・仲介しません（ログインは Anthropic 公式のフロー）。ccdash は Anthropic が作ったり承認したりしたものではなく、利用条件は Anthropic の規約（[Consumer Terms](https://www.anthropic.com/legal/consumer-terms)、[Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)）を各自で確認してください。
+
 ## 1. 初回セットアップ
 
 最新リリースバイナリをインストールします。
@@ -433,6 +435,7 @@ rm $(which ccdash)           # バイナリ削除
 
 ハブは、端末の一覧から選んでその端末の ccdash をブラウザやスマホで使える Web ページです。
 自宅サーバで動かします（`ccdash hub serve`。通常は `ghcr.io/takumanakagame/ccdash` コンテナをリバースプロキシの後ろに置き、OIDC でログイン。[Hub mode](hub.md) 参照）。
+自分専用で使うもの: ログインを許可するのは自分のメールアドレスだけ、登録するのは自分の端末だけにする。
 
 **端末の登録**
 
