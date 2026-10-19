@@ -181,7 +181,7 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 	c.Flags().StringVar(&issuer, "oidc-issuer", "", "OIDC issuer URL (Cloudflare Access for SaaS: https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<client-id>)")
 	c.Flags().StringVar(&clientID, "oidc-client-id", "", "OIDC client id")
 	c.Flags().StringVar(&secretFile, "oidc-client-secret-file", "", "file holding the OIDC client secret (else $CCDASH_HUB_OIDC_CLIENT_SECRET)")
-	c.Flags().StringSliceVar(&emails, "allowed-email", nil, "email allowed to log in (repeatable)")
+	c.Flags().StringSliceVar(&emails, "allowed-email", nil, "email allowed to log in (repeatable; your own addresses — the hub is for one person)")
 	c.Flags().BoolVar(&tsAuth, "tailscale-auth", false, "log users in by the Tailscale-User-Login header of `tailscale serve` (loopback --listen; logins must be in --allowed-email)")
 	c.Flags().BoolVar(&noAuth, "no-auth", false, "skip login (local development only; loopback --listen required)")
 	c.Flags().StringVar(&stateSecret, "state-secret", "", "keep the state in this Kubernetes Secret (in-cluster service account) instead of hub.sqlite; an existing <data-dir>/hub.sqlite is imported once (else $CCDASH_HUB_STATE_SECRET)")

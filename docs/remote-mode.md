@@ -48,7 +48,8 @@ systemctl --user enable --now ccdash.service
 ```
 
 **2. Copy the collector's token** to the machine that will run the TUI —
-it's the same shared secret hook events already use, just scp'd over:
+it's the same shared secret hook events already use, just scp'd over. Copy
+it only to your own machines: whoever holds it can drive your sessions.
 
 ```sh
 scp dev-box:~/.local/state/ccdash/token ~/.config/ccdash/collector.token

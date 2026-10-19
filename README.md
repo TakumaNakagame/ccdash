@@ -16,6 +16,25 @@ resume sessions from one place instead of hunting through terminal tabs.
 > Hobby project, built for one person's machines. Read [Security](docs/security.md)
 > before exposing anything beyond your own network.
 
+## Who it's for
+
+ccdash is for **one person managing their own Claude Code sessions** — from
+any number of machines and phones they own. Run it for yourself and don't
+give anyone else a way to operate it (hub login, collector token, device
+token).
+
+- Not supported: other people sending prompts to or approving your
+  sessions, sharing one Claude account within a team or family, or running
+  ccdash as a Claude service for others (shared, resold or multi-tenant).
+- ccdash drives the official `claude` binary, which signs in through
+  Anthropic's own flow. ccdash never obtains, stores or relays Claude
+  credentials or OAuth tokens.
+- ccdash is an independent project, not made or endorsed by Anthropic.
+  Using it doesn't change what Anthropic's terms
+  ([Consumer Terms](https://www.anthropic.com/legal/consumer-terms),
+  [Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance))
+  require of you; check them for your own plan and use.
+
 ## Three ways in
 
 | | |
