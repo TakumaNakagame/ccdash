@@ -117,11 +117,12 @@ Hands-on guides: [English](docs/usage_en.md) · [日本語](docs/usage_jp.md)
   報告 (just reporting) or 自動で続行 (continues by itself) — shown in the
   TUI, portal and app; the first two count as "needs you".
 - **MCP.** `ccdash setup` (or `claude mcp add --scope user ccdash -- ccdash mcp`) gives Claude
-  read tools (overview, projects, sessions, a session's recent conversation)
-  and organizing tools (projects, titles, archive, watch later, start a
-  session). It never stops claude or answers approvals; `--read-only` keeps
-  only the read tools. On a hub-joined machine every session carries a link
-  that opens it in the portal.
+  read tools (overview, projects, sessions, a session's recent conversation),
+  organizing tools (projects, titles, archive, watch later) and start / stop /
+  resume for sessions ccdash hosts (only while Attach is on; one session at a
+  time, never its own). It never answers approvals; `--read-only` keeps only
+  the read tools and `set_status`. On a hub-joined machine every session
+  carries a link that opens it in the portal.
 - **[TUI reference](docs/tui.md)** — every key (also `?` in the app).
 - **[Security](docs/security.md)** — threat model, and the switches that turn
   each risky capability off (approval blocking, title generation, attach,
