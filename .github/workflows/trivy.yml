@@ -1,0 +1,37 @@
+name: trivy
+
+# Scans the Go dependencies (go.mod / go.sum) for known vulnerabilities and
+# uploads the result to GitHub code scanning (Security tab, PR annotations).
+# The hub image is distroless/static + one Go binary, so this covers what an
+# image scan would find. Report-only for now: findings never fail the build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 21 * * *' # daily, to catch CVEs published after the last push
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy.sarif
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
