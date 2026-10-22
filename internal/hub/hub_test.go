@@ -94,6 +94,10 @@ func TestSafeNext(t *testing.T) {
 		"https://evil/":    "/",
 		"/\\evil.example/": "/",
 		"":                 "/",
+		"/\t/evil.example": "/",
+		"/\n/evil.example": "/",
+		"/a\\b":            "/",
+		"/s/abc?x=1":       "/s/abc?x=1",
 	} {
 		if got := safeNext(in); got != want {
 			t.Errorf("safeNext(%q) = %q, want %q", in, got, want)

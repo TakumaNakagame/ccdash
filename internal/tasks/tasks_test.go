@@ -292,3 +292,16 @@ func TestMarkdown(t *testing.T) {
 		t.Error("archived task in markdown")
 	}
 }
+
+func TestSlackThreadHost(t *testing.T) {
+	for link, want := range map[string]bool{
+		"https://slack.com/archives/C0123/p1760000000123456":          true,
+		"https://freee.slack.com/archives/C0123/p1760000000123456":    true,
+		"https://evilslack.com/archives/C0123/p1760000000123456":      false,
+		"https://slack.com.evil.example/archives/C0123/p176000000012": false,
+	} {
+		if _, ok := slackThread(link); ok != want {
+			t.Errorf("slackThread(%q) ok = %v, want %v", link, ok, want)
+		}
+	}
+}
