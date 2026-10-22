@@ -182,11 +182,13 @@ func (a *authn) clearCookiePath(w http.ResponseWriter, name, path string) {
 // and newlines from a URL and read a backslash as '/', so "/\t/evil" would become
 // "//evil": any control character or backslash is refused outright.
 func safeNext(next string) string {
+	if next == "" || next[0] != '/' || (len(next) > 1 && (next[1] == '/' || next[1] == '\\')) {
+		return "/"
+	}
 	if strings.ContainsFunc(next, func(r rune) bool { return r < 0x20 || r == 0x7f || r == '\\' }) {
 		return "/"
 	}
-	u, err := url.Parse(next)
-	if err != nil || u.Scheme != "" || u.Host != "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+	if u, err := url.Parse(next); err != nil || u.Scheme != "" || u.Host != "" {
 		return "/"
 	}
 	return next
