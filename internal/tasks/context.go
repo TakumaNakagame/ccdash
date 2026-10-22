@@ -51,7 +51,7 @@ type SlackThread struct {
 }
 
 var (
-	slackRE = regexp.MustCompile(`^https://[\w.-]*slack\.com/archives/([A-Z0-9]+)/p(\d{16})(?:\?(\S*))?`)
+	slackRE = regexp.MustCompile(`^https://(?:[\w-]+\.)*slack\.com/archives/([A-Z0-9]+)/p(\d{16})(?:\?(\S*))?`)
 	jiraRE  = regexp.MustCompile(`\b[A-Z][A-Z0-9]+-\d+\b`)
 	prRE    = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
 )

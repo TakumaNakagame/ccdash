@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -177,9 +178,15 @@ func (a *authn) clearCookiePath(w http.ResponseWriter, name, path string) {
 	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: path, MaxAge: -1, HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteLaxMode})
 }
 
-// safeNext keeps post-login redirects on this origin.
+// safeNext keeps post-login redirects on this origin. Browsers drop tabs
+// and newlines from a URL and read a backslash as '/', so "/\t/evil" would become
+// "//evil": any control character or backslash is refused outright.
 func safeNext(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") {
+	if strings.ContainsFunc(next, func(r rune) bool { return r < 0x20 || r == 0x7f || r == '\\' }) {
+		return "/"
+	}
+	u, err := url.Parse(next)
+	if err != nil || u.Scheme != "" || u.Host != "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
 		return "/"
 	}
 	return next
