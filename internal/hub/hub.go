@@ -470,11 +470,15 @@ func (h *Hub) handleQuickPut(w http.ResponseWriter, r *http.Request) {
 }
 
 // prefs is a portal user's look: theme ("" = follow the system, "light",
-// "dark") and accent ("" = the default, else "#rrggbb"). Kept per login
-// in hub.sqlite, so the browser and the installed app share it.
+// "dark") and accent ("" = the default, else "#rrggbb"), plus the session
+// list's 新着を上に (new_first: "" = the default, on; "on" / "off"). Kept
+// per login in hub.sqlite, so every browser and the installed app share it
+// — localStorage is per origin, so the local portal (127.0.0.1) never saw
+// a choice made on the hub's.
 type prefs struct {
-	Theme  string `json:"theme"`
-	Accent string `json:"accent"`
+	Theme    string `json:"theme"`
+	Accent   string `json:"accent"`
+	NewFirst string `json:"new_first"`
 }
 
 var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
@@ -495,10 +499,18 @@ func (h *Hub) handlePrefsGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, p)
 }
 
+// handlePrefsPut merges the fields sent onto the stored prefs, so a page
+// still running an older app.js (theme + accent only) keeps new_first.
 func (h *Hub) handlePrefsPut(w http.ResponseWriter, r *http.Request) {
+	cur, err := h.st.secret(r.Context(), h.prefsKey(r), func() string { return "{}" })
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	var p prefs
+	_ = json.Unmarshal([]byte(cur), &p)
 	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&p); err != nil {
-		http.Error(w, "want {theme, accent}", http.StatusBadRequest)
+		http.Error(w, "want {theme, accent, new_first}", http.StatusBadRequest)
 		return
 	}
 	if p.Theme != "" && p.Theme != "light" && p.Theme != "dark" {
@@ -507,6 +519,10 @@ func (h *Hub) handlePrefsPut(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.Accent != "" && !hexColor.MatchString(p.Accent) {
 		http.Error(w, "accent must be #rrggbb", http.StatusBadRequest)
+		return
+	}
+	if p.NewFirst != "" && p.NewFirst != "on" && p.NewFirst != "off" {
+		http.Error(w, `new_first must be "", "on" or "off"`, http.StatusBadRequest)
 		return
 	}
 	p.Accent = strings.ToLower(p.Accent)

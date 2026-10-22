@@ -439,6 +439,12 @@ too. Set it with:
 				fmt.Println("ccdash: the running collector still runs the old version. `ccdash restart` restarts it")
 				fmt.Println("        once no hosted session is busy (they are all resumed).")
 			}
+			// A portal linked to that collector is its own process: restarting
+			// the collector leaves it serving the old portal.
+			if st, ok := runningWeb(); ok && st.Collector != webEmbedded {
+				fmt.Println()
+				fmt.Printf("ccdash: ccdash web (%s) still serves the old portal. `ccdash web restart` restarts it.\n", st.URL)
+			}
 			return nil
 		},
 	}
