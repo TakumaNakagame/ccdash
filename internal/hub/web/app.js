@@ -773,11 +773,11 @@ function newFirst(rows) {
   const fresh = rows.filter((s) => s.unseen).sort((a, b) => t(b) - t(a));
   return fresh.length ? [...fresh, ...rows.filter((s) => !s.unseen)] : rows;
 }
-// The 新着 block is on by default where the list is a phone's whole screen.
-const NEW_FIRST_KEY = "ccdash.newFirst";
+// The 新着 block is on unless turned off. The choice is a per-user pref
+// (/api/prefs new_first, cached in look) so every browser — and the local
+// portal, whose localStorage is another origin's — shows the same list.
 function newFirstOn() {
-  try { const v = localStorage.getItem(NEW_FIRST_KEY); if (v) return v === "1"; } catch {}
-  return matchMedia("(pointer: coarse)").matches;
+  return look.new_first !== "off";
 }
 // With several hosts a project is one block whatever host its sessions run
 // on (each host keeps its own order; the block takes the lowest).
@@ -1026,12 +1026,9 @@ async function devicePage(opts = {}) {
   const more = h("div");
   const filter = h("input", { type: "search", placeholder: "タイトル・パス・#番号・ホストで絞り込み", "aria-label": "絞り込み" });
   let showArchived = false;
-  let lift = newFirstOn();
-  const liftBtn = h("button", { class: "btn small" + (lift ? " on" : ""), title: "未読（NEW）のセッションを一覧の先頭にまとめる",
+  const liftBtn = h("button", { class: "btn small" + (newFirstOn() ? " on" : ""), title: "未読（NEW）のセッションを一覧の先頭にまとめる",
     onclick: () => {
-      lift = !lift;
-      try { localStorage.setItem(NEW_FIRST_KEY, lift ? "1" : "0"); } catch {}
-      liftBtn.classList.toggle("on", lift);
+      setLook({ ...look, new_first: newFirstOn() ? "off" : "on" });
       render();
     } }, "新着を上に");
   const archBtn = h("button", { class: "btn small", onclick: () => { showArchived = !showArchived; selected.clear(); paintSel(); archBtn.classList.toggle("on", showArchived); archBtn.textContent = showArchived ? "アーカイブ表示中" : "アーカイブ"; refreshNow(); } }, "アーカイブ");
@@ -1209,6 +1206,9 @@ async function devicePage(opts = {}) {
       .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${sref(s, s._dev)} ${groupOf(s)} ${s.project || ""} ${s._devName}`.toLowerCase().includes(q))
       .sort((a, b) => (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (new Date(b.last_seen) - new Date(a.last_seen)));
     const sorted = laterFirst(projectsFirst(rows));
+    // Read on every render: another browser may have flipped it (loadLook).
+    const lift = newFirstOn();
+    liftBtn.classList.toggle("on", lift);
     const ordered = lift && !showArchived ? newFirst(sorted) : sorted;
     const freshRows = ordered.filter((s) => s.unseen);
     const out = [];
@@ -4595,14 +4595,22 @@ const ACCENTS = [
 let look = {};
 try { look = JSON.parse(localStorage.getItem("ccdash.look") || "{}"); } catch {}
 function setLook(p, save = true) {
-  look = { theme: p.theme || "", accent: p.accent || "" };
+  look = { theme: p.theme || "", accent: p.accent || "", new_first: p.new_first || "" };
   try { localStorage.setItem("ccdash.look", JSON.stringify(look)); } catch {}
   window.applyLook?.(look);
   if (save) api("/api/prefs", { method: "PUT", json: look }).catch((e) => toast("設定を保存できませんでした: " + e.message));
 }
 // loadLook picks up the hub's copy (another device may have changed it).
+// A 新着を上に choice from before it was a pref (this browser's
+// localStorage) is carried up once.
 function loadLook() {
-  api("/api/prefs").then((p) => { if (p && (p.theme !== look.theme || p.accent !== look.accent)) setLook(p, false); }).catch(() => {});
+  api("/api/prefs").then((p) => {
+    if (!p) return;
+    let old = null;
+    try { old = localStorage.getItem("ccdash.newFirst"); localStorage.removeItem("ccdash.newFirst"); } catch {}
+    if (!p.new_first && (old === "1" || old === "0")) { setLook({ ...p, new_first: old === "1" ? "on" : "off" }); return; }
+    if (p.theme !== look.theme || p.accent !== look.accent || (p.new_first || "") !== (look.new_first || "")) setLook(p, false);
+  }).catch(() => {});
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => window.applyLook?.(look));
 

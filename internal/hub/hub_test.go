@@ -214,7 +214,8 @@ func TestPWAFilesArePublic(t *testing.T) {
 	}
 }
 
-// TestPrefs: the look round-trips per user and bad values are refused.
+// TestPrefs: the prefs round-trip per user, a PUT merges, and bad values
+// are refused.
 func TestPrefs(t *testing.T) {
 	h := newTestHub(t, true).Handler()
 	if w := serve(h, "GET", "/api/prefs", "", nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"theme":""`) {
@@ -226,7 +227,17 @@ func TestPrefs(t *testing.T) {
 	if w := serve(h, "GET", "/api/prefs", "", nil); !strings.Contains(w.Body.String(), `"accent":"#2f6bff"`) || !strings.Contains(w.Body.String(), `"theme":"dark"`) {
 		t.Fatalf("get = %s", w.Body)
 	}
-	for _, bad := range []string{`{"theme":"blue"}`, `{"accent":"red"}`, `{"accent":"#12345"}`} {
+	// A PUT merges: an older page sending only the look keeps new_first.
+	if w := serve(h, "PUT", "/api/prefs", `{"new_first":"off"}`, nil); w.Code != http.StatusOK {
+		t.Fatalf("put new_first = %d %s", w.Code, w.Body)
+	}
+	if w := serve(h, "PUT", "/api/prefs", `{"theme":"light","accent":""}`, nil); w.Code != http.StatusOK {
+		t.Fatalf("put look = %d %s", w.Code, w.Body)
+	}
+	if w := serve(h, "GET", "/api/prefs", "", nil); !strings.Contains(w.Body.String(), `"new_first":"off"`) || !strings.Contains(w.Body.String(), `"theme":"light"`) {
+		t.Fatalf("merged = %s", w.Body)
+	}
+	for _, bad := range []string{`{"theme":"blue"}`, `{"accent":"red"}`, `{"accent":"#12345"}`, `{"new_first":"yes"}`} {
 		if w := serve(h, "PUT", "/api/prefs", bad, nil); w.Code != http.StatusBadRequest {
 			t.Errorf("%s = %d", bad, w.Code)
 		}
