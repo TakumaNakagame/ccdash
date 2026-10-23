@@ -327,3 +327,14 @@ func TestVendoredAssets(t *testing.T) {
 }
 
 var vendorRef = regexp.MustCompile(`vendor/[A-Za-z0-9._@-]+/[A-Za-z0-9._-]+\.(?:js|css)`)
+
+func TestUsableTermSize(t *testing.T) {
+	for _, c := range []struct {
+		cols, rows int
+		want       bool
+	}{{80, 24, true}, {57, 1, false}, {57, 2, false}, {10, 3, true}, {9, 24, false}, {0, 0, false}} {
+		if got := usableTermSize(c.cols, c.rows); got != c.want {
+			t.Errorf("usableTermSize(%d, %d) = %v, want %v", c.cols, c.rows, got, c.want)
+		}
+	}
+}
