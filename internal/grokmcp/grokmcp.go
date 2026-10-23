@@ -81,7 +81,9 @@ func (s *Server) tools() []map[string]any {
 		{
 			"name": "start_session",
 			"description": "Start a new Claude Code session (auto mode) on the operator's work machine with this request as its first message. " +
-				"Write the whole request in plain words: what to look into or change, and what you already know. Claude proceeds on its own, " +
+				"Write the whole request in plain words: what to look into or change, and what you already know. The operator usually speaks to you, " +
+				"so rewrite what they said as clear written text first: fix speech-recognition mistakes (names of tools, repositories and services), " +
+				"and if a word is still unclear, ask the operator before starting. Claude proceeds on its own, " +
 				"chooses the recommended option instead of asking, and ends with a pull request for the operator to review and merge. " +
 				"Returns the session's ref; follow it with read_session.",
 			"inputSchema": object(map[string]any{
