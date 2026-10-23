@@ -103,6 +103,9 @@ type ptyStartReq struct {
 	// Project puts the new session into this project once its session ID
 	// is known (applyPTYProjects).
 	Project string `json:"project"`
+	// Origin marks who started it for whom ("grok" = ccdash grok-mcp),
+	// stored with the session the same way (model.Session.Origin).
+	Origin string `json:"origin"`
 }
 
 // handlePTYStart creates a new PTY session or returns an existing alive one.
@@ -151,6 +154,9 @@ func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 	default:
 		return "", 0, http.StatusBadRequest, fmt.Errorf("permissionMode must be manual, acceptEdits, auto or plan")
 	}
+	if !validOrigin(req.Origin) {
+		return "", 0, http.StatusBadRequest, fmt.Errorf("origin must be 1-32 of a-z, 0-9 and -")
+	}
 
 	// If we already have an alive entry for this sessionID, reuse it.
 	if req.SessionID != "" {
@@ -197,6 +203,7 @@ func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 	entry := newPTYEntry(sess, "", req.Cols, req.Rows)
 	entry.tag = tag
 	entry.project = strings.TrimSpace(req.Project)
+	entry.origin = req.Origin
 	entry.cwd = req.Cwd
 	if err := sess.Start(); err != nil {
 		return "", 0, http.StatusInternalServerError, fmt.Errorf("pty start: %v", err)
@@ -483,20 +490,22 @@ func (s *Server) aliasPTYsByParent(ctx context.Context, procs map[string]procmap
 }
 
 // applyPTYProjects puts a spawned session into the project it was started
-// for (ptyStartReq.Project) once the PTY has a session-ID alias and the
-// session has a row. Runs on the discovery tick; each PTY is handled once,
-// and a session that already has a project keeps it.
+// for (ptyStartReq.Project) and records its origin (ptyStartReq.Origin) once
+// the PTY has a session-ID alias and the session has a row. Runs on the
+// discovery tick; each PTY is handled once, and a session that already has
+// a project keeps it.
 func (s *Server) applyPTYProjects(ctx context.Context) {
 	type job struct {
 		e       *ptyEntry
 		sid     string
 		project string
+		origin  string
 	}
 	var jobs []job
 	s.ptyMu.Lock()
 	for k, e := range s.ptyMap {
-		if e.project != "" && !e.projectDone && !strings.HasPrefix(k, "pid-") {
-			jobs = append(jobs, job{e, k, e.project})
+		if (e.project != "" || e.origin != "") && !e.projectDone && !strings.HasPrefix(k, "pid-") {
+			jobs = append(jobs, job{e, k, e.project, e.origin})
 		}
 	}
 	s.ptyMu.Unlock()
@@ -505,7 +514,13 @@ func (s *Server) applyPTYProjects(ctx context.Context) {
 		if err != nil || !ok {
 			continue // no row yet: next tick
 		}
-		if sess.Project == "" {
+		if j.origin != "" {
+			if err := s.db.SetOrigin(ctx, j.sid, j.origin); err != nil {
+				log.Printf("pty origin %s: %v", j.sid, err)
+				continue
+			}
+		}
+		if j.project != "" && sess.Project == "" {
 			if err := s.db.SetProject(ctx, j.sid, j.project); err != nil {
 				log.Printf("pty project %s: %v", j.sid, err)
 				continue
@@ -515,6 +530,19 @@ func (s *Server) applyPTYProjects(ctx context.Context) {
 		j.e.projectDone = true
 		s.ptyMu.Unlock()
 	}
+}
+
+// validOrigin: "" or a short lowercase name.
+func validOrigin(o string) bool {
+	if len(o) > 32 {
+		return false
+	}
+	for _, c := range o {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // parentPIDs returns pid → ppid for every process, via one `ps` call

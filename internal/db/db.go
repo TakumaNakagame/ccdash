@@ -140,6 +140,7 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN wait_at INTEGER`,
 		`ALTER TABLE sessions ADD COLUMN wait_stopped INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE sessions ADD COLUMN entrypoint TEXT`,
+		`ALTER TABLE sessions ADD COLUMN origin TEXT`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -456,7 +457,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
 		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0),
-		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0)
+		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0), COALESCE(s.origin,'')
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE COALESCE(s.archived,0) = ?
 		ORDER BY COALESCE(s.favorite,0) DESC,
@@ -483,7 +484,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&first, &last, &status, &s.PendingCount, &s.Account,
 			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
 			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt,
-			&s.Wait, &s.WaitNote, &waitAt); err != nil {
+			&s.Wait, &s.WaitNote, &waitAt, &s.Origin); err != nil {
 			return nil, err
 		}
 		finishAttention(&s, attAt)
@@ -579,7 +580,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
 		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0),
-		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0)
+		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0), COALESCE(s.origin,'')
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE s.session_id = ?
 	`, sessionID)
@@ -597,7 +598,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&first, &last, &status, &s.PendingCount, &s.Account,
 		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
 		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt,
-		&s.Wait, &s.WaitNote, &waitAt)
+		&s.Wait, &s.WaitNote, &waitAt, &s.Origin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Session{}, false, nil
 	}
@@ -868,6 +869,14 @@ func (d *DB) SetLater(ctx context.Context, sessionID string, later bool) error {
 func (d *DB) SetGrid(ctx context.Context, sessionID string, on bool) error {
 	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET grid_at = CASE WHEN ? THEN COALESCE(grid_at, ?) ELSE NULL END WHERE session_id = ?`,
 		on, time.Now().UnixMilli(), sessionID)
+	return err
+}
+
+// SetOrigin records who started the session ("grok" = the Grok MCP,
+// ccdash grok-mcp). The first origin sticks: a later call never moves a
+// session into or out of what it was started as.
+func (d *DB) SetOrigin(ctx context.Context, sessionID, origin string) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET origin = ? WHERE session_id = ? AND COALESCE(origin,'') = ''`, origin, sessionID)
 	return err
 }
 

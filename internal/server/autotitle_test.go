@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,5 +82,30 @@ func TestApplyPTYProjects(t *testing.T) {
 	}
 	if got, _, _ := d.GetSession(ctx, "old-sid"); got.Project != "infra" {
 		t.Fatalf("old-sid project overwritten: %q", got.Project)
+	}
+}
+
+// TestApplyPTYOrigin: a spawn's origin lands on its row once, and the
+// first origin sticks.
+func TestApplyPTYOrigin(t *testing.T) {
+	s, d, _ := newTestServer(t)
+	ctx := context.Background()
+	e := &ptyEntry{origin: "grok"}
+	s.ptyMap["g-sid"] = e
+	if err := d.UpsertSession(ctx, &model.Session{SessionID: "g-sid", Cwd: "/w", Status: model.StatusIdle}); err != nil {
+		t.Fatal(err)
+	}
+	s.applyPTYProjects(ctx)
+	if got, _, _ := d.GetSession(ctx, "g-sid"); got.Origin != "grok" || got.Project != "" || !e.projectDone {
+		t.Fatalf("origin = %q project = %q", got.Origin, got.Project)
+	}
+	_ = d.SetOrigin(ctx, "g-sid", "other")
+	if got, _, _ := d.GetSession(ctx, "g-sid"); got.Origin != "grok" {
+		t.Fatalf("origin overwritten: %q", got.Origin)
+	}
+	for o, ok := range map[string]bool{"": true, "grok": true, "a-1": true, "Grok": false, "a b": false, strings.Repeat("a", 33): false} {
+		if validOrigin(o) != ok {
+			t.Errorf("validOrigin(%q) = %v", o, !ok)
+		}
 	}
 }

@@ -65,9 +65,10 @@ type ptyEntry struct {
 	emuMu sync.Mutex
 	emu   *vt.Emulator
 	tag   int // hook tag handed to the child; see ptyTagBase
-	// project / projectDone: the project the spawn joins (applyPTYProjects);
-	// guarded by Server.ptyMu.
+	// project / origin / projectDone: the project the spawn joins and who
+	// started it (applyPTYProjects); guarded by Server.ptyMu.
 	project     string
+	origin      string
 	projectDone bool
 	// cwd is where the child started; prompt is the dialog a spawn not yet
 	// tied to a session waits on (attentionLoop), e.g. the folder-trust
