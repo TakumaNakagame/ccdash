@@ -41,6 +41,9 @@ type StartRequest struct {
 	Project string `json:"project,omitempty"`
 	// PermissionMode is "", manual, acceptEdits, auto or plan.
 	PermissionMode string `json:"permissionMode,omitempty"`
+	// Origin marks who started it for whom ("grok" = ccdash grok-mcp);
+	// the collector stores it with the session (model.Session.Origin).
+	Origin string `json:"origin,omitempty"`
 	// SessionID + ResumeID (both the session's id) resume an existing
 	// session (`claude --resume`) under that key instead of starting a new
 	// one; Cwd must then be the session's own directory.
