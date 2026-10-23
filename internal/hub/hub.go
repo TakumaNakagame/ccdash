@@ -904,7 +904,7 @@ func (h *Hub) handlePTYSocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, strings.TrimSpace(string(msg)), resp.StatusCode)
 		return
 	}
-	if cols > 0 && rows > 0 {
+	if usableTermSize(cols, rows) {
 		_ = json.NewEncoder(dev).Encode(map[string]int{"cols": cols, "rows": rows})
 	} else {
 		_, _ = io.WriteString(dev, "{}\n")
@@ -970,12 +970,17 @@ func (h *Hub) handlePTYSocket(w http.ResponseWriter, r *http.Request) {
 				Cols int    `json:"cols"`
 				Rows int    `json:"rows"`
 			}
-			if json.Unmarshal(data, &m) == nil && m.Type == "resize" && m.Cols > 0 && m.Rows > 0 {
+			if json.Unmarshal(data, &m) == nil && m.Type == "resize" && usableTermSize(m.Cols, m.Rows) {
 				go h.resizePTY(dc, key, m.Cols, m.Rows)
 			}
 		}
 	}
 }
+
+// usableTermSize rejects the size a terminal reports before it is laid out
+// (the Android app's WebView once sent 57×1): applied to the PTY it left
+// claude drawing into one line and every viewer black until the next resize.
+func usableTermSize(cols, rows int) bool { return cols >= 10 && rows >= 3 }
 
 func (h *Hub) originPatterns() []string {
 	if u, err := url.Parse(h.cfg.PublicURL); err == nil && u.Host != "" {
