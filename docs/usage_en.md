@@ -498,7 +498,7 @@ portal's device-page restart button offers 作業が終わったら再起動 / �
 - **Refresh interval (ms)**: how often the TUI re-queries the DB.
   Default 1000.
 - **Trusted folders**: comma-separated folders (`~/` allowed), e.g.
-  `~/DevWorks/TakumaNakagame`. When ccdash starts claude in one of them or
+  `~/src`. When ccdash starts claude in one of them or
   any subfolder (`n`, the portal, MCP `start_session`), it first marks that
   folder trusted in `~/.claude.json`, so a brand-new folder doesn't stop at
   Claude Code's "do you trust this folder?" question. Empty = off. From a
@@ -541,10 +541,15 @@ curl -fsSL https://raw.githubusercontent.com/TakumaNakagame/ccdash/main/install.
 ## 12. Uninstall
 
 ```sh
-ccdash uninstall-hooks       # remove ccdash's entries from ~/.claude/settings.json
-rm -rf ~/.local/state/ccdash # remove DB, token, log
-rm $(which ccdash)           # remove the binary itself
+ccdash uninstall-hooks                 # remove ccdash's entries (and the status-line relay) from ~/.claude/settings.json
+claude mcp remove --scope user ccdash  # unregister the MCP server added by `ccdash setup`
+ccdash hub leave                       # if joined to a hub
+rm -rf ~/.local/state/ccdash ~/.config/ccdash   # DB, token, logs, client config
+rm "$(command -v ccdash)"              # the binary itself
 ```
+
+`ccdash setup` also added `mcp__ccdash__set_status` to `permissions.allow`
+in `~/.claude/settings.json`; it is harmless, delete it by hand if you like.
 
 `uninstall-hooks` only removes ccdash's own entries (tagged with
 `X-Ccdash-Managed: true` or pointing at `ccdash/hook.sh`) and deletes
@@ -806,6 +811,10 @@ Tools:
 | `schedule_restart` | schedule a collector restart for when no hosted session is busy (see "Restart once the sessions are idle"); `cancel: true` cancels, `timeout_minutes` bounds the wait. The calling session counts as busy until its turn ends. `overview` shows a pending one as `restart_pending` |
 | `resume_session` | bring a stopped session back with `claude --resume` (in its own cwd, hosted by ccdash) so it runs in ccdash again; unarchives it. Refuses one that still runs (under ccdash or not); optional first `prompt`, `permission_mode`. Refused while Attach is OFF |
 
+With machines joined to a hub, `list_hosts` names the reachable machines
+and the other tools take `host` (see section 18). The to-do list has its own
+tools (`list_tasks`, `add_task` …, see section 17).
+
 It never answers approvals. Add
 `--read-only` (`ccdash mcp --read-only`) to offer only the first four plus
 `set_status`.
@@ -839,3 +848,104 @@ its chat (after a login if needed), so a managing Claude can hand you a list
 of "sessions that need you" you can tap straight into. `--hub-url` sets or
 overrides the hub origin. Tapped inside the portal's chat, such a link moves
 to that chat in place (in the installed app too) instead of opening a tab.
+
+## 17. Tasks (to-do list)
+
+ccdash keeps a to-do list next to the sessions, per machine, in the
+collector's database. The idea is that **Claude keeps it**: you say "add a
+task for the release notes" or "#11: the review is done" in any session,
+and Claude updates the list through the MCP tools (recording progress on the
+task's timeline and linking the session to it). You mostly reorder, tick off
+and plan.
+
+- **Status**: todo / doing / waiting / done / cancelled. There is no delete;
+  a done or cancelled task can be archived (and brought back).
+- **Priority** (1 now … 4 someday) and **plan** (the day you'll work on it)
+  are separate. The list is grouped by plan: today, tomorrow, this week,
+  next week, later, unplanned.
+- **Ids never change**: "#11" always means the same task. With several
+  machines on a hub, a task's ref carries the host letter ("B#11").
+- A task can belong to a ccdash project and carry links (URLs, a working
+  directory, PRs, Jira keys, Slack threads).
+
+**TUI**: the task pane is the right-hand column (`w` shows / hides it, `W`
+focuses it, `b` folds the session list to make room). In the pane: `space`
+done / back to todo, `s` cycles todo → doing → waiting, `c` cancels,
+`1`–`4` plan today / tomorrow / this week / next week (`0` none), `[` / `]`
+reorder, `enter` details and timeline, `y` copies "#N について、" to start a
+prompt about it, `n` starts a session for the task, `x` archives. The
+widths come from the **Pane widths** setting.
+
+**Portal**: the task pane is docked on the right of every page and lists
+every online machine's tasks (chips narrow to one host); the home page's
+やること shows today and tomorrow.
+
+**CLI** (handy in scripts):
+
+```sh
+ccdash tasks list                      # open tasks by plan (--all: finished and archived too)
+ccdash tasks add "Write release notes" --plan tomorrow --priority 2 --project docs
+ccdash tasks note 11 "Draft sent for review"
+ccdash tasks status 11 done
+ccdash tasks plan 12 week --why "waiting for the API"
+ccdash tasks show 11                   # links and the whole timeline
+ccdash tasks md                        # the list as Markdown
+```
+
+**MCP tools**: `list_tasks`, `get_task`, `add_task`, `update_task`,
+`set_task_status`, `plan_task`, `add_task_note`, `link_task`, `order_tasks`,
+`archive_task`. For an automated run (e.g. a scheduled `claude -p` that
+reads Slack / Jira / GitHub through their own MCP servers), `task_context`
+hands it the open tasks and their links and `sync_tasks` (or
+`ccdash tasks sync` on stdin) merges its proposal — your own edits always
+win: titles, priorities and notes are never overwritten, a plan you set
+today is never moved, and a finished task is never reopened. ccdash itself
+never writes to Slack, Jira or GitHub.
+
+## 18. Several machines from one Claude (multi-host)
+
+With machines joined to a hub, `ccdash mcp` on one of them can see and
+drive the others' sessions — e.g. ask the Claude on your laptop "what is
+waiting for me on the server?".
+
+1. In the portal: 端末 (devices) → the machine that should reach the others
+   → 管理 → 他の端末へのアクセス: オフ (off, default) / 閲覧 (read) /
+   操作 (control).
+2. On that machine, `ccdash mcp` (as registered by `ccdash setup`) now
+   offers `list_hosts`, and the read tools cover every reachable machine;
+   their rows carry `host`. Acting tools (`start_session`, `set_project` …)
+   act on this machine unless you pass `host`.
+
+Sessions are referred to by **ref**: the host's letter plus the number
+("A231"); a bare "#231" is this machine's. Letters are assigned by the hub
+in registration order and can be changed in the device menu. Peers never get
+approvals, typing into a session, device management or settings — and each
+target machine's own switches (Attach, Approval blocking) still apply.
+
+## 19. Letting another assistant hand work to Claude (`ccdash grok-mcp`)
+
+`ccdash grok-mcp` is a small MCP server over HTTP for an assistant outside
+Claude Code (it was built for Grok behind an MCP gateway; any client that
+speaks Streamable HTTP MCP works). It can **start** Claude sessions in one
+fixed directory and follow up on them, but it can't touch your other
+sessions:
+
+| Tool | What it does |
+|---|---|
+| `start_session` | a new claude in `--cwd` (auto permission mode), in the `--project` project (default "Grok") |
+| `list_sessions` | every session, but only ref / title / status / the one-line status note |
+| `read_session` | the conversation (text only) of a session it started |
+| `send_message` | more text for a session it started (resumes it when stopped) |
+
+It never answers approvals or dialogs. Every request needs
+`Authorization: Bearer <token>`.
+
+```sh
+openssl rand -hex 32 > ~/.config/ccdash/grok.token && chmod 600 ~/.config/ccdash/grok.token
+ccdash grok-mcp --cwd ~/src/inbox --token-file ~/.config/ccdash/grok.token \
+  --listen 127.0.0.1:9131 --allow 100.64.0.0/10    # client addresses (default: any)
+```
+
+The MCP endpoint is `http://<listen>/mcp`. Keep `--listen` on loopback or
+a private network and narrow `--allow`; a collector must be running on the
+machine.

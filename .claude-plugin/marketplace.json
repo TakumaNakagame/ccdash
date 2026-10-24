@@ -1,0 +1,17 @@
+{
+  "name": "ccdash",
+  "owner": {
+    "name": "ccdash",
+    "url": "https://github.com/TakumaNakagame/ccdash"
+  },
+  "metadata": {
+    "description": "Claude Code plugins for ccdash, the dashboard for many Claude Code sessions"
+  },
+  "plugins": [
+    {
+      "name": "ccdash",
+      "source": "./plugins/ccdash",
+      "description": "Set up, verify, troubleshoot and remove ccdash (TUI, local web portal, hub, MCP) with Claude's help"
+    }
+  ]
+}

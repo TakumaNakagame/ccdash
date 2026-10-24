@@ -60,7 +60,9 @@ ones from, and answer approvals in.
   screen, and finished turns. The portal is installable as a PWA.
 
 **On the server** (the image is `ghcr.io/takumanakagame/ccdash`, entrypoint
-`ccdash hub serve`; TLS terminates in front of it):
+`ccdash hub serve`; TLS terminates in front of it — a full walkthrough with
+Compose, a reverse proxy and the login provider is in
+[Deploying the hub](#deploying-the-hub-step-by-step)):
 
 ```sh
 ccdash hub serve --listen :8080 --data-dir /data \
@@ -134,6 +136,145 @@ on a named host (`host` argument, `list_hosts`). Peers reach only a narrow
 route set (`internal/hub/peer.go`) — never approvals, typing into a PTY,
 device management or settings — and the target device's own allowlist
 still applies. See `docs/decisions/0007-multihost.md`.
+
+## Deploying the hub (step by step)
+
+A walkthrough for a first hub on one server. You need a machine that is
+always on (a home server, a small VPS, a NAS that runs containers) and one
+of two ways to log in:
+
+- **OIDC** — any OpenID Connect provider (Cloudflare Access for SaaS,
+  Google, a self-hosted Authelia / Pocket ID / Keycloak …) with the hub
+  behind a reverse proxy that terminates TLS. Reachable from anywhere.
+- **Tailscale** — no identity provider: `tailscale serve` puts the hub on
+  your tailnet with HTTPS and tells it who you are. Reachable only from
+  your own devices on the tailnet.
+
+### 1. Register the hub with your login provider (OIDC)
+
+Pick the hub's address first, e.g. `https://ccdash.example.net`, then
+create an OIDC client ("web application", authorization-code flow) with:
+
+- **Redirect URI**: `https://ccdash.example.net/auth/callback`
+- **Scopes**: `openid email profile` (the hub matches the `email` claim
+  against `--allowed-email`; an `email_verified: false` login is refused)
+
+Note the **issuer URL**, **client ID** and **client secret**. Issuers:
+
+| Provider | Where | Issuer |
+|---|---|---|
+| Cloudflare Access for SaaS | Zero Trust → Access → Applications → Add → SaaS → OIDC | `https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<client-id>` |
+| Google | Google Cloud console → APIs & Services → Credentials → OAuth client ID (Web application) | `https://accounts.google.com` |
+| Self-hosted | the provider's client / application settings | its issuer (the URL that serves `/.well-known/openid-configuration`) |
+
+The issuer must be reachable from the hub at start-up (the hub reads its
+discovery document).
+
+### 2. Run the container (Docker Compose)
+
+The image is `ghcr.io/takumanakagame/ccdash` (`latest` = the newest
+release; `vX.Y.Z` tags too). Its entrypoint is `ccdash hub serve`, so
+`command:` only adds flags.
+
+```sh
+mkdir -p ccdash-hub/data && cd ccdash-hub
+sudo chown 65532:65532 data            # the image runs as distroless "nonroot" (uid 65532)
+printf '%s' '<client secret>' > oidc-secret && chmod 600 oidc-secret
+```
+
+```yaml
+# compose.yaml
+services:
+  hub:
+    image: ghcr.io/takumanakagame/ccdash:latest
+    restart: unless-stopped
+    environment:
+      CCDASH_HUB_PUBLIC_URL: https://ccdash.example.net
+      CCDASH_HUB_OIDC_ISSUER: https://accounts.google.com
+      CCDASH_HUB_OIDC_CLIENT_ID: <client id>
+      CCDASH_HUB_ALLOWED_EMAILS: you@example.com   # your own addresses only, comma-separated
+    command: ["--oidc-client-secret-file", "/run/secrets/oidc"]
+    secrets: [oidc]
+    volumes:
+      - ./data:/data                   # hub.sqlite: devices, cookie key, VAPID keys, prefs
+    ports:
+      - 127.0.0.1:8080:8080            # only the reverse proxy reaches it
+secrets:
+  oidc:
+    file: ./oidc-secret
+```
+
+```sh
+docker compose up -d
+docker compose logs -f hub
+curl -s http://127.0.0.1:8080/healthz
+```
+
+Without Docker, the same flags work on the release binary
+(`ccdash hub serve --listen 127.0.0.1:8080 --data-dir … --public-url …`),
+e.g. as a systemd service.
+
+### 3. Put a reverse proxy in front (TLS + WebSocket)
+
+The proxy must pass WebSocket upgrades (the device tunnel and the terminal
+view) and keep long-lived connections open; it must also pass the original
+`Host`. Caddy does all of that by default and gets the certificate itself:
+
+```caddyfile
+ccdash.example.net {
+	reverse_proxy 127.0.0.1:8080
+}
+```
+
+nginx needs it spelled out:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;   # map $http_upgrade → "upgrade" / "close"
+    proxy_read_timeout 1h;
+    proxy_buffering off;
+}
+```
+
+Don't put a second login gate (e.g. a Cloudflare Access *application* on
+the hostname) in front: devices dial the tunnel with their device token and
+can't pass an interactive login. Use the provider as the hub's OIDC issuer
+instead.
+
+### Alternative: Tailscale instead of OIDC
+
+On a machine in your tailnet (no container needed):
+
+```sh
+ccdash hub serve --tailscale-auth --listen 127.0.0.1:8080 \
+  --public-url https://<machine>.<tailnet>.ts.net \
+  --allowed-email you@example.com      # your Tailscale login
+tailscale serve --bg 8080
+```
+
+`--public-url` must be the name `tailscale serve` answers on (the hub
+answers 421 to any other host). Run the first command as a service to keep
+it up.
+
+### 4. Log in and join the machines
+
+1. Open the public URL and log in. The portal shows no devices yet.
+2. **端末を追加** (Add device): name it; a one-time token appears.
+3. On that machine: `ccdash hub join --url https://ccdash.example.net`,
+   paste the token, and keep a collector running (`ccdash server` as a
+   service, or `ccdash -k`). The device turns online within ~30 s.
+4. On a phone: open the URL, log in, "Add to Home screen", then turn on 🔔
+   for push notifications.
+
+If a device stays offline, `ccdash hub status` on it shows whether it is
+joined, whether **Hub connection** is on and whether a collector runs; the
+collector log (`~/.local/state/ccdash/ccdash.log`, or the service's
+journal) has the tunnel's errors; the usual causes are a proxy that drops WebSocket
+upgrades and a public URL that doesn't match what the browser uses.
 
 ## Several replicas (Kubernetes)
 

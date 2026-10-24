@@ -53,6 +53,11 @@ token).
 
 ## Quick start
 
+**New here? Follow [Getting started](docs/getting-started_en.md)
+([日本語](docs/getting-started_jp.md))** — install, a check that it works,
+and which setup fits you (terminal only, a browser on this machine, or
+several machines and a phone).
+
 ```sh
 # install (Linux / macOS, amd64 / arm64) — or: go install ./cmd/ccdash
 curl -fsSL https://raw.githubusercontent.com/TakumaNakagame/ccdash/main/install.sh | sh
@@ -67,6 +72,22 @@ as a service. `ccdash update` upgrades in place; `ccdash uninstall-hooks`
 undoes the setup.
 
 Hands-on guides: [English](docs/usage_en.md) · [日本語](docs/usage_jp.md)
+
+**Let Claude set it up.** This repository is also a Claude Code plugin
+marketplace with a setup skill. In Claude Code:
+
+```text
+/plugin marketplace add TakumaNakagame/ccdash
+/plugin install ccdash@ccdash
+```
+
+then ask "set up ccdash" — it checks your machine, asks which setup you
+want, says what it will change, installs and verifies. The skill also
+answers "how do I …" questions about ccdash from these docs.
+
+**Requirements**: macOS or Linux (amd64 / arm64; Windows via WSL2), Claude
+Code signed in, `curl`; `git` and `tmux` are optional. The TUI is in
+English; the web portal is in Japanese only for now.
 
 ## What it does
 
@@ -123,6 +144,9 @@ Hands-on guides: [English](docs/usage_en.md) · [日本語](docs/usage_jp.md)
   time, never its own). It never answers approvals; `--read-only` keeps only
   the read tools and `set_status`. On a hub-joined machine every session
   carries a link that opens it in the portal.
+- **Tasks.** A per-machine to-do list beside the sessions that Claude keeps
+  up to date through MCP ("#11: the review is done"), in the TUI's task
+  pane, the portal and `ccdash tasks`. See the usage guide, section 17.
 - **[TUI reference](docs/tui.md)** — every key (also `?` in the app).
 - **[Security](docs/security.md)** — threat model, and the switches that turn
   each risky capability off (approval blocking, title generation, attach,
@@ -140,6 +164,7 @@ ccdash trust <dir>          # folders where new sessions skip the folder-trust q
 ccdash hub serve | join     # web portal / connect this machine to it
 ccdash web                  # the portal for this machine only, on 127.0.0.1
 ccdash mcp                  # MCP server on stdio
+ccdash tasks                # the to-do list (list / add / note / status / plan …)
 ccdash update               # self-update (ccdash update channel dev: follow rc builds)
 ```
 
@@ -151,6 +176,8 @@ ccdash update               # self-update (ccdash update channel dev: follow rc 
 - Contributing: see [CONTRIBUTING.md](CONTRIBUTING.md) — anything that makes
   CI green gets a fast read.
 - License: [MIT](./LICENSE) © 2026 kameneko
+- The docs mention an Android app; it is a separate, unpublished companion.
+  The installable web app (PWA) covers the same ground.
 - Built with help from [Claude Code](https://claude.com/claude-code); the
   `Co-Authored-By: Claude` lines in the log reflect that. Screenshots use
   made-up data.
