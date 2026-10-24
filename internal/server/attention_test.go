@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 func TestAttentionFromHooks(t *testing.T) {

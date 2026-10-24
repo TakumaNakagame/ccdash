@@ -6,7 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/takumanakagame/ccmanage/internal/skills"
+	"github.com/TakumaNakagame/ccdash/internal/skills"
 )
 
 func TestFilterSkills(t *testing.T) {

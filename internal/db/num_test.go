@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 func nums(t *testing.T, d *DB) map[string]int64 {

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 func TestGitReview(t *testing.T) {

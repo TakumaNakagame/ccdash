@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
 )
 
 // newInstall points the state dir at a temp dir and returns an Install that

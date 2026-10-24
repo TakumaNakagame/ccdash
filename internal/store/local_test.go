@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/takumanakagame/ccmanage/internal/db"
+	"github.com/TakumaNakagame/ccdash/internal/db"
 )
 
 // Compile-time interface checks: both implementations must keep satisfying

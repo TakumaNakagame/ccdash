@@ -21,10 +21,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 
-	"github.com/takumanakagame/ccmanage/internal/auth"
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/paths"
-	"github.com/takumanakagame/ccmanage/internal/screen"
+	"github.com/TakumaNakagame/ccdash/internal/auth"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/screen"
 )
 
 // liveScreen is the TUI-side mirror of one server emulator.

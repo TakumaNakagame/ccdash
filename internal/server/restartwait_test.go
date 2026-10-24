@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // TestScheduledRestart: {"when":"idle"} waits while a hosted session works

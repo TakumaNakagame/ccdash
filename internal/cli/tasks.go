@@ -13,13 +13,12 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/store"
-	"github.com/takumanakagame/ccmanage/internal/tasks"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/store"
+	"github.com/TakumaNakagame/ccdash/internal/tasks"
 )
 
-// tasksCmd is the to-do list's CLI (docs/decisions/0006-tasks.md): what
-// work-status's task.py, sync_tasks.py and timeline_context.py did, over
+// tasksCmd is the to-do list's CLI (docs/decisions/0006-tasks.md), over
 // store.Store so -r works too.
 func tasksCmd(rf *remoteFlags) *cobra.Command {
 	c := &cobra.Command{
@@ -211,7 +210,7 @@ proposal into 'ccdash tasks sync'.`,
 		Short: "Merge an automated run's proposal from stdin (the person's edits win)",
 		Long: `Reads {"synced_at", "tasks": [{"key", "title", "priority", "plan", "due", "project", "note",
 "links", "done", "status", "timeline": [{"at", "source", "text", "link", "ref"}],
-"replan": {"plan", "why"}}]} — the input work-status's sync_tasks.py took — and merges it:
+"replan": {"plan", "why"}}]} from stdin and merges it:
 tasks match by key; title, priority and note are never overwritten; a plan set by hand
 today doesn't move; a status other than done changes only with new timeline entries; a
 finished task is never reopened; a new task's project is kept only if it exists.`,
@@ -251,7 +250,7 @@ finished task is never reopened; a new task's project is kept only if it exists.
 
 	md := &cobra.Command{
 		Use:   "md",
-		Short: "Print the list as Markdown (what TASKS.md used to be)",
+		Short: "Print the open tasks as Markdown, grouped by plan",
 		Args:  cobra.NoArgs,
 		RunE: with(func(ctx context.Context, st store.Store, _ []string) error {
 			l, err := st.ListTasks(ctx, false)
@@ -266,7 +265,7 @@ finished task is never reopened; a new task's project is kept only if it exists.
 	var out string
 	export := &cobra.Command{
 		Use:   "export",
-		Short: "Write every task (archived too) as a work-status tasks.json",
+		Short: "Write every task (archived too) as a tasks.json that import reads",
 		Args:  cobra.NoArgs,
 		RunE: with(func(ctx context.Context, st store.Store, _ []string) error {
 			l, err := st.ListTasks(ctx, true)
@@ -298,9 +297,10 @@ finished task is never reopened; a new task's project is kept only if it exists.
 	var dry bool
 	importCmd := &cobra.Command{
 		Use:   "import <tasks.json>",
-		Short: "One-off: bring in work-status's tasks.json (ids, keys and timelines kept)",
-		Long: `Imports a work-status tasks.json into an empty list. Its free-text projects become ccdash
-projects: --map takes a JSON object {"old name": "ccdash project", "old": ""} ("" = none);
+		Short: "Load a tasks.json into an empty list (ids, keys and timelines kept)",
+		Long: `Loads a tasks.json — the file 'ccdash tasks export' writes, e.g. to move the list to
+another machine — into this machine's list, which must be empty. The file's project names are matched to
+ccdash projects: --map takes a JSON object {"old name": "ccdash project", "old": ""} ("" = none);
 names neither mapped nor already a project stop the import unless --unmapped create|drop.
 Finished tasks from before today come in archived. Run with --dry-run first.`,
 		Args: cobra.ExactArgs(1),

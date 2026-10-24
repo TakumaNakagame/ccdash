@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/tunnel"
+	"github.com/TakumaNakagame/ccdash/internal/tunnel"
 )
 
 func TestDeviceLetters(t *testing.T) {

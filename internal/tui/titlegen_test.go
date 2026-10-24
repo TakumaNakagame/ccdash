@@ -9,7 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 func TestRecentTitleCandidates(t *testing.T) {

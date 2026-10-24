@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/discovery"
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/discovery"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // TestMaybeAutoTitle: only sessions past their first exchange or two are

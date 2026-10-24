@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/redact"
-	"github.com/takumanakagame/ccmanage/internal/transcript"
+	"github.com/TakumaNakagame/ccdash/internal/redact"
+	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
 type Discovered struct {

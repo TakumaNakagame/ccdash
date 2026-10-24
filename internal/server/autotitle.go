@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/discovery"
-	"github.com/takumanakagame/ccmanage/internal/settings"
-	"github.com/takumanakagame/ccmanage/internal/summarize"
+	"github.com/TakumaNakagame/ccdash/internal/discovery"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
+	"github.com/TakumaNakagame/ccdash/internal/summarize"
 )
 
 // Automatic titles: once a session has had an exchange or two, the

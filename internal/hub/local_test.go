@@ -19,7 +19,7 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"github.com/takumanakagame/ccmanage/internal/tunnel"
+	"github.com/TakumaNakagame/ccdash/internal/tunnel"
 )
 
 func newLocalHub(t *testing.T) (*Hub, string) {
@@ -284,7 +284,7 @@ func TestLocalPush(t *testing.T) {
 	if err := json.Unmarshal(claims, &c); err != nil {
 		t.Fatal(err)
 	}
-	if c.Aud != "https://fcm.googleapis.com" || c.Sub != "https://github.com/takumanakagame/ccmanage" {
+	if c.Aud != "https://fcm.googleapis.com" || c.Sub != "https://github.com/TakumaNakagame/ccdash" {
 		t.Errorf("vapid claims = %+v", c)
 	}
 }

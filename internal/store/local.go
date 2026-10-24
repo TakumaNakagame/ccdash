@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/takumanakagame/ccmanage/internal/usage"
+	"github.com/TakumaNakagame/ccdash/internal/usage"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,15 +13,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/auth"
-	"github.com/takumanakagame/ccmanage/internal/db"
-	"github.com/takumanakagame/ccmanage/internal/hubcfg"
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/paths"
-	"github.com/takumanakagame/ccmanage/internal/redact"
-	"github.com/takumanakagame/ccmanage/internal/summarize"
-	"github.com/takumanakagame/ccmanage/internal/tasks"
-	"github.com/takumanakagame/ccmanage/internal/transcript"
+	"github.com/TakumaNakagame/ccdash/internal/auth"
+	"github.com/TakumaNakagame/ccdash/internal/db"
+	"github.com/TakumaNakagame/ccdash/internal/hubcfg"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/redact"
+	"github.com/TakumaNakagame/ccdash/internal/summarize"
+	"github.com/TakumaNakagame/ccdash/internal/tasks"
+	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
 // Local implements Store directly against the embedded/managed collector's

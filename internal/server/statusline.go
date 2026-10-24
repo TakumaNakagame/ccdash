@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/redact"
+	"github.com/TakumaNakagame/ccdash/internal/redact"
 )
 
 type statusSnap struct {

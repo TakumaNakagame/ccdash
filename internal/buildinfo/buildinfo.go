@@ -5,7 +5,7 @@
 // at a glance whether a dev binary has been rebuilt.
 //
 // Version is injected at link time via
-// `-ldflags "-X github.com/takumanakagame/ccmanage/internal/buildinfo.Version=vX.Y.Z"`.
+// `-ldflags "-X github.com/TakumaNakagame/ccdash/internal/buildinfo.Version=vX.Y.Z"`.
 // "dev" is the placeholder for go install / go build.
 package buildinfo
 

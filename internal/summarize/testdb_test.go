@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/takumanakagame/ccmanage/internal/db"
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/db"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 func newTestDB(t *testing.T) *db.DB {

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/takumanakagame/ccmanage/internal/auth"
-	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/auth"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
 )
 
 // MarkerKey identifies hook entries managed by ccdash so we can remove or

@@ -30,10 +30,10 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/takumanakagame/ccmanage/internal/buildinfo"
+	"github.com/TakumaNakagame/ccdash/internal/buildinfo"
 )
 
-const scope = "github.com/takumanakagame/ccmanage"
+const scope = "github.com/TakumaNakagame/ccdash"
 
 // Enabled reports whether the environment asks for traces.
 func Enabled() bool {

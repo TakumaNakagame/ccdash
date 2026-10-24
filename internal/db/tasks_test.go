@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/tasks"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/tasks"
 )
 
 func ptr[T any](v T) *T { return &v }

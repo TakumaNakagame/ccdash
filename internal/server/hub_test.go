@@ -15,9 +15,9 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"github.com/takumanakagame/ccmanage/internal/hubcfg"
-	"github.com/takumanakagame/ccmanage/internal/settings"
-	"github.com/takumanakagame/ccmanage/internal/tunnel"
+	"github.com/TakumaNakagame/ccdash/internal/hubcfg"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
+	"github.com/TakumaNakagame/ccdash/internal/tunnel"
 )
 
 func TestHubAllowed(t *testing.T) {

@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/db"
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/tasks"
+	"github.com/TakumaNakagame/ccdash/internal/db"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/tasks"
 )
 
 // The to-do list's routes (docs/decisions/0006-tasks.md). Tasks are named

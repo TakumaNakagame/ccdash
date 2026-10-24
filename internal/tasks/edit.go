@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // Timeline sources. claude = an interactive Claude session, manual = the

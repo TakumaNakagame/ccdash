@@ -17,13 +17,13 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/takumanakagame/ccmanage/internal/buildinfo"
-	"github.com/takumanakagame/ccmanage/internal/hub"
-	"github.com/takumanakagame/ccmanage/internal/hubcfg"
-	"github.com/takumanakagame/ccmanage/internal/paths"
-	"github.com/takumanakagame/ccmanage/internal/settings"
-	"github.com/takumanakagame/ccmanage/internal/tracing"
-	"github.com/takumanakagame/ccmanage/internal/tunnel"
+	"github.com/TakumaNakagame/ccdash/internal/buildinfo"
+	"github.com/TakumaNakagame/ccdash/internal/hub"
+	"github.com/TakumaNakagame/ccdash/internal/hubcfg"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
+	"github.com/TakumaNakagame/ccdash/internal/tracing"
+	"github.com/TakumaNakagame/ccdash/internal/tunnel"
 )
 
 func hubCmd() *cobra.Command {

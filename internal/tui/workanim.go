@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // The TUI twin of the portal's working beam (runBeam in web/app.js): a

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/tasks"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/tasks"
 )
 
 // The to-do list (docs/decisions/0006-tasks.md). The rules live in
@@ -461,7 +461,7 @@ func (d *DB) LastTaskSync(ctx context.Context) (string, error) {
 	return taskMeta(ctx, d.sql, "last_sync")
 }
 
-// ImportTasks brings in a work-status tasks.json, keeping its ids. It
+// ImportTasks brings in a tasks.json (tasks.LegacyFile), keeping its ids. It
 // refuses when the list isn't empty. With dryRun it only reports the plan.
 func (d *DB) ImportTasks(ctx context.Context, f tasks.LegacyFile, opt tasks.ImportOptions, dryRun bool) (tasks.ImportPlan, error) {
 	now := time.Now()

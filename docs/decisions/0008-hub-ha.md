@@ -6,8 +6,8 @@
 ## Context
 
 The hub (0003) has become the main way into ccdash, from a browser and from
-the phone. In the home lab it ran as one replica on home-k8s with its state
-in `hub.sqlite` on a ReadWriteOnce Proxmox CSI volume. On 2026-10-15 two
+the phone. In the operator's setup it ran as one replica on a home Kubernetes
+cluster with its state in `hub.sqlite` on a ReadWriteOnce volume. On 2026-10-15 two
 node drains moved the Pod. Each move gave about a minute of 502/503, because
 the disk had to be detached from one VM and attached to another
 (Multi-Attach), plus a few seconds while the devices' tunnels reconnected.
@@ -118,7 +118,7 @@ expected setup.
 
 ## Consequences
 
-- home-k8s manifest: `replicas: 2`, a ServiceAccount + Role, a headless
+- Kubernetes manifest: `replicas: 2`, a ServiceAccount + Role, a headless
   Service, `POD_IP` from the downward API, a PDB (`maxUnavailable: 1`),
   spread over nodes, and no PVC (after the one-time import).
 - A device that connected through an older collector needs nothing new.

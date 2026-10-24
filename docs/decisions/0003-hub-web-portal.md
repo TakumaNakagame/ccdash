@@ -12,12 +12,11 @@ starting a new session there was awkward. Remote mode (`ccdash -r`) already
 exposes the collector over HTTP, but it needs a terminal, a reachable
 collector address, and a copy of the token on each client.
 
-Constraints from the home lab:
+Constraints from the operator's setup:
 
-- Apps are reached over Tailscale (subnet router → `*.<internal domain>`
-  behind proxy02 / ingress-nginx on home-k8s); SSO is Cloudflare Access
-  used as an OIDC provider ("Access for SaaS", the Grafana / ArgoCD
-  pattern), not an edge gate.
+- Self-hosted apps are reached through a reverse proxy on a home
+  Kubernetes cluster (also over a VPN); SSO is an OIDC provider
+  (Cloudflare Access for SaaS), not an edge gate.
 - The operator does not want the portal to connect *into* each machine.
 
 ## Decision

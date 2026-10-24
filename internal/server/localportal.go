@@ -11,8 +11,8 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"github.com/takumanakagame/ccmanage/internal/tracing"
-	"github.com/takumanakagame/ccmanage/internal/tunnel"
+	"github.com/TakumaNakagame/ccdash/internal/tracing"
+	"github.com/TakumaNakagame/ccdash/internal/tunnel"
 )
 
 // The local portal (`ccdash web`, docs/decisions/0005-local-portal.md)

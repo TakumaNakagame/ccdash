@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 func taskTestModel() *model {

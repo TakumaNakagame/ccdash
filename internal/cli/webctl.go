@@ -39,7 +39,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
 )
 
 // How `ccdash web` reaches its collector (web.json "collector").

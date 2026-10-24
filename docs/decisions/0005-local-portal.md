@@ -93,7 +93,7 @@ talks to this machine's collector over an in-process tunnel.**
   only outbound traffic is the push service request (FCM for Chrome),
   which is what any web app with notifications does. The VAPID `sub`
   claim needs a contact: the public URL when it is https, otherwise the
-  project URL `https://github.com/takumanakagame/ccmanage` (a mailto: of
+  project URL `https://github.com/TakumaNakagame/ccdash` (a mailto: of
   a loopback URL is rejected by some push services). Notification clicks
   open `/#/d/<device>/s/<session>` as before.
 - **One fixed device.** The local store holds a single device row

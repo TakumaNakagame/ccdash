@@ -22,7 +22,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/takumanakagame/ccmanage/internal/skills"
+	"github.com/TakumaNakagame/ccdash/internal/skills"
 )
 
 // openSkillPicker loads the skill list and shows the picker. In remote

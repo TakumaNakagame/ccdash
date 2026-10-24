@@ -16,13 +16,13 @@ import (
 	"github.com/mattn/go-runewidth"
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/takumanakagame/ccmanage/internal/attach"
-	"github.com/takumanakagame/ccmanage/internal/db"
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/redact"
-	"github.com/takumanakagame/ccmanage/internal/settings"
-	"github.com/takumanakagame/ccmanage/internal/tracing"
-	"github.com/takumanakagame/ccmanage/internal/transcript"
+	"github.com/TakumaNakagame/ccdash/internal/attach"
+	"github.com/TakumaNakagame/ccdash/internal/db"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/redact"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
+	"github.com/TakumaNakagame/ccdash/internal/tracing"
+	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
 // Title generation (ctrl+t): an isolated `claude -p` spawn over transcript

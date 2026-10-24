@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/store"
-	"github.com/takumanakagame/ccmanage/internal/tasks"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/store"
+	"github.com/TakumaNakagame/ccdash/internal/tasks"
 )
 
 // TestTaskRoutesThroughRemote drives the task routes with store.Remote,

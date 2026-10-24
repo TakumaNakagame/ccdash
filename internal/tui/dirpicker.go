@@ -19,7 +19,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // dirCand is one row of the picker list.

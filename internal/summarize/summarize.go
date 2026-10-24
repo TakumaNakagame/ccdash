@@ -9,7 +9,7 @@ package summarize
 import (
 	"strings"
 
-	"github.com/takumanakagame/ccmanage/internal/transcript"
+	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
 // Marker prefix that identifies ccdash-spawned `claude -p` invocations.

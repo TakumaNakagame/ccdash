@@ -6,7 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/takumanakagame/ccmanage/internal/usage"
+	"github.com/TakumaNakagame/ccdash/internal/usage"
 	"io"
 	"net/http"
 	"net/url"
@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/auth"
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/tasks"
-	"github.com/takumanakagame/ccmanage/internal/transcript"
+	"github.com/TakumaNakagame/ccdash/internal/auth"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/tasks"
+	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
 // Remote implements Store against a ccdash collector's HTTP API

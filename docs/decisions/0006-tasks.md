@@ -5,7 +5,7 @@
 
 ## Context
 
-The operator keeps a to-do list outside ccdash ("work-status": a
+The operator keeps a to-do list outside ccdash (a personal tool: a
 `tasks.json` file, a Python CLI `task.py`, a merge script
 `sync_tasks.py`, a context dump `timeline_context.py` and a small WebUI).
 Claude adds and updates almost all of it: interactive sessions record

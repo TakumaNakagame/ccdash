@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // fakeClaude swaps the PTY child for `cat` and records each spawn's args.

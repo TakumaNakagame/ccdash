@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // TestMarkSelectedSeenDwell: passing over a NEW row doesn't clear it; only

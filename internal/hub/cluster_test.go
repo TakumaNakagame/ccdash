@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/tunnel"
+	"github.com/TakumaNakagame/ccdash/internal/tunnel"
 )
 
 // fakeAPI is just enough of the Kubernetes API for one namespace's Secrets:
