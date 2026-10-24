@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/TakumaNakagame/ccdash/internal/i18n"
 )
 
 // The test binary doubles as a stand-in process: with this variable set it
@@ -18,6 +20,7 @@ func TestMain(m *testing.M) {
 		time.Sleep(30 * time.Second)
 		os.Exit(0)
 	}
+	i18n.Set(i18n.JA) // the tests read ccdash's Japanese text
 	os.Exit(m.Run())
 }
 

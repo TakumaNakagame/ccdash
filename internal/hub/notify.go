@@ -18,6 +18,7 @@ import (
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
+	"github.com/TakumaNakagame/ccdash/internal/i18n"
 	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
@@ -84,8 +85,13 @@ func (s *store) listSubs(ctx context.Context) ([]pushSub, error) {
 type notification struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
-	URL   string `json:"url"`
-	Tag   string `json:"tag"` // a newer notification with the same tag replaces the older one
+	// TitleEn / BodyEn are the English; the service worker shows them
+	// when the portal is in English (sw.js). Title / Body stay Japanese for
+	// clients that know only those.
+	TitleEn string `json:"title_en,omitempty"`
+	BodyEn  string `json:"body_en,omitempty"`
+	URL     string `json:"url"`
+	Tag     string `json:"tag"` // a newer notification with the same tag replaces the older one
 	// Badge is the app-icon count at send time (needs you + unread), so the
 	// installed app's badge moves even while no portal window is open.
 	Badge *int `json:"badge,omitempty"`
@@ -235,9 +241,11 @@ func (h *Hub) handlePushTest(w http.ResponseWriter, r *http.Request) {
 		Delay    int    `json:"delay"`
 	}
 	_ = json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&req)
-	n := notification{Title: "ccdash", Body: "通知のテストです", URL: "/", Tag: "test"}
+	n := notification{Title: "ccdash", Body: "通知のテストです", BodyEn: "This is a test notification", URL: "/", Tag: "test"}
 	if req.Dummy {
-		n = notification{Title: "ccdash · 要対応（ダミー）", Body: "通知のテストです。実際の通知と同じ経路・同じ形で送っています", URL: "/", Tag: "dummy-" + randHex(4)}
+		n = notification{Title: "ccdash · 要対応（ダミー）", TitleEn: "ccdash · Needs you (sample)",
+			Body: "通知のテストです。実際の通知と同じ経路・同じ形で送っています", BodyEn: "A test notification, sent the same way and in the same shape as a real one",
+			URL: "/", Tag: "dummy-" + randHex(4)}
 	}
 	if req.Endpoint == "" {
 		h.push(r.Context(), n)
@@ -409,13 +417,20 @@ func watchOnce(ctx context.Context, c *http.Client, d Device, st *watchState) ([
 		n := notification{URL: "/#/d/" + d.ID + "/s/" + url.PathEscape(s.SessionID), Tag: d.ID + ":" + s.SessionID}
 		switch s.Attention {
 		case model.AttentionNeedsYou:
-			n.Title = d.Name + " · 要対応"
+			label := "要対応"
 			n.Body = sessionLabel(s)
+			n.BodyEn = n.Body
 			if l := model.WaitLabel(s.Wait); model.WaitNeedsYou(s.Wait) && strings.HasPrefix(reason, l) {
 				// Declared with set_status: "回答待ち" / "作業待ち" says more.
-				n.Title = d.Name + " · " + l
+				label = l
 				reason = strings.TrimPrefix(strings.TrimPrefix(reason, l), ": ")
+				if reason != "" {
+					n.BodyEn += "\n" + reason // the session's own note
+				}
+			} else if reason != "" {
+				n.BodyEn += "\n" + i18n.EnReason(reason)
 			}
+			n.Title, n.TitleEn = d.Name+" · "+label, d.Name+" · "+i18n.En(label)
 			if reason != "" {
 				n.Body += "\n" + reason
 			}
@@ -425,11 +440,12 @@ func watchOnce(ctx context.Context, c *http.Client, d Device, st *watchState) ([
 			if label == "" {
 				label = "完了"
 			}
-			n.Title = d.Name + " · " + label
+			n.Title, n.TitleEn = d.Name+" · "+label, d.Name+" · "+i18n.En(label)
 			n.Body = sessionLabel(s)
 			if s.Wait != "" && s.WaitNote != "" {
 				n.Body += "\n" + s.WaitNote
 			}
+			n.BodyEn = n.Body
 		default:
 			continue
 		}
@@ -473,15 +489,18 @@ func spawnPrompts(ctx context.Context, c *http.Client, d Device, st *watchState,
 			continue
 		}
 		st.lastSent[sk] = time.Now()
-		label := "新しいセッション"
+		label, labelEn := "新しいセッション", "New session"
 		if p.Cwd != "" {
 			label += "（" + filepath.Base(p.Cwd) + "）"
+			labelEn += " (" + filepath.Base(p.Cwd) + ")"
 		}
 		out = append(out, notification{
-			Title: d.Name + " · 要対応",
-			Body:  label + "\n" + p.Prompt,
-			URL:   "/#/d/" + d.ID + "/p/" + url.PathEscape(p.Key),
-			Tag:   d.ID + ":" + p.Key,
+			Title:   d.Name + " · 要対応",
+			TitleEn: d.Name + " · Needs you",
+			Body:    label + "\n" + p.Prompt,
+			BodyEn:  labelEn + "\n" + p.Prompt,
+			URL:     "/#/d/" + d.ID + "/p/" + url.PathEscape(p.Key),
+			Tag:     d.ID + ":" + p.Key,
 		})
 	}
 	return out
@@ -534,10 +553,14 @@ func restartNotice(d Device, rs *model.RestartState, st *watchState) (notificati
 	switch {
 	case rs.Pending:
 		n.Title = d.Name + " · 再起動を予約"
+		n.TitleEn = d.Name + " · Restart scheduled"
 		n.Body = fmt.Sprintf("作業中のセッションが終わり次第 ccdash を再起動します（%d 件待ち）。ホスト中の %d 件はいったん止まり、自動で再開されます。", len(rs.Waiting), rs.Hosted)
+		n.BodyEn = fmt.Sprintf("ccdash restarts as soon as the working sessions finish (%d to wait for). The %d hosted sessions stop for a moment and resume by themselves.", len(rs.Waiting), rs.Hosted)
 	case rs.Last == "expired":
 		n.Title = d.Name + " · 再起動の予約は時間切れ"
+		n.TitleEn = d.Name + " · Scheduled restart expired"
 		n.Body = "作業中のセッションが終わらなかったため、ccdash の再起動を取りやめました。"
+		n.BodyEn = "The working sessions didn't finish, so ccdash didn't restart."
 	default:
 		return notification{}, false
 	}
@@ -609,7 +632,8 @@ func (h *Hub) handleSessionLink(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ccdash hub</title>` +
-			`<p style="font-family:sans-serif">このセッションを持つ端末が見つかりません（オフラインかもしれません）。 <a href="/">ポータルを開く</a></p>`))
+			`<p style="font-family:sans-serif">このセッションを持つ端末が見つかりません（オフラインかもしれません）。 <a href="/">ポータルを開く</a></p>` +
+			`<p style="font-family:sans-serif">No device has this session (it may be offline). <a href="/">Open the portal</a></p>`))
 		return
 	}
 	http.Redirect(w, r, "/#/d/"+url.PathEscape(dev)+"/s/"+url.PathEscape(sid), http.StatusFound)

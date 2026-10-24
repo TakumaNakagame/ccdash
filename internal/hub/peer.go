@@ -70,7 +70,7 @@ var peerProxyPath = regexp.MustCompile(`^/api/d/[^/]+(/.*)$`)
 // peerAllowed reports whether a peer with access level may make r.
 func peerAllowed(r *http.Request, access string) (bool, string) {
 	if access == PeerOff {
-		return false, "peer access is off for this device (turn it on in the hub portal: 端末 → … → 他の端末へのアクセス)"
+		return false, "peer access is off for this device (turn it on in the hub portal: Devices → Manage → Access to other devices / 端末 → 管理 → 他の端末へのアクセス)"
 	}
 	p := r.URL.Path
 	if r.Method == http.MethodGet && (p == "/api/devices" || p == "/api/peer/self") {

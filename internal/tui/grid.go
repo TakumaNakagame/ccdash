@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/TakumaNakagame/ccdash/internal/i18n"
 	mdl "github.com/TakumaNakagame/ccdash/internal/model"
 	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
@@ -420,7 +421,7 @@ func (m *model) renderGridTile(s mdl.Session, focused bool, w, h int) string {
 	var sub string
 	switch {
 	case s.PendingCount > 0 || (s.Attention == mdl.AttentionNeedsYou && s.AttentionReason != ""):
-		reason := s.AttentionReason
+		reason := i18n.Reason(s.AttentionReason)
 		if s.PendingCount > 0 {
 			reason = "approval pending — a allow · d deny"
 		}

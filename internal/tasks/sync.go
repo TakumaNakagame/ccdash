@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TakumaNakagame/ccdash/internal/i18n"
 	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
@@ -62,27 +63,27 @@ func (r SyncResult) String() string {
 	var b strings.Builder
 	mode := ""
 	if r.DryRun {
-		mode = "（dry-run）"
+		mode = i18n.T("（dry-run）")
 	}
 	groups := []struct {
 		label string
 		items []string
-	}{{"追加", r.Added}, {"状態変更", r.Status}, {"やる日変更", r.Replan}, {"進捗追記", r.Notes}, {"期限・リンク更新", r.Updated}}
+	}{{i18n.T("追加"), r.Added}, {i18n.T("状態変更"), r.Status}, {i18n.T("やる日変更"), r.Replan}, {i18n.T("進捗追記"), r.Notes}, {i18n.T("期限・リンク更新"), r.Updated}}
 	parts := make([]string, len(groups))
 	for i, g := range groups {
 		parts[i] = fmt.Sprintf("%s %d", g.label, len(g.items))
 	}
-	b.WriteString("タスクリスト" + mode + ": " + strings.Join(parts, " / ") + "\n")
+	b.WriteString(i18n.T("タスクリスト") + mode + ": " + strings.Join(parts, " / ") + "\n")
 	for _, g := range groups {
 		for _, it := range g.items {
 			fmt.Fprintf(&b, "- %s: %s\n", g.label, it)
 		}
 	}
 	for _, it := range r.Skipped {
-		fmt.Fprintf(&b, "- やる日変更を見送り: %s\n", it)
+		fmt.Fprint(&b, i18n.Tf("- やる日変更を見送り: %s\n", it))
 	}
 	for _, it := range r.Warnings {
-		fmt.Fprintf(&b, "- 注意: %s\n", it)
+		fmt.Fprint(&b, i18n.Tf("- 注意: %s\n", it))
 	}
 	return b.String()
 }
@@ -130,7 +131,7 @@ func Merge(all []*model.Task, p Proposal, knownProject func(string) bool, now ti
 			}
 			project := strings.TrimSpace(pt.Project)
 			if project != "" && (knownProject == nil || !knownProject(project)) {
-				res.Warnings = append(res.Warnings, fmt.Sprintf("%s: プロジェクト「%s」は無いので付けなかった", pt.Title, project))
+				res.Warnings = append(res.Warnings, i18n.Tf("%s: プロジェクト「%s」は無いので付けなかった", pt.Title, project))
 				project = ""
 			}
 			t, err := New(Input{
@@ -162,24 +163,24 @@ func Merge(all []*model.Task, p Proposal, knownProject func(string) bool, now ti
 		}
 		if added > 0 {
 			touch(cur)
-			res.Notes = append(res.Notes, fmt.Sprintf("%s（%d 件）", cur.Title, added))
+			res.Notes = append(res.Notes, i18n.Tf("%s（%d 件）", cur.Title, added))
 		}
 		if status != "" && status != cur.Status && !cur.Finished() && (status == model.TaskDone || added > 0) {
 			before := cur.Status
 			SetStatus(cur, status, "", SourceAuto, now)
 			touch(cur)
-			res.Status = append(res.Status, fmt.Sprintf("%s（%s → %s）", cur.Title, StatusLabel[before], StatusLabel[status]))
+			res.Status = append(res.Status, i18n.Tf("%s（%s → %s）", cur.Title, i18n.T(StatusLabel[before]), i18n.T(StatusLabel[status])))
 		}
 		if rp := pt.Replan; rp != nil && !cur.Finished() {
 			plan, err := ParsePlan(rp.Plan, now)
 			before := cur.Plan
 			switch {
 			case err != nil:
-				res.Skipped = append(res.Skipped, fmt.Sprintf("%s（日付が不正: %s）", cur.Title, rp.Plan))
+				res.Skipped = append(res.Skipped, i18n.Tf("%s（日付が不正: %s）", cur.Title, rp.Plan))
 			case plan == cur.Plan:
 			default:
 				if _, err := Replan(cur, plan, strings.TrimSpace(rp.Why), true, SourceAuto, now); err != nil {
-					res.Skipped = append(res.Skipped, fmt.Sprintf("%s（%s）", cur.Title, skipReason(err)))
+					res.Skipped = append(res.Skipped, i18n.Tf("%s（%s）", cur.Title, skipReason(err)))
 				} else {
 					touch(cur)
 					res.Replan = append(res.Replan, fmt.Sprintf("%s（%s → %s）", cur.Title, orUnset(before), orUnset(plan)))
@@ -206,9 +207,9 @@ func Merge(all []*model.Task, p Proposal, knownProject func(string) bool, now ti
 func skipReason(err error) string {
 	switch err.Error() {
 	case "no reason given":
-		return "理由が無い"
+		return i18n.T("理由が無い")
 	case "the plan was set by hand today":
-		return "今日手で決めたやる日"
+		return i18n.T("今日手で決めたやる日")
 	}
 	return err.Error()
 }

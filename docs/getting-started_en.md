@@ -53,8 +53,9 @@ The rest of this page is the manual route.
 - **curl**: the hooks use it to post events.
 - Nice to have: `git` (branch display, diff review), `tmux` (jump to a
   session's pane from the TUI).
-- **UI language**: the TUI is in English; the browser portal is in Japanese
-  only for now.
+- **Language**: English or Japanese. The portal follows your browser
+  (change it under ⚙ Display → Language); the TUI's and CLI's own text
+  follows `$LANG` (change it under settings `,` → Language).
 
 ## 1. Install
 

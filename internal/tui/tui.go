@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/TakumaNakagame/ccdash/internal/i18n"
 	"github.com/TakumaNakagame/ccdash/internal/usage"
 	"io"
 	"net/http"
@@ -65,6 +66,7 @@ func Run(ctx context.Context, st store.Store, lockGroup string, srvMode ServerMo
 	if s, err := settings.Load(ctx, st); err == nil {
 		m.settings = s
 	}
+	i18n.Set(m.settings.Language)
 	if lockGroup != "" {
 		m.groupFilter = lockGroup
 		m.groupLocked = true
@@ -1469,9 +1471,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.selSess = max(len(m.sessions)-1, 0)
 		}
 		if m.attentionOnly {
-			m.flash = "要対応・未確認だけ表示（! で解除）"
+			m.flash = i18n.T("要対応・未確認だけ表示（! で解除）")
 		} else {
-			m.flash = "すべて表示"
+			m.flash = i18n.T("すべて表示")
 		}
 		return m, m.loadTailCmd()
 	case "t":
@@ -3204,16 +3206,16 @@ func (m *model) renderHeader() string {
 	}
 	attPart := ""
 	if needs > 0 {
-		attPart += pendingStyle.Render(fmt.Sprintf("? 要対応 %d", needs)) + "  "
+		attPart += pendingStyle.Render(i18n.Tf("? 要対応 %d", needs)) + "  "
 	}
 	if unread > 0 {
-		attPart += statusIdle.Render(fmt.Sprintf("✓ 未確認 %d", unread)) + "  "
+		attPart += statusIdle.Render(i18n.Tf("✓ 未確認 %d", unread)) + "  "
 	}
 	if m.attentionOnly {
 		attPart += subtitleStyle.Render("[!]") + "  "
 	}
 	if m.usageToday != nil && m.usageToday.Messages > 0 {
-		attPart += subtitleStyle.Render(fmt.Sprintf("今日 $%.2f", m.usageToday.Cost)) + "  "
+		attPart += subtitleStyle.Render(i18n.Tf("今日 $%.2f", m.usageToday.Cost)) + "  "
 	}
 	right := subtitleStyle.Render(fmt.Sprintf("sessions: %d  ", len(m.sessions))) + attPart +
 		pendingPart +
@@ -3739,6 +3741,7 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				updated, err := settings.Set(m.ctx, m.store, m.settings, cur.Key, next)
 				if err == nil {
 					m.settings = updated
+					i18n.Set(m.settings.Language)
 				} else {
 					m.err = err
 				}
@@ -4358,9 +4361,9 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if s.PendingCount > 0 {
 		parts = append(parts, pendingStyle.Render(fmt.Sprintf("⚠%d pending", s.PendingCount)))
 	} else if s.Attention == mdl.AttentionNeedsYou {
-		reason := s.AttentionReason
+		reason := i18n.Reason(s.AttentionReason)
 		if reason == "" {
-			reason = "要対応"
+			reason = i18n.T("要対応")
 		}
 		parts = append(parts, pendingStyle.Render("? "+shorten(reason, 60)))
 	} else if w := waitText(s); w != "" {
@@ -5039,7 +5042,7 @@ func waitText(s mdl.Session) string {
 	if s.Wait == "" || mdl.WaitNeedsYou(s.Wait) || s.Status == mdl.StatusActive {
 		return ""
 	}
-	w := mdl.WaitLabel(s.Wait)
+	w := i18n.T(mdl.WaitLabel(s.Wait))
 	if s.WaitNote != "" {
 		w += ": " + s.WaitNote
 	}

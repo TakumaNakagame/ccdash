@@ -73,7 +73,7 @@ var helpSections = []helpSection{
 		{"1-4 / 0", "plan: today, tomorrow, this week, next week / none"},
 		{"[ / ]", "move within its day"},
 		{"enter", "details and progress"},
-		{"y", "copy \"#N について、\""},
+		{"y", "copy \"#N について、\" (\"About #N, \")"},
 		{"n", "new session for the task"},
 		{"f", "only the selected session's project"},
 		{"x", "archive (done / cancelled)"},
