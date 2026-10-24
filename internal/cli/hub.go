@@ -63,7 +63,8 @@ func hubServeCmd() *cobra.Command {
 		Short: "Run the hub (web portal + device tunnel endpoint)",
 		Long: `Run the hub in the foreground.
 
-Login is OIDC (in the home lab: a Cloudflare Access for SaaS application).
+Login is OIDC (any issuer: Cloudflare Access for SaaS, Google, Authelia …),
+or --tailscale-auth behind tailscale serve.
 Every flag can also come from the environment, which is how the container
 is configured:
 
@@ -177,7 +178,7 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 	}
 	c.Flags().StringVar(&listen, "listen", "", "bind address (default 127.0.0.1:8080; the container uses :8080)")
 	c.Flags().StringVar(&dataDir, "data-dir", "", "where hub.sqlite lives (default $XDG_STATE_HOME/ccdash/hub)")
-	c.Flags().StringVar(&publicURL, "public-url", "", "browser-facing origin, e.g. https://ccdash.g3.lab-dev.net")
+	c.Flags().StringVar(&publicURL, "public-url", "", "browser-facing origin, e.g. https://ccdash.example.net")
 	c.Flags().StringVar(&issuer, "oidc-issuer", "", "OIDC issuer URL (Cloudflare Access for SaaS: https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<client-id>)")
 	c.Flags().StringVar(&clientID, "oidc-client-id", "", "OIDC client id")
 	c.Flags().StringVar(&secretFile, "oidc-client-secret-file", "", "file holding the OIDC client secret (else $CCDASH_HUB_OIDC_CLIENT_SECRET)")
@@ -249,7 +250,7 @@ or 'ccdash -k'.`,
 			return nil
 		},
 	}
-	c.Flags().StringVar(&hubURL, "url", "", "hub origin, e.g. https://ccdash.g3.lab-dev.net")
+	c.Flags().StringVar(&hubURL, "url", "", "hub origin, e.g. https://ccdash.example.net")
 	c.Flags().StringVar(&token, "token", "", "device token (prompted for when omitted)")
 	c.Flags().BoolVar(&skipCheck, "skip-check", false, "save without test-connecting to the hub")
 	return c

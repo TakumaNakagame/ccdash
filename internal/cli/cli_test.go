@@ -26,7 +26,7 @@ func TestIsLoopbackHost(t *testing.T) {
 		{"0.0.0.0", false},
 		{"::", false},
 		// Specific non-loopback addresses / names.
-		{"192.168.20.132", false},
+		{"192.168.1.50", false},
 		{"devbox", false},
 	}
 	for _, c := range cases {
@@ -49,7 +49,7 @@ func TestCheckBindSafety(t *testing.T) {
 
 	// Non-loopback (including the wildcard spellings) without a token:
 	// fail closed.
-	for _, addr := range []string{":9123", "0.0.0.0:9123", "[::]:9123", "192.168.20.132:9123"} {
+	for _, addr := range []string{":9123", "0.0.0.0:9123", "[::]:9123", "192.168.1.50:9123"} {
 		if err := checkBindSafety(addr); err == nil {
 			t.Errorf("checkBindSafety(%q) = nil, want refuse-without-token error", addr)
 		}
@@ -68,7 +68,7 @@ func TestCheckBindSafety(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "token"), []byte("tok\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, addr := range []string{":9123", "0.0.0.0:9123", "192.168.20.132:9123"} {
+	for _, addr := range []string{":9123", "0.0.0.0:9123", "192.168.1.50:9123"} {
 		if err := checkBindSafety(addr); err != nil {
 			t.Errorf("checkBindSafety(%q) with token = %v, want nil", addr, err)
 		}
@@ -123,14 +123,14 @@ func TestResolveRemoteUnconfigured(t *testing.T) {
 
 func TestResolveRemoteFromConfig(t *testing.T) {
 	tokenPath := writeTokenFile(t, "cfg-token")
-	writeClientConfig(t, `{"remote":{"url":"http://192.168.20.132:9123","token_file":"`+tokenPath+`","ssh_target":"claude-code"}}`)
+	writeClientConfig(t, `{"remote":{"url":"http://192.168.1.50:9123","token_file":"`+tokenPath+`","ssh_target":"claude-code"}}`)
 	t.Setenv("CCDASH_TOKEN", "")
 
 	rc, err := resolveRemote(&remoteFlags{remoteEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rc.baseURL != "http://192.168.20.132:9123" || rc.token != "cfg-token" || rc.sshTarget != "claude-code" {
+	if rc.baseURL != "http://192.168.1.50:9123" || rc.token != "cfg-token" || rc.sshTarget != "claude-code" {
 		t.Fatalf("config-driven resolve = %+v", rc)
 	}
 }
@@ -227,7 +227,7 @@ func TestRemoteSetRoundTrip(t *testing.T) {
 	}
 
 	if err := run("remote", "set",
-		"--url", "http://192.168.20.132:9123/",
+		"--url", "http://192.168.1.50:9123/",
 		"--token-file", tokenPath,
 		"--ssh-target", "claude-code"); err != nil {
 		t.Fatal(err)
@@ -238,7 +238,7 @@ func TestRemoteSetRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Trailing slash normalized away; token path stored absolute.
-	if cfg.Remote.URL != "http://192.168.20.132:9123" {
+	if cfg.Remote.URL != "http://192.168.1.50:9123" {
 		t.Errorf("url = %q", cfg.Remote.URL)
 	}
 	if cfg.Remote.TokenFile != tokenPath {
@@ -265,7 +265,7 @@ func TestRemoteSetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rc.baseURL != "http://192.168.20.132:9123" || rc.token != "roundtrip-token" || rc.sshTarget != "other-host" {
+	if rc.baseURL != "http://192.168.1.50:9123" || rc.token != "roundtrip-token" || rc.sshTarget != "other-host" {
 		t.Fatalf("resolve after set = %+v", rc)
 	}
 

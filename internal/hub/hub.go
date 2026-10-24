@@ -1,7 +1,7 @@
 // Package hub is the web portal side of ccdash: `ccdash hub serve`.
 //
-// The hub runs on a home server (in the home lab: home-k8s behind
-// proxy02), lists the registered devices, and lets a logged-in operator use
+// The hub runs on a home server (typically a container behind a reverse
+// proxy), lists the registered devices, and lets a logged-in operator use
 // any connected device's ccdash from a browser. Devices are never dialed:
 // each device's collector connects OUT to the hub (internal/tunnel) and the
 // hub forwards portal requests through that tunnel to the device's own
@@ -50,7 +50,7 @@ var webFS embed.FS
 type Config struct {
 	Listen    string // e.g. :8080
 	DataDir   string // hub.sqlite lives here
-	PublicURL string // browser-facing origin, e.g. https://ccdash.g3.lab-dev.net
+	PublicURL string // browser-facing origin, e.g. https://ccdash.example.net
 	Auth      AuthConfig
 	// ReadTokens are bearer tokens for machine clients: GET-only access to
 	// a fixed set of read routes (see readtoken.go). Empty disables them.

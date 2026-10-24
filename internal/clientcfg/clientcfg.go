@@ -21,7 +21,7 @@ var ErrNotFound = errors.New("ccdash client config not found")
 
 // Remote is the `"remote"` object in config.json.
 type Remote struct {
-	// URL is the collector origin, e.g. "http://192.168.20.132:9123".
+	// URL is the collector origin, e.g. "http://192.168.1.50:9123".
 	URL string `json:"url,omitempty"`
 	// TokenFile is the path to a local copy of the collector's token.
 	TokenFile string `json:"token_file,omitempty"`

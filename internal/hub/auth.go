@@ -20,8 +20,8 @@ import (
 )
 
 // AuthConfig selects how portal users log in. The hub is an OIDC relying
-// party; in the home lab the provider is Cloudflare Access for SaaS (the
-// same pattern Grafana / ArgoCD use there), but any OIDC issuer works.
+// party; any OIDC issuer works (Cloudflare Access for SaaS, Google, a
+// self-hosted Authelia / Pocket ID …).
 type AuthConfig struct {
 	Issuer        string // e.g. https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<client-id>
 	ClientID      string

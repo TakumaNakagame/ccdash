@@ -46,7 +46,7 @@ func TestLoadMalformed(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	want := Config{Remote: Remote{
-		URL:       "http://192.168.20.132:9123",
+		URL:       "http://192.168.1.50:9123",
 		TokenFile: "/home/op/.config/ccdash/claude-code.token",
 		SSHTarget: "claude-code",
 	}}

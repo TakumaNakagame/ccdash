@@ -14,7 +14,7 @@ collector address, and a copy of the token on each client.
 
 Constraints from the home lab:
 
-- Apps are reached over Tailscale (subnet router → `*.g3.lab-dev.net`
+- Apps are reached over Tailscale (subnet router → `*.<internal domain>`
   behind proxy02 / ingress-nginx on home-k8s); SSO is Cloudflare Access
   used as an OIDC provider ("Access for SaaS", the Grafana / ArgoCD
   pattern), not an edge gate.
