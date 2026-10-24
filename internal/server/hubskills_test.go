@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
 )
 
 // TestHubSkillsManyDirs: every ?dir= is searched for project skills, so

@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 
-	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
 )
 
 // Config is the persisted join state.

@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
 )
 
 // maybeAutoArchive archives sessions idle longer than auto_archive_days,

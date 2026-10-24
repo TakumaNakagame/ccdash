@@ -19,11 +19,11 @@ import (
 	"github.com/hashicorp/yamux"
 	"github.com/spf13/cobra"
 
-	"github.com/takumanakagame/ccmanage/internal/buildinfo"
-	"github.com/takumanakagame/ccmanage/internal/hub"
-	"github.com/takumanakagame/ccmanage/internal/paths"
-	"github.com/takumanakagame/ccmanage/internal/server"
-	"github.com/takumanakagame/ccmanage/internal/tunnel"
+	"github.com/TakumaNakagame/ccdash/internal/buildinfo"
+	"github.com/TakumaNakagame/ccdash/internal/hub"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/server"
+	"github.com/TakumaNakagame/ccdash/internal/tunnel"
 )
 
 // defaultWebPort is the local portal's port (the collector has 9123).

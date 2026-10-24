@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // Tasks across hosts. Each machine keeps its own list (0006), so a task is

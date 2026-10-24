@@ -8,13 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // Context is what `ccdash tasks context` / the task_context MCP tool hand
 // an automated run: the open tasks with their Slack threads, Jira keys and
-// PRs pulled out of the links, and where to start looking (since). Same
-// shape as the old timeline_context.py.
+// PRs pulled out of the links, and where to start looking (since).
 type Context struct {
 	Since string        `json:"since"`
 	Now   string        `json:"now"`

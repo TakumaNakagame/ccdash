@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // TestHeadlessHidden: a new `claude -p` row is filed auto-archived and

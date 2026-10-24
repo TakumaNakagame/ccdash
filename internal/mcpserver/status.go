@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // setStatus records what the calling session hands back to the operator

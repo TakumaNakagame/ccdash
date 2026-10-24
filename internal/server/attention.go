@@ -11,9 +11,9 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/redact"
-	"github.com/takumanakagame/ccmanage/internal/screenprompt"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/redact"
+	"github.com/TakumaNakagame/ccdash/internal/screenprompt"
 )
 
 // Attention: what a session wants from the operator, kept on the session

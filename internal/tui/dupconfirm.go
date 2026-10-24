@@ -14,7 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // runningElsewhere reports whether s has a live claude that ccdash doesn't

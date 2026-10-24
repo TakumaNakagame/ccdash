@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // at is a local time on the given date (2026-10-13 is a Tuesday).

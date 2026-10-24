@@ -6,7 +6,7 @@
 ## Context
 
 The hub (0003) authenticates people: OIDC (or `tailscale serve`'s login
-header) and a signed cookie. A machine client — in the home lab an
+header) and a signed cookie. A machine client — for example an
 in-cluster "alert-triage" bot that wants to see what the Claude sessions
 on each machine are doing when an alert fires — cannot complete a browser
 login. It only needs to read: the cross-device board, the running

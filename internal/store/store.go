@@ -13,13 +13,13 @@ package store
 import (
 	"fmt"
 	"context"
-	"github.com/takumanakagame/ccmanage/internal/usage"
+	"github.com/TakumaNakagame/ccdash/internal/usage"
 	"strings"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/tasks"
-	"github.com/takumanakagame/ccmanage/internal/transcript"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/tasks"
+	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
 // TailResult is the parsed live-tail plus the metadata the TUI needs to
@@ -176,7 +176,7 @@ type Store interface {
 	SyncTasks(ctx context.Context, p tasks.Proposal) (tasks.SyncResult, error)
 	// TaskContext is the open tasks and their links for an automated run.
 	TaskContext(ctx context.Context) (tasks.Context, error)
-	// ImportTasks brings in a work-status tasks.json (dryRun = plan only).
+	// ImportTasks brings in a tasks.json (dryRun = plan only).
 	ImportTasks(ctx context.Context, f tasks.LegacyFile, opt tasks.ImportOptions, dryRun bool) (tasks.ImportPlan, error)
 }
 

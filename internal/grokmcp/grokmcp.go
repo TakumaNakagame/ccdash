@@ -32,9 +32,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/store"
-	"github.com/takumanakagame/ccmanage/internal/transcript"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/store"
+	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
 // Origin is what the sessions it starts are marked with.

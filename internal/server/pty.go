@@ -17,11 +17,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/takumanakagame/ccmanage/internal/attach"
-	"github.com/takumanakagame/ccmanage/internal/claudecfg"
-	"github.com/takumanakagame/ccmanage/internal/procmap"
-	"github.com/takumanakagame/ccmanage/internal/settings"
-	"github.com/takumanakagame/ccmanage/internal/tracing"
+	"github.com/TakumaNakagame/ccdash/internal/attach"
+	"github.com/TakumaNakagame/ccdash/internal/claudecfg"
+	"github.com/TakumaNakagame/ccdash/internal/procmap"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
+	"github.com/TakumaNakagame/ccdash/internal/tracing"
 )
 
 // newPTYCommand builds the child for POST /pty/start. A variable so tests

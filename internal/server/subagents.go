@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/transcript"
+	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
 // Subagents (the Agent tool) write their own transcripts next to the

@@ -37,10 +37,10 @@ import (
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 
-	"github.com/takumanakagame/ccmanage/internal/buildinfo"
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/tracing"
-	"github.com/takumanakagame/ccmanage/internal/tunnel"
+	"github.com/TakumaNakagame/ccdash/internal/buildinfo"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/tracing"
+	"github.com/TakumaNakagame/ccdash/internal/tunnel"
 )
 
 //go:embed web

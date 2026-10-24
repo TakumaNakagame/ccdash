@@ -17,10 +17,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/takumanakagame/ccmanage/internal/auth"
-	"github.com/takumanakagame/ccmanage/internal/db"
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/auth"
+	"github.com/TakumaNakagame/ccdash/internal/db"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
 )
 
 // sessionRestartedMsg reports POST /pty/{key}/restart.

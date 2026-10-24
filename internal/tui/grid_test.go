@@ -12,9 +12,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/screen"
-	"github.com/takumanakagame/ccmanage/internal/transcript"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/screen"
+	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
 func TestGridRects(t *testing.T) {

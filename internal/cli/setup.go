@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/takumanakagame/ccmanage/internal/claudecfg"
-	"github.com/takumanakagame/ccmanage/internal/hookcfg"
+	"github.com/TakumaNakagame/ccdash/internal/claudecfg"
+	"github.com/TakumaNakagame/ccdash/internal/hookcfg"
 )
 
 // statusToolPerm is the one ccdash MCP tool every session calls (the status

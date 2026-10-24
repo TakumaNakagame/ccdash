@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // fakeDevice serves the device API the watcher polls; tests mutate it

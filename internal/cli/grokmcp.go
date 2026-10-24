@@ -14,8 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/takumanakagame/ccmanage/internal/grokmcp"
-	"github.com/takumanakagame/ccmanage/internal/hubcfg"
+	"github.com/TakumaNakagame/ccdash/internal/grokmcp"
+	"github.com/TakumaNakagame/ccdash/internal/hubcfg"
 )
 
 // grokMCPCmd serves the Grok tools (internal/grokmcp) over HTTP, for an MCP

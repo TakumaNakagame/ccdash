@@ -7,11 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
-// LegacyFile is work-status's tasks.json: what `ccdash tasks import`
-// reads and `ccdash tasks export` writes.
+// LegacyFile is a tasks.json: what `ccdash tasks export` writes and
+// `ccdash tasks import` reads (the format of the to-do tool the list
+// started from, see docs/decisions/0006-tasks.md).
 type LegacyFile struct {
 	Updated          string       `json:"updated,omitempty"`
 	Tasks            []model.Task `json:"tasks"`
@@ -128,7 +129,7 @@ func PlanImport(f LegacyFile, opt ImportOptions, exists func(string) bool, now t
 	return p, nil
 }
 
-// Markdown renders the list the way work-status's TASKS.md did.
+// Markdown renders the list as a Markdown document (`ccdash tasks md`).
 func Markdown(all []model.Task, now time.Time) string {
 	ts := make([]model.Task, 0, len(all))
 	for _, t := range all {

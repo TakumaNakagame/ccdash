@@ -21,9 +21,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/takumanakagame/ccmanage/internal/buildinfo"
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/selfupdate"
+	"github.com/TakumaNakagame/ccdash/internal/buildinfo"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/selfupdate"
 )
 
 // ErrRestart is returned by Run when the operator confirmed a restart.

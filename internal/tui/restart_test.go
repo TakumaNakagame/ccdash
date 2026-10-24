@@ -8,10 +8,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/takumanakagame/ccmanage/internal/buildinfo"
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/selfupdate"
-	"github.com/takumanakagame/ccmanage/internal/settings"
+	"github.com/TakumaNakagame/ccdash/internal/buildinfo"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/selfupdate"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
 )
 
 // TestRestartConfirm: the settings action opens a warning window naming

@@ -250,5 +250,5 @@ func (h *Hub) pushSubject() string {
 	if strings.HasPrefix(h.cfg.PublicURL, "https://") {
 		return h.cfg.PublicURL
 	}
-	return "https://github.com/takumanakagame/ccmanage"
+	return "https://github.com/TakumaNakagame/ccdash"
 }

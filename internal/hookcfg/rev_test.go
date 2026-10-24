@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
 )
 
 // TestNeedsResyncOldScript: a hook.sh from before the current revision

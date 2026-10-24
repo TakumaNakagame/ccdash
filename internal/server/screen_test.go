@@ -15,9 +15,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 
-	"github.com/takumanakagame/ccmanage/internal/attach"
-	"github.com/takumanakagame/ccmanage/internal/procmap"
-	"github.com/takumanakagame/ccmanage/internal/screen"
+	"github.com/TakumaNakagame/ccdash/internal/attach"
+	"github.com/TakumaNakagame/ccdash/internal/procmap"
+	"github.com/TakumaNakagame/ccdash/internal/screen"
 )
 
 // startEntry spawns a shell one-liner inside a server-side emulator and

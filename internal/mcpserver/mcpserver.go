@@ -26,11 +26,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/hubcfg"
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/settings"
-	"github.com/takumanakagame/ccmanage/internal/store"
-	"github.com/takumanakagame/ccmanage/internal/transcript"
+	"github.com/TakumaNakagame/ccdash/internal/hubcfg"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
+	"github.com/TakumaNakagame/ccdash/internal/store"
+	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
 // protocolVersion is what we answer when the client asks for a version we

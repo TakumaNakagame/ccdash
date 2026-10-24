@@ -20,14 +20,14 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"github.com/takumanakagame/ccmanage/internal/auth"
-	"github.com/takumanakagame/ccmanage/internal/buildinfo"
-	"github.com/takumanakagame/ccmanage/internal/hubcfg"
-	"github.com/takumanakagame/ccmanage/internal/paths"
-	"github.com/takumanakagame/ccmanage/internal/settings"
-	"github.com/takumanakagame/ccmanage/internal/skills"
-	"github.com/takumanakagame/ccmanage/internal/tracing"
-	"github.com/takumanakagame/ccmanage/internal/tunnel"
+	"github.com/TakumaNakagame/ccdash/internal/auth"
+	"github.com/TakumaNakagame/ccdash/internal/buildinfo"
+	"github.com/TakumaNakagame/ccdash/internal/hubcfg"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
+	"github.com/TakumaNakagame/ccdash/internal/skills"
+	"github.com/TakumaNakagame/ccdash/internal/tracing"
+	"github.com/TakumaNakagame/ccdash/internal/tunnel"
 )
 
 // hubLoop keeps this collector connected to the hub named in hubcfg (if

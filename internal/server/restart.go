@@ -32,9 +32,9 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/paths"
-	"github.com/takumanakagame/ccmanage/internal/tracing"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/tracing"
 )
 
 // ErrRestart is what ListenAndServe returns after POST /api/restart: the

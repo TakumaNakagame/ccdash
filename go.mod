@@ -1,4 +1,4 @@
-module github.com/takumanakagame/ccmanage
+module github.com/TakumaNakagame/ccdash
 
 go 1.26.0
 

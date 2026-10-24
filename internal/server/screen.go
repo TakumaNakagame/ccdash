@@ -35,8 +35,8 @@ import (
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 
-	"github.com/takumanakagame/ccmanage/internal/attach"
-	"github.com/takumanakagame/ccmanage/internal/screen"
+	"github.com/TakumaNakagame/ccdash/internal/attach"
+	"github.com/TakumaNakagame/ccdash/internal/screen"
 )
 
 // frameInterval caps how often a single viewer receives a frame. 16 ms is

@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
 // Vars so tests can run the wait fast.

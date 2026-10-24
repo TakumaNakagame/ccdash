@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/takumanakagame/ccmanage/internal/clientcfg"
+	"github.com/TakumaNakagame/ccdash/internal/clientcfg"
 )
 
 func TestIsLoopbackHost(t *testing.T) {

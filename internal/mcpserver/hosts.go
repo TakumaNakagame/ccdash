@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/store"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/store"
 )
 
 // Multi-host: when this machine is joined to a hub and the operator has

@@ -5,12 +5,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/takumanakagame/ccmanage/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
-// Proposal is what an automated run (the work-status-check /
-// task-timeline-sync skills) pipes into `ccdash tasks sync`: the same JSON
-// sync_tasks.py took.
+// Proposal is what an automated run (e.g. a scheduled claude -p that reads
+// Slack / Jira / GitHub) pipes into `ccdash tasks sync` or hands to the
+// sync_tasks MCP tool.
 type Proposal struct {
 	SyncedAt string         `json:"synced_at,omitempty"`
 	Tasks    []ProposalTask `json:"tasks"`

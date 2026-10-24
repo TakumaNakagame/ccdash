@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
 )
 
 // Account describes one Claude installation directory.

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/takumanakagame/ccmanage/internal/db"
-	"github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/store"
+	"github.com/TakumaNakagame/ccdash/internal/db"
+	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/store"
 )
 
 // TestTaskTools: add / note / status / list through the tools, the calling

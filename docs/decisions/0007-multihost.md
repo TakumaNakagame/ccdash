@@ -85,7 +85,7 @@ keeps it in hub.json and stamps it on listed rows. MCP accepts "B22"
 ## Addendum (2026-10-16): tasks across hosts
 
 Each machine still keeps its own list (0006), but sessions moved between
-machines (the PC → LXC move) and kept working on tasks that live on the
+machines (from a desktop to an always-on server) and kept working on tasks that live on the
 first one. Now:
 
 - **Peers reach tasks.** `peerDeviceRoutes` adds `GET /api/tasks[/{id}]`

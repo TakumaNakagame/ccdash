@@ -11,9 +11,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	mdl "github.com/takumanakagame/ccmanage/internal/model"
-	"github.com/takumanakagame/ccmanage/internal/settings"
-	"github.com/takumanakagame/ccmanage/internal/store"
+	mdl "github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
+	"github.com/TakumaNakagame/ccdash/internal/store"
 )
 
 func pickerModel(t *testing.T) (*model, string) {

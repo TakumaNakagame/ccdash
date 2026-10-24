@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/takumanakagame/ccmanage/internal/buildinfo"
-	"github.com/takumanakagame/ccmanage/internal/cli"
+	"github.com/TakumaNakagame/ccdash/internal/buildinfo"
+	"github.com/TakumaNakagame/ccdash/internal/cli"
 )
 
 func main() {

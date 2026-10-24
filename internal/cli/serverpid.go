@@ -23,7 +23,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/takumanakagame/ccmanage/internal/paths"
+	"github.com/TakumaNakagame/ccdash/internal/paths"
 )
 
 // serverPIDRecord is server.pid. Files written before this format hold just

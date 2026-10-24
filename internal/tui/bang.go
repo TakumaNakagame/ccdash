@@ -18,8 +18,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/takumanakagame/ccmanage/internal/store"
-	"github.com/takumanakagame/ccmanage/internal/transcript"
+	"github.com/TakumaNakagame/ccdash/internal/store"
+	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
 var (
