@@ -73,7 +73,13 @@ is configured:
   CCDASH_HUB_OIDC_CLIENT_SECRET (or --oidc-client-secret-file),
   CCDASH_HUB_ALLOWED_EMAILS (comma-separated),
   CCDASH_HUB_READ_TOKENS (comma-separated; or --read-token-file /
-  CCDASH_HUB_READ_TOKEN_FILE)
+  CCDASH_HUB_READ_TOKEN_FILE),
+  CCDASH_HUB_BREAK_GLASS_PASSWORD (environment only)
+
+CCDASH_HUB_BREAK_GLASS_PASSWORD turns on a password login at
+/auth/break-glass for when the OIDC provider is down: one-hour sessions,
+5 failures in 10 minutes lock it for 10 minutes, every attempt is logged
+with its sender. Only on an OIDC hub; keep the hub off the internet.
 
 Read tokens are for machine clients (bots, scripts): a request with
 "Authorization: Bearer <token>" may GET /api/board, /api/active,
@@ -166,6 +172,8 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 					AllowedEmails:  emails,
 					NoAuth:         noAuth,
 					TailscaleServe: tsAuth,
+
+					BreakGlassPassword: os.Getenv("CCDASH_HUB_BREAK_GLASS_PASSWORD"),
 				},
 				ReadTokens: readTokens,
 			})

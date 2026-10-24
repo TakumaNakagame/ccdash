@@ -36,6 +36,9 @@ type AuthConfig struct {
 	// The CLI requires a loopback --listen for this mode, so only the
 	// local tailscaled can reach the hub.
 	TailscaleServe bool
+	// BreakGlassPassword, when set on an OIDC hub, opens a password login
+	// at /auth/break-glass for when the provider is down (breakglass.go).
+	BreakGlassPassword string
 }
 
 // tailscaleLoginHeader is the identity header `tailscale serve` adds.
@@ -63,6 +66,10 @@ type authn struct {
 
 	mu       sync.Mutex
 	provider *oidc.Provider // lazily discovered so a provider blip doesn't block startup
+
+	bgMu    sync.Mutex
+	bgFails []time.Time   // recent break-glass failures (per replica)
+	bgDelay time.Duration // pause after a failure
 }
 
 func (a *authn) oauth(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVerifier, error) {
@@ -117,6 +124,9 @@ func (a *authn) open(s string, v any) bool {
 type sessionClaims struct {
 	Email string `json:"e"`
 	Exp   int64  `json:"x"`
+	// BreakGlass marks a session from the break-glass login: valid only
+	// while the password is still configured.
+	BreakGlass bool `json:"bg,omitempty"`
 }
 
 type loginState struct {
@@ -144,7 +154,13 @@ func (a *authn) user(r *http.Request) (string, bool) {
 		return "", false
 	}
 	var sc sessionClaims
-	if !a.open(c.Value, &sc) || time.Now().Unix() > sc.Exp || !a.allowed(sc.Email) {
+	if !a.open(c.Value, &sc) || time.Now().Unix() > sc.Exp {
+		return "", false
+	}
+	if sc.BreakGlass {
+		return breakGlassUser, a.breakGlassEnabled()
+	}
+	if !a.allowed(sc.Email) {
 		return "", false
 	}
 	return sc.Email, true
@@ -202,7 +218,7 @@ func (a *authn) handleLogin(w http.ResponseWriter, r *http.Request) {
 	oc, _, err := a.oauth(r.Context())
 	if err != nil {
 		log.Printf("hub: oidc discovery: %v", err)
-		http.Error(w, "login provider unavailable, try again shortly", http.StatusServiceUnavailable)
+		a.loginFailed(w, "login provider unavailable, try again shortly", http.StatusServiceUnavailable)
 		return
 	}
 	ls := loginState{
@@ -227,38 +243,38 @@ func (a *authn) handleCallback(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/", http.StatusFound)
 			return
 		}
-		http.Error(w, "login expired — start again from the portal", http.StatusBadRequest)
+		a.loginFailed(w, "login expired — start again from the portal", http.StatusBadRequest)
 		return
 	}
 	a.clearCookiePath(w, loginCookie+state, loginPath)
 	if e := r.URL.Query().Get("error"); e != "" {
-		http.Error(w, "login failed: "+e, http.StatusUnauthorized)
+		a.loginFailed(w, "login failed: "+e, http.StatusUnauthorized)
 		return
 	}
 	oc, verifier, err := a.oauth(r.Context())
 	if err != nil {
-		http.Error(w, "login provider unavailable", http.StatusServiceUnavailable)
+		a.loginFailed(w, "login provider unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	tok, err := oc.Exchange(r.Context(), r.URL.Query().Get("code"), oauth2.VerifierOption(ls.Verifier))
 	if err != nil {
 		log.Printf("hub: oidc exchange: %v", err)
-		http.Error(w, "login failed (code exchange)", http.StatusUnauthorized)
+		a.loginFailed(w, "login failed (code exchange)", http.StatusUnauthorized)
 		return
 	}
 	raw, _ := tok.Extra("id_token").(string)
 	if raw == "" {
-		http.Error(w, "login failed (no id_token)", http.StatusUnauthorized)
+		a.loginFailed(w, "login failed (no id_token)", http.StatusUnauthorized)
 		return
 	}
 	idt, err := verifier.Verify(r.Context(), raw)
 	if err != nil {
 		log.Printf("hub: oidc verify: %v", err)
-		http.Error(w, "login failed (id_token)", http.StatusUnauthorized)
+		a.loginFailed(w, "login failed (id_token)", http.StatusUnauthorized)
 		return
 	}
 	if idt.Nonce != ls.Nonce {
-		http.Error(w, "login failed (nonce)", http.StatusUnauthorized)
+		a.loginFailed(w, "login failed (nonce)", http.StatusUnauthorized)
 		return
 	}
 	var claims struct {
@@ -266,11 +282,11 @@ func (a *authn) handleCallback(w http.ResponseWriter, r *http.Request) {
 		EmailVerified *bool  `json:"email_verified"`
 	}
 	if err := idt.Claims(&claims); err != nil || claims.Email == "" {
-		http.Error(w, "login failed (no email claim)", http.StatusUnauthorized)
+		a.loginFailed(w, "login failed (no email claim)", http.StatusUnauthorized)
 		return
 	}
 	if claims.EmailVerified != nil && !*claims.EmailVerified {
-		http.Error(w, "login failed (email not verified)", http.StatusUnauthorized)
+		a.loginFailed(w, "login failed (email not verified)", http.StatusUnauthorized)
 		return
 	}
 	if !a.allowed(claims.Email) {

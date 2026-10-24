@@ -245,6 +245,18 @@ the hostname) in front: devices dial the tunnel with their device token and
 can't pass an interactive login. Use the provider as the hub's OIDC issuer
 instead.
 
+### Break glass (optional)
+
+If the OIDC provider is down, nobody can log in. Setting
+`CCDASH_HUB_BREAK_GLASS_PASSWORD` (environment only) adds a password login at
+`https://<hub>/auth/break-glass`; failed OIDC logins link to it. Sessions
+from it last one hour and end as soon as the variable is removed; 5 wrong
+passwords within 10 minutes lock it for 10 minutes (per replica); every
+attempt is logged as `hub: break-glass: …` with the sender's address, never
+the password. Device tunnels, read tokens and peers are unaffected. Use it
+only on a hub that isn't reachable from the internet (LAN / VPN), and keep
+the password in your password manager.
+
 ### Alternative: Tailscale instead of OIDC
 
 On a machine in your tailnet (no container needed):

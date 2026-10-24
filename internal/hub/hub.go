@@ -153,7 +153,7 @@ func New(ctx context.Context, cfg Config) (*Hub, error) {
 	for i, e := range cfg.Auth.AllowedEmails {
 		cfg.Auth.AllowedEmails[i] = strings.ToLower(strings.TrimSpace(e))
 	}
-	a := &authn{cfg: cfg.Auth, publicURL: cfg.PublicURL, key: []byte(key), secure: pu.Scheme == "https"}
+	a := &authn{cfg: cfg.Auth, publicURL: cfg.PublicURL, key: []byte(key), secure: pu.Scheme == "https", bgDelay: breakGlassDelay}
 	if cfg.Local != nil {
 		if a.local, err = newLocalLogin(cfg.Local, cfg.PublicURL); err != nil {
 			_ = st.Close()
@@ -268,6 +268,9 @@ func (h *Hub) Serve(ctx context.Context, ln net.Listener) error {
 	if h.cfg.Local == nil {
 		log.Printf("ccdash hub %s listening on %s (public url %s)", buildinfo.Version, ln.Addr(), h.cfg.PublicURL)
 	}
+	if h.auth.breakGlassEnabled() {
+		log.Printf("hub: break-glass login enabled at %s", breakGlassPath)
+	}
 	if n := len(h.readTokens); n > 0 {
 		log.Printf("hub: %d read token(s) configured (GET-only machine access)", n)
 	}
@@ -297,6 +300,10 @@ func (h *Hub) Handler() http.Handler {
 		mux.HandleFunc("GET /auth/login", h.auth.handleLogin)
 		mux.HandleFunc("GET /auth/callback", h.auth.handleCallback)
 		mux.HandleFunc("GET /auth/logout", h.auth.handleLogout)
+		if h.auth.breakGlassEnabled() {
+			mux.HandleFunc("GET "+breakGlassPath, h.auth.handleBreakGlass)
+			mux.Handle("POST "+breakGlassPath, http.NewCrossOriginProtection().Handler(http.HandlerFunc(h.auth.handleBreakGlass)))
+		}
 
 		api.HandleFunc("POST /api/devices", h.handleCreateDevice)
 		api.HandleFunc("POST /api/devices/{id}/rotate", h.handleRotateDevice)

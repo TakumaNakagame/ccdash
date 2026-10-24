@@ -25,7 +25,7 @@ for a fully observation-only deployment.
 
 ccdash is built for a single user managing their own Claude Code sessions,
 from the machines and phones they own (remote mode, hub). Keep every way
-in — hub login (`--allowed-email`), the collector token, device tokens,
+in — hub login (`--allowed-email`, the break-glass password), the collector token, device tokens,
 read tokens — to yourself; several addresses or devices are fine as long
 as they are all yours. ccdash does not try to tell people apart, so it
 cannot stop you from handing access to someone else; that use is simply
@@ -118,6 +118,11 @@ credentials or OAuth tokens.
   (bearer, GET-only on five read routes) can read session lists and
   transcript tails — the raw transcript, unredacted — but can't write,
   drive a PTY or decide approvals; treat one like a portal login.
+  The optional break-glass password (`CCDASH_HUB_BREAK_GLASS_PASSWORD`)
+  is a full portal login that bypasses OIDC: compared in constant time,
+  locked for 10 minutes after 5 failures, one-hour sessions, every attempt
+  logged with its sender. Turn it on only for a hub the internet can't
+  reach, with a long random password.
 - Local portal (`ccdash web`): binds 127.0.0.1 only (no flag widens it),
   refuses foreign `Host` headers, and logs in with a one-time token from
   a 0600 file traded for an HttpOnly / SameSite=Strict cookie; the token
