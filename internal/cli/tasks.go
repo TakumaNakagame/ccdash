@@ -13,7 +13,9 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
 
+	"github.com/TakumaNakagame/ccdash/internal/i18n"
 	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
 	"github.com/TakumaNakagame/ccdash/internal/store"
 	"github.com/TakumaNakagame/ccdash/internal/tasks"
 )
@@ -35,6 +37,9 @@ proposal into 'ccdash tasks sync'.`,
 				return err
 			}
 			defer closeFn()
+			if cfg, err := settings.Load(cmd.Context(), st); err == nil {
+				i18n.Set(cfg.Language)
+			}
 			return fn(cmd.Context(), st, args)
 		}
 	}
@@ -104,7 +109,7 @@ proposal into 'ccdash tasks sync'.`,
 			if err != nil {
 				return err
 			}
-			fmt.Printf("#%d を追加しました: %s\n", t.ID, t.Title)
+			fmt.Print(i18n.Tf("#%d を追加しました: %s\n", t.ID, t.Title))
 			return nil
 		}),
 	}
@@ -126,7 +131,7 @@ proposal into 'ccdash tasks sync'.`,
 			if err != nil {
 				return err
 			}
-			fmt.Printf("#%d に進捗を追記しました\n", t.ID)
+			fmt.Print(i18n.Tf("#%d に進捗を追記しました\n", t.ID))
 			return nil
 		}),
 	}
@@ -147,7 +152,7 @@ proposal into 'ccdash tasks sync'.`,
 			if err != nil {
 				return err
 			}
-			fmt.Printf("#%d: %s → %s\n", t.ID, tasks.StatusLabel[before.Status], tasks.StatusLabel[t.Status])
+			fmt.Printf("#%d: %s → %s\n", t.ID, i18n.T(tasks.StatusLabel[before.Status]), i18n.T(tasks.StatusLabel[t.Status]))
 			return nil
 		}),
 	}
@@ -163,7 +168,7 @@ proposal into 'ccdash tasks sync'.`,
 			if err != nil {
 				return err
 			}
-			fmt.Printf("#%d のやる日: %s\n", t.ID, orNone(t.Plan))
+			fmt.Print(i18n.Tf("#%d のやる日: %s\n", t.ID, orNone(t.Plan)))
 			return nil
 		}),
 	}
@@ -178,7 +183,7 @@ proposal into 'ccdash tasks sync'.`,
 			if err != nil {
 				return err
 			}
-			fmt.Printf("#%d にリンクを足しました\n", t.ID)
+			fmt.Print(i18n.Tf("#%d にリンクを足しました\n", t.ID))
 			return nil
 		}),
 	}
@@ -195,9 +200,9 @@ proposal into 'ccdash tasks sync'.`,
 				return err
 			}
 			if v {
-				fmt.Printf("#%d をアーカイブしました\n", t.ID)
+				fmt.Print(i18n.Tf("#%d をアーカイブしました\n", t.ID))
 			} else {
-				fmt.Printf("#%d をアーカイブから戻しました\n", t.ID)
+				fmt.Print(i18n.Tf("#%d をアーカイブから戻しました\n", t.ID))
 			}
 			return nil
 		}),
@@ -332,7 +337,7 @@ Finished tasks from before today come in archived. Run with --dry-run first.`,
 				return err
 			}
 			if !dry {
-				fmt.Printf("%d 件を取り込みました（うちアーカイブ %d 件）。次の id は %d\n", plan.Tasks, plan.Archived, plan.NextID)
+				fmt.Print(i18n.Tf("%d 件を取り込みました（うちアーカイブ %d 件）。次の id は %d\n", plan.Tasks, plan.Archived, plan.NextID))
 			}
 			return nil
 		}),
@@ -355,7 +360,7 @@ func decodeJSON(r io.Reader, v any) error {
 
 func orNone(s string) string {
 	if s == "" {
-		return "未定"
+		return i18n.T("未定")
 	}
 	return s
 }
@@ -363,7 +368,7 @@ func orNone(s string) string {
 func taskLine(t model.Task) string {
 	s := tasks.Line(t)
 	if t.Archived {
-		s += " (アーカイブ)"
+		s += i18n.T(" (アーカイブ)")
 	}
 	return s
 }
@@ -379,7 +384,7 @@ func taskHaystack(t model.Task) string {
 func printTaskList(w io.Writer, l model.TaskList, keep func(model.Task) bool) {
 	headings := map[string]string{}
 	for _, b := range l.Buckets {
-		headings[b.Key] = b.Heading
+		headings[b.Key] = i18n.Heading(b.Heading)
 	}
 	cur := ""
 	for _, t := range l.Tasks {
@@ -403,37 +408,37 @@ func printTaskList(w io.Writer, l model.TaskList, keep func(model.Task) bool) {
 func printTask(w io.Writer, t model.Task) {
 	fmt.Fprintf(w, "# #%d %s\n\n", t.ID, t.Title)
 	fmt.Fprintf(w, "- key: %s\n", orDash(t.Key))
-	fmt.Fprintf(w, "- 状態: %s / 優先度: %s / やる日: %s", tasks.StatusLabel[t.Status], tasks.PriorityLabel[t.Priority], orNone(t.Plan))
+	fmt.Fprint(w, i18n.Tf("- 状態: %s / 優先度: %s / やる日: %s", i18n.T(tasks.StatusLabel[t.Status]), i18n.T(tasks.PriorityLabel[t.Priority]), orNone(t.Plan)))
 	if t.Due != "" {
-		fmt.Fprintf(w, " / 期限: %s", t.Due)
+		fmt.Fprint(w, i18n.Tf(" / 期限: %s", t.Due))
 	}
 	fmt.Fprintln(w)
 	if t.Project != "" {
-		fmt.Fprintf(w, "- プロジェクト: %s\n", t.Project)
+		fmt.Fprint(w, i18n.Tf("- プロジェクト: %s\n", t.Project))
 	}
 	if t.Archived {
-		fmt.Fprintln(w, "- アーカイブ済み")
+		fmt.Fprintln(w, i18n.T("- アーカイブ済み"))
 	}
 	if t.Note != "" {
-		fmt.Fprintf(w, "\n## メモ\n\n%s\n", t.Note)
+		fmt.Fprintf(w, "\n## %s\n\n%s\n", i18n.T("メモ"), t.Note)
 	}
 	if len(t.Links) > 0 {
-		fmt.Fprint(w, "\n## リンク\n\n")
+		fmt.Fprintf(w, "\n## %s\n\n", i18n.T("リンク"))
 		for _, l := range t.Links {
 			fmt.Fprintf(w, "- %s\n", l)
 		}
 	}
 	if len(t.Sessions) > 0 {
-		fmt.Fprint(w, "\n## セッション\n\n")
+		fmt.Fprintf(w, "\n## %s\n\n", i18n.T("セッション"))
 		for _, s := range t.Sessions {
 			fmt.Fprintf(w, "- %s\n", s)
 		}
 	}
-	fmt.Fprint(w, "\n## 進捗（古い順）\n\n")
+	fmt.Fprintf(w, "\n## %s\n\n", i18n.T("進捗（古い順）"))
 	if len(t.Timeline) == 0 {
-		fmt.Fprintln(w, "- （まだ無い）")
+		fmt.Fprintln(w, "- "+i18n.T("（まだ無い）"))
 	}
-	src := map[string]string{"slack": "Slack", "jira": "Jira", "github": "GitHub", "manual": "手書き", "auto": "自動", "claude": "Claude"}
+	src := map[string]string{"slack": "Slack", "jira": "Jira", "github": "GitHub", "manual": i18n.T("手書き"), "auto": i18n.T("自動"), "claude": "Claude"}
 	for _, e := range t.Timeline {
 		at := strings.Replace(e.At, "T", " ", 1)
 		if len(at) > 16 {
@@ -447,7 +452,7 @@ func printTask(w io.Writer, t model.Task) {
 		if e.Link != "" {
 			link = " <" + e.Link + ">"
 		}
-		fmt.Fprintf(w, "- %s [%s] %s%s\n", at, label, e.Text, link)
+		fmt.Fprintf(w, "- %s [%s] %s%s\n", at, label, i18n.Timeline(e.Text), link)
 	}
 }
 
@@ -463,7 +468,7 @@ func printImportPlan(w io.Writer, f tasks.LegacyFile, p tasks.ImportPlan, dry bo
 	for _, t := range f.Tasks {
 		count[strings.TrimSpace(t.Project)]++
 	}
-	fmt.Fprintln(w, "プロジェクトの対応:")
+	fmt.Fprintln(w, i18n.T("プロジェクトの対応:"))
 	olds := make([]string, 0, len(count))
 	for old := range count {
 		olds = append(olds, old)
@@ -478,20 +483,20 @@ func printImportPlan(w io.Writer, f tasks.LegacyFile, p tasks.ImportPlan, dry bo
 		col := runewidth.FillRight(old, 30)
 		switch {
 		case !ok:
-			fmt.Fprintf(w, "  %s → （未決定）  %d 件\n", col, n)
+			fmt.Fprint(w, i18n.Tf("  %s → （未決定）  %d 件\n", col, n))
 		case to == "":
-			fmt.Fprintf(w, "  %s → （なし）  %d 件\n", col, n)
+			fmt.Fprint(w, i18n.Tf("  %s → （なし）  %d 件\n", col, n))
 		default:
 			mark := ""
 			for _, c := range p.Create {
 				if c == to {
-					mark = "（新規作成）"
+					mark = i18n.T("（新規作成）")
 				}
 			}
-			fmt.Fprintf(w, "  %s → %s%s  %d 件\n", col, to, mark, n)
+			fmt.Fprint(w, i18n.Tf("  %s → %s%s  %d 件\n", col, to, mark, n))
 		}
 	}
 	if dry {
-		fmt.Fprintf(w, "取り込むタスク %d 件（うちアーカイブ %d 件）、次の id %d、前回の同期 %s\n", p.Tasks, p.Archived, p.NextID, orDash(p.LastSync))
+		fmt.Fprint(w, i18n.Tf("取り込むタスク %d 件（うちアーカイブ %d 件）、次の id %d、前回の同期 %s\n", p.Tasks, p.Archived, p.NextID, orDash(p.LastSync)))
 	}
 }

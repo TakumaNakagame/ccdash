@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/TakumaNakagame/ccdash/internal/i18n"
 	mdl "github.com/TakumaNakagame/ccdash/internal/model"
 	"github.com/TakumaNakagame/ccdash/internal/settings"
 	"github.com/TakumaNakagame/ccdash/internal/tasks"
@@ -193,7 +194,7 @@ type taskRow struct {
 func (m *model) taskRows() []taskRow {
 	headings := map[string]string{}
 	for _, b := range m.tasks.Buckets {
-		headings[b.Key] = b.Heading
+		headings[b.Key] = i18n.Heading(b.Heading)
 	}
 	project := ""
 	if m.tasksProjectOnly {
@@ -404,17 +405,17 @@ func (m *model) handleTasksKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 			if t.Finished() {
 				st = mdl.TaskTodo
 			}
-			return m.editTask(t, tasks.Patch{Status: &st}, fmt.Sprintf("#%d → %s", t.ID, tasks.StatusLabel[st])), true
+			return m.editTask(t, tasks.Patch{Status: &st}, fmt.Sprintf("#%d → %s", t.ID, i18n.T(tasks.StatusLabel[st]))), true
 		}
 	case "s":
 		if has && !t.Finished() {
 			st := map[string]string{mdl.TaskTodo: mdl.TaskDoing, mdl.TaskDoing: mdl.TaskWaiting, mdl.TaskWaiting: mdl.TaskTodo}[t.Status]
-			return m.editTask(t, tasks.Patch{Status: &st}, fmt.Sprintf("#%d → %s", t.ID, tasks.StatusLabel[st])), true
+			return m.editTask(t, tasks.Patch{Status: &st}, fmt.Sprintf("#%d → %s", t.ID, i18n.T(tasks.StatusLabel[st]))), true
 		}
 	case "1", "2", "3", "4", "0":
 		if has {
 			plan := map[string]string{"1": "today", "2": "tomorrow", "3": "week", "4": "nextweek", "0": "none"}[k]
-			return m.editTask(t, tasks.Patch{Plan: &plan}, fmt.Sprintf("#%d のやる日: %s", t.ID, taskPlanLabel[plan])), true
+			return m.editTask(t, tasks.Patch{Plan: &plan}, i18n.Tf("#%d のやる日: %s", t.ID, i18n.T(taskPlanLabel[plan]))), true
 		}
 	case "[", "]":
 		if has {
@@ -432,7 +433,7 @@ func (m *model) handleTasksKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 	case "c":
 		if has && !t.Finished() {
 			st := mdl.TaskCancelled
-			return m.editTask(t, tasks.Patch{Status: &st}, fmt.Sprintf("#%d → 中止", t.ID)), true
+			return m.editTask(t, tasks.Patch{Status: &st}, fmt.Sprintf("#%d → %s", t.ID, i18n.T("中止"))), true
 		}
 	case "y":
 		return m.copyTaskRef(), true
@@ -446,6 +447,17 @@ func (m *model) handleTasksKey(msg tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		}
 	}
 	return nil, true
+}
+
+// taskStatusShort is a task's status for the pane's narrow column.
+func taskStatusShort(status string) string {
+	if status == mdl.TaskDone {
+		return i18n.T("✓完了")
+	}
+	if i18n.Lang() == i18n.EN {
+		return map[string]string{mdl.TaskTodo: "todo", mdl.TaskDoing: "doing", mdl.TaskWaiting: "wait", mdl.TaskCancelled: "cancel"}[status]
+	}
+	return tasks.StatusLabel[status]
 }
 
 var taskPlanLabel = map[string]string{"today": "今日", "tomorrow": "明日", "week": "今週", "nextweek": "来週", "none": "未定"}
@@ -486,7 +498,7 @@ func (m *model) copyTaskRef() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	text := fmt.Sprintf("#%d について、", t.ID)
+	text := i18n.Tf("#%d について、", t.ID)
 	m.flash = "copied: " + text
 	return copyToClipboard(text)
 }
@@ -500,7 +512,7 @@ func (m *model) newSessionForTask(t mdl.Task) tea.Cmd {
 		return nil
 	}
 	m.tasksFocus = false
-	m.spawnPrompt = fmt.Sprintf("#%d について、", t.ID)
+	m.spawnPrompt = i18n.Tf("#%d について、", t.ID)
 	m.spawnProject = t.Project
 	m.openDirPicker()
 	return nil
@@ -557,17 +569,17 @@ func (m *model) renderTasksPane(w, h int) string {
 			open++
 		}
 	}
-	title := fmt.Sprintf(" タスク %d", open)
+	title := i18n.Tf(" タスク %d", open)
 	if m.tasksProjectOnly {
 		p := m.currentProject()
 		if p == "" {
-			p = "プロジェクトなし"
+			p = i18n.T("プロジェクトなし")
 		}
 		title += " · " + p
 	}
 	hint := ""
 	if m.tasksFocus {
-		hint = "enter 詳細 esc 戻る "
+		hint = i18n.T("enter 詳細 esc 戻る ")
 	} else {
 		hint = "W "
 	}
@@ -605,7 +617,7 @@ func (m *model) taskListLines(w, h int) []string {
 	rows := m.taskRows()
 	m.taskLineRow = nil
 	if len(rows) == 0 {
-		return []string{subtitleStyle.Render(" タスクはありません")}
+		return []string{subtitleStyle.Render(i18n.T(" タスクはありません"))}
 	}
 	today := m.tasks.Today
 	counts := map[string]int{}
@@ -725,10 +737,7 @@ func (m *model) taskRowLines(t mdl.Task, today string, w int, band lipgloss.Term
 	if fin {
 		prio = dim.Render(fmt.Sprintf("P%d", pri))
 	}
-	label := tasks.StatusLabel[t.Status]
-	if t.Status == mdl.TaskDone {
-		label = "✓完了"
-	}
+	label := taskStatusShort(t.Status)
 	status := on(taskStatusStyle[t.Status]).Render(padRight(label, 6))
 	prefix := plain.Render(" ") + prio + plain.Render(" ") + status + plain.Render(" ")
 	indent := lipgloss.Width(prefix)
@@ -749,18 +758,18 @@ func (m *model) taskRowLines(t mdl.Task, today string, w int, band lipgloss.Term
 	if t.Due != "" && !fin {
 		switch {
 		case t.Due < today:
-			overdue = "⚠期限 " + shortDay(t.Due)
+			overdue = i18n.T("⚠期限 ") + shortDay(t.Due)
 		case t.Due == today:
-			meta = append(meta, "期限 今日")
+			meta = append(meta, i18n.T("期限 今日"))
 		default:
-			meta = append(meta, "期限 "+shortDay(t.Due))
+			meta = append(meta, i18n.T("期限 ")+shortDay(t.Due))
 		}
 	}
 	var after []string
 	if !fin && t.Plan != "" && t.Plan < today {
-		after = append(after, shortDay(t.Plan)+"〜持ち越し")
+		after = append(after, shortDay(t.Plan)+i18n.T("〜持ち越し"))
 	} else if !fin && t.Plan != "" && t.Bucket != tasks.BucketToday && t.Bucket != tasks.BucketTomorrow {
-		after = append(after, "予定 "+shortDay(t.Plan))
+		after = append(after, i18n.T("予定 ")+shortDay(t.Plan))
 	}
 	if t.Project != "" {
 		after = append(after, t.Project)
@@ -813,18 +822,18 @@ func (m *model) taskDetailLines(w, h int) []string {
 	}
 	var out []string
 	out = append(out, wrap(lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("#%d %s", t.ID, t.Title)), 1)...)
-	meta := []string{tasks.StatusLabel[t.Status], fmt.Sprintf("P%d", t.Priority)}
+	meta := []string{i18n.T(tasks.StatusLabel[t.Status]), fmt.Sprintf("P%d", t.Priority)}
 	if t.Plan != "" {
-		meta = append(meta, "やる日 "+shortDay(t.Plan))
+		meta = append(meta, i18n.T("やる日 ")+shortDay(t.Plan))
 	} else {
-		meta = append(meta, "やる日 未定")
+		meta = append(meta, i18n.T("やる日 未定"))
 	}
 	if t.Due != "" {
-		meta = append(meta, "期限 "+shortDay(t.Due))
+		meta = append(meta, i18n.T("期限 ")+shortDay(t.Due))
 	}
 	out = append(out, wrap(subtitleStyle.Render(strings.Join(meta, " · ")), 1)...)
 	if t.Project != "" {
-		out = append(out, wrap(subtitleStyle.Render("プロジェクト: "+t.Project), 1)...)
+		out = append(out, wrap(subtitleStyle.Render(i18n.T("プロジェクト: ")+t.Project), 1)...)
 	}
 	if t.Key != "" {
 		out = append(out, wrap(subtitleStyle.Render("key: "+t.Key), 1)...)
@@ -834,7 +843,7 @@ func (m *model) taskDetailLines(w, h int) []string {
 		out = append(out, wrap(t.Note, 1)...)
 	}
 	if len(t.Links) > 0 {
-		out = append(out, "", taskBucketStyle.Render(" リンク"))
+		out = append(out, "", taskBucketStyle.Render(i18n.T(" リンク")))
 		for _, l := range t.Links {
 			out = append(out, " "+ansi.Truncate(l, w-2, "…"))
 		}
@@ -844,11 +853,11 @@ func (m *model) taskDetailLines(w, h int) []string {
 		for _, sid := range t.Sessions {
 			refs = append(refs, m.sessionRefOf(sid))
 		}
-		out = append(out, "", subtitleStyle.Render(" セッション: "+strings.Join(refs, " ")))
+		out = append(out, "", subtitleStyle.Render(i18n.T(" セッション: ")+strings.Join(refs, " ")))
 	}
-	out = append(out, "", taskBucketStyle.Render(" 進捗（新しい順）"))
+	out = append(out, "", taskBucketStyle.Render(i18n.T(" 進捗（新しい順）")))
 	if len(t.Timeline) == 0 {
-		out = append(out, subtitleStyle.Render(" （まだ無い）"))
+		out = append(out, subtitleStyle.Render(i18n.T(" （まだ無い）")))
 	}
 	for i := len(t.Timeline) - 1; i >= 0; i-- {
 		e := t.Timeline[i]
@@ -856,7 +865,7 @@ func (m *model) taskDetailLines(w, h int) []string {
 		if ts, err := time.Parse(time.RFC3339, e.At); err == nil {
 			at = ts.Local().Format("1/2 15:04")
 		}
-		out = append(out, wrap(subtitleStyle.Render(at)+" "+e.Text, 1)...)
+		out = append(out, wrap(subtitleStyle.Render(at)+" "+i18n.Timeline(e.Text), 1)...)
 	}
 	m.taskDetailScroll = clamp(m.taskDetailScroll, 0, max(0, len(out)-h))
 	return out[m.taskDetailScroll:]

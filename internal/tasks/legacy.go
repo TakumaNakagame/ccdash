@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TakumaNakagame/ccdash/internal/i18n"
 	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
@@ -139,7 +140,7 @@ func Markdown(all []model.Task, now time.Time) string {
 	}
 	Sort(ts, now)
 	var b strings.Builder
-	fmt.Fprintf(&b, "# タスクリスト\n\n最終更新: %s（ccdash tasks md）\n\n", DateString(Day(now)))
+	fmt.Fprint(&b, i18n.Tf("# タスクリスト\n\n最終更新: %s（ccdash tasks md）\n\n", DateString(Day(now))))
 	cur := ""
 	for _, t := range ts {
 		if t.Finished() {
@@ -150,27 +151,27 @@ func Markdown(all []model.Task, now time.Time) string {
 				b.WriteString("\n")
 			}
 			cur = t.Bucket
-			fmt.Fprintf(&b, "## %s\n\n", Heading(cur, now))
+			fmt.Fprintf(&b, "## %s\n\n", i18n.Heading(Heading(cur, now)))
 		}
 		extra := []string{fmt.Sprintf("P%d", priorityKey(t))}
 		if t.Status != model.TaskTodo {
-			extra = append(extra, StatusLabel[t.Status])
+			extra = append(extra, i18n.T(StatusLabel[t.Status]))
 		}
 		if CarriedOver(t, now) {
-			extra = append(extra, mdDay(t.Plan)+" から持ち越し")
+			extra = append(extra, i18n.Tf("%s から持ち越し", mdDay(t.Plan)))
 		} else if t.Bucket == BucketWeek || t.Bucket == BucketNextWeek || t.Bucket == BucketLater {
-			extra = append(extra, mdDay(t.Plan)+" にやる")
+			extra = append(extra, i18n.Tf("%s にやる", mdDay(t.Plan)))
 		}
 		if t.Due != "" {
-			extra = append(extra, "期限 "+t.Due)
+			extra = append(extra, i18n.T("期限 ")+t.Due)
 		}
 		if t.Project != "" {
 			extra = append(extra, t.Project)
 		}
-		fmt.Fprintf(&b, "- [ ] #%d %s（%s）\n", t.ID, t.Title, strings.Join(extra, " / "))
+		fmt.Fprint(&b, i18n.Tf("- [ ] #%d %s（%s）\n", t.ID, t.Title, strings.Join(extra, " / ")))
 		if n := len(t.Timeline); n > 0 {
 			e := t.Timeline[n-1]
-			fmt.Fprintf(&b, "  - 最新 %s: %s\n", strings.Replace(clip(e.At, 16), "T", " ", 1)[min(5, len(clip(e.At, 16))):], e.Text)
+			fmt.Fprintf(&b, "  - "+i18n.T("最新")+" %s: %s\n", strings.Replace(clip(e.At, 16), "T", " ", 1)[min(5, len(clip(e.At, 16))):], e.Text)
 		}
 	}
 	if cur != "" {
@@ -182,7 +183,7 @@ func Markdown(all []model.Task, now time.Time) string {
 			continue
 		}
 		if first {
-			b.WriteString("## 完了\n\n")
+			b.WriteString("## " + i18n.T("完了") + "\n\n")
 			first = false
 		}
 		mark := "x"

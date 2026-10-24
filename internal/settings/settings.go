@@ -89,6 +89,9 @@ type Settings struct {
 	// UpdateChannel is what the update check / `u` / `ccdash update`
 	// follow: "stable" (tagged releases) or "dev" (pre-releases too).
 	UpdateChannel string
+	// Language of the TUI's and CLI's own words (internal/i18n): "auto"
+	// (from $LANG), "en" or "ja". The portal has its own, per user.
+	Language string
 	// AutoArchiveDays archives sessions idle longer than this many days
 	// once a day (the collector's first start of the day, or its first
 	// discovery tick after midnight). 0 = off.
@@ -147,6 +150,7 @@ const (
 	legacyKeyPaneSplit  = "pane_split"
 	keyTimeFormat       = "time_format"
 	keyUpdateChannel    = "update_channel"
+	keyLanguage         = "language"
 	keyInvertListScroll = "invert_list_scroll"
 	keyAutoArchiveDays  = "auto_archive_days"
 	keyAutoTitle        = "auto_title"
@@ -179,6 +183,7 @@ func Defaults() Settings {
 		TasksPane:     true,
 		TimeFormat:    "relative",
 		UpdateChannel: "stable",
+		Language:      "auto",
 
 		AutoArchiveDays: 7,
 		AutoTitle:       true,
@@ -235,6 +240,11 @@ func loadPairs(out *Settings) []loadPair {
 		{keyTimeFormat, func(v string) {
 			if v == "relative" || v == "absolute" {
 				out.TimeFormat = v
+			}
+		}},
+		{keyLanguage, func(v string) {
+			if v == "auto" || v == "en" || v == "ja" {
+				out.Language = v
 			}
 		}},
 		{keyUpdateChannel, func(v string) {
@@ -472,6 +482,7 @@ func AllSpecs() []Spec {
 		{Key: keyListCollapsed, Label: "Collapse session list", Help: "Fold the session list to a strip of session numbers (also b); j/k still move the selection.", Kind: KindBool},
 		{Key: keyInvertListScroll, Label: "Invert list scroll", Help: "Reverse the mouse wheel over the session list (wheel down moves the selection up). The right pane is unaffected.", Kind: KindBool},
 		{Key: keyTimeFormat, Label: "Session time", Help: "How the session list shows each session's last prompt time: relative (4m, 2h) or absolute (09/30 18:45).", Kind: KindEnum, Options: []string{"relative", "absolute"}},
+		{Key: keyLanguage, Label: "Language", Help: "Language of the TUI's and CLI's own text — task pane, header counts, `ccdash tasks` output: auto = from $LANG (ja* = Japanese, else English), en, ja. The web portal has its own under 表示 / Display.", Kind: KindEnum, Options: []string{"auto", "en", "ja"}},
 		{Key: keyUpdateChannel, Label: "Update channel", Help: "What the update check, u and `ccdash update` follow: stable = tagged releases only, dev = pre-releases (rc) too.", Kind: KindEnum, Options: []string{"stable", "dev"}},
 		{Key: keyVerticalAutoCols, Label: "Vertical auto threshold (cols)", Help: "Width in columns below which auto-layout flips to vertical. Lower = stay horizontal longer; higher = go vertical sooner.", Kind: KindInt, Min: 40, Max: 240},
 		// Risk-bearing toggles
@@ -568,6 +579,8 @@ func Get(s Settings, key string) any {
 		return s.PaneRatio
 	case keyTimeFormat:
 		return s.TimeFormat
+	case keyLanguage:
+		return s.Language
 	case keyUpdateChannel:
 		return s.UpdateChannel
 	case keyInvertListScroll:
@@ -643,6 +656,8 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.PaneRatio = r.String()
 	case keyTimeFormat:
 		s.TimeFormat = value.(string)
+	case keyLanguage:
+		s.Language = value.(string)
 	case keyUpdateChannel:
 		s.UpdateChannel = value.(string)
 	case keyInvertListScroll:

@@ -497,6 +497,11 @@ portal's device-page restart button offers 作業が終わったら再起動 / �
   once a day (see "Auto-archive" in §6). Default 7, `0` = off.
 - **Refresh interval (ms)**: how often the TUI re-queries the DB.
   Default 1000.
+- **Language**: `auto` (from `$LC_ALL` / `$LC_MESSAGES` / `$LANG`: `ja*`
+  = Japanese, anything else = English), `en` or `ja`. Covers ccdash's own
+  text in the TUI (task pane, header counts, reasons) and in `ccdash tasks`.
+  The portal has its own per-user choice under ⚙ Display → Language
+  (default: the browser's language); push notifications follow it.
 - **Trusted folders**: comma-separated folders (`~/` allowed), e.g.
   `~/src`. When ccdash starts claude in one of them or
   any subfolder (`n`, the portal, MCP `start_session`), it first marks that

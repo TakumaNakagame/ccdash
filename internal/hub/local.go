@@ -190,24 +190,30 @@ func (a *authn) handleLocalLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, next, http.StatusFound)
 		return
 	}
-	a.localLoginPage(w, http.StatusForbidden, "このログインリンクは使用済みか、古いものです。")
+	a.localLoginPage(w, r, http.StatusForbidden, "このログインリンクは使用済みか、古いものです。", "This login link has been used or is out of date.")
 }
 
 // handleLocalLoginHelp is what a visitor without the cookie sees.
 func (a *authn) handleLocalLoginHelp(w http.ResponseWriter, r *http.Request) {
-	a.localLoginPage(w, http.StatusUnauthorized, "ログインが必要です。")
+	a.localLoginPage(w, r, http.StatusUnauthorized, "ログインが必要です。", "You need to log in.")
 }
 
-func (a *authn) localLoginPage(w http.ResponseWriter, code int, why string) {
+// localLoginPage is in Japanese for a browser that asks for it first
+// (Accept-Language), else in English.
+func (a *authn) localLoginPage(w http.ResponseWriter, r *http.Request, code int, whyJa, whyEn string) {
+	lang, why, how := "en", whyEn, "Run this in a terminal on this machine to open a login link in your browser."
+	if strings.HasPrefix(strings.ToLower(r.Header.Get("Accept-Language")), "ja") {
+		lang, why, how = "ja", whyJa, "このマシンのターミナルで次を実行すると、ログイン用のリンクがブラウザで開きます。"
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.WriteHeader(code)
-	fmt.Fprintf(w, `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">`+
+	fmt.Fprintf(w, `<!doctype html><html lang="%s"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">`+
 		`<title>ccdash web</title><body style="font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans',sans-serif;max-width:36em;margin:4em auto;padding:0 16px;line-height:1.7">`+
 		`<h1 style="font-size:1.3em">ccdash web</h1><p>%s</p>`+
-		`<p>このマシンのターミナルで次を実行すると、ログイン用のリンクがブラウザで開きます。</p>`+
-		`<pre style="background:#8882;padding:8px 12px;border-radius:8px">ccdash web open</pre></body></html>`, html.EscapeString(why))
+		`<p>%s</p>`+
+		`<pre style="background:#8882;padding:8px 12px;border-radius:8px">ccdash web open</pre></body></html>`, lang, html.EscapeString(why), how)
 }
 
 // ServeLocal makes sess (the hub end of the in-process link to this

@@ -429,7 +429,11 @@ func (h *Hub) logRefused(login string) {
 // Quick commands: the operator's one-tap prompts ("続けて", "/compact"…),
 // kept per login in the hub so every browser / phone shares them.
 
-var defaultQuick = []string{"続けて", "テストを実行して", "変更をコミットして", "/compact"}
+// The first list a login gets, in the browser's language (Accept-Language).
+var (
+	defaultQuick   = []string{"続けて", "テストを実行して", "変更をコミットして", "/compact"}
+	defaultQuickEn = []string{"Continue", "Run the tests", "Commit the changes", "/compact"}
+)
 
 func (h *Hub) quickKey(r *http.Request) string {
 	email, _ := h.auth.user(r)
@@ -438,7 +442,11 @@ func (h *Hub) quickKey(r *http.Request) string {
 
 func (h *Hub) handleQuickGet(w http.ResponseWriter, r *http.Request) {
 	v, err := h.st.secret(r.Context(), h.quickKey(r), func() string {
-		b, _ := json.Marshal(defaultQuick)
+		q := defaultQuickEn
+		if strings.HasPrefix(strings.ToLower(r.Header.Get("Accept-Language")), "ja") {
+			q = defaultQuick
+		}
+		b, _ := json.Marshal(q)
 		return string(b)
 	})
 	if err != nil {
@@ -471,7 +479,8 @@ func (h *Hub) handleQuickPut(w http.ResponseWriter, r *http.Request) {
 
 // prefs is a portal user's look: theme ("" = follow the system, "light",
 // "dark") and accent ("" = the default, else "#rrggbb"), plus the session
-// list's 新着を上に (new_first: "" = the default, on; "on" / "off"). Kept
+// list's 新着を上に (new_first: "" = the default, on; "on" / "off") and the
+// language (lang: "" = the browser's, "ja", "en"). Kept
 // per login in hub.sqlite, so every browser and the installed app share it
 // — localStorage is per origin, so the local portal (127.0.0.1) never saw
 // a choice made on the hub's.
@@ -479,6 +488,7 @@ type prefs struct {
 	Theme    string `json:"theme"`
 	Accent   string `json:"accent"`
 	NewFirst string `json:"new_first"`
+	Lang     string `json:"lang"` // the portal's language: "" = the browser's, "ja", "en"
 }
 
 var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
@@ -510,7 +520,7 @@ func (h *Hub) handlePrefsPut(w http.ResponseWriter, r *http.Request) {
 	var p prefs
 	_ = json.Unmarshal([]byte(cur), &p)
 	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&p); err != nil {
-		http.Error(w, "want {theme, accent, new_first}", http.StatusBadRequest)
+		http.Error(w, "want {theme, accent, new_first, lang}", http.StatusBadRequest)
 		return
 	}
 	if p.Theme != "" && p.Theme != "light" && p.Theme != "dark" {
@@ -523,6 +533,10 @@ func (h *Hub) handlePrefsPut(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.NewFirst != "" && p.NewFirst != "on" && p.NewFirst != "off" {
 		http.Error(w, `new_first must be "", "on" or "off"`, http.StatusBadRequest)
+		return
+	}
+	if p.Lang != "" && p.Lang != "ja" && p.Lang != "en" {
+		http.Error(w, `lang must be "", "ja" or "en"`, http.StatusBadRequest)
 		return
 	}
 	p.Accent = strings.ToLower(p.Accent)

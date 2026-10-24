@@ -329,6 +329,7 @@ ccdash の介入度合いを「観察のみ」まで下げられます。
 - **Title generation timeout (s)**: `claude -p` のタイムアウト。デフォルト 180
 - **Auto-archive after (days)**: これより長く動きのないセッションを 1 日 1 回アーカイブ (§6「自動アーカイブ」)。デフォルト 7、`0` で無効
 - **Refresh interval (ms)**: TUI が DB を再クエリする間隔。デフォルト 1000
+- **Language**: `auto` (`$LC_ALL` / `$LC_MESSAGES` / `$LANG` が `ja*` なら日本語、それ以外は英語)・`en`・`ja`。TUI の ccdash 自身の文言 (タスクペイン・ヘッダーの件数・理由) と `ccdash tasks` の出力が対象。ポータルはユーザーごとに別の設定 (⚙ 表示 → 言語、既定はブラウザの言語) で、プッシュ通知もそれに従う
 - **Trusted folders**: 信頼するフォルダをカンマ区切りで指定 (`~/` 可。例: `~/src`)。ccdash がこの配下 (サブフォルダ含む) で claude を起動するとき (`n`・ポータル・MCP の `start_session`)、先に `~/.claude.json` でそのフォルダを信頼済みにするので、新しいフォルダでも Claude Code の「このフォルダを信頼しますか？」で止まらない。空なら無効。シェルからは `ccdash trust` (一覧)・`ccdash trust <dir>` (追加)・`ccdash trust --remove <dir>` (削除) でも編集できる。なお、セッション登録前にダイアログで止まった起動は、TUI では「waiting for you」の行、ポータルでは「起動中（未登録）」の 要対応 (プッシュ通知あり)、MCP では `start_session` / `overview` の `waiting_on` として出る
 - **Session list size (%)**: セッション一覧が使う割合 (横並びなら幅、上下なら高さ)。残りが作業ペイン。デフォルト 50、範囲 10〜90。ダッシュボードの `<` / `>` で 5% ずつ調整できる
 - **Invert list scroll**: セッション一覧上のマウスホイールの向きを逆にする (ホイール下で選択が上へ)。右ペインは対象外。デフォルト OFF

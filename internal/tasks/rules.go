@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TakumaNakagame/ccdash/internal/i18n"
 	"github.com/TakumaNakagame/ccdash/internal/model"
 )
 
@@ -286,12 +287,12 @@ func Sort(ts []model.Task, now time.Time) {
 // Line is the one-line form the CLI prints: #11  P1 未着手 title …
 func Line(t model.Task) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "#%-4d P%d %-3s %s", t.ID, priorityKey(t), StatusLabel[t.Status], t.Title)
+	fmt.Fprintf(&b, "#%-4d P%d %-3s %s", t.ID, priorityKey(t), i18n.T(StatusLabel[t.Status]), t.Title)
 	if t.Plan != "" {
-		fmt.Fprintf(&b, " やる日 %s", t.Plan)
+		fmt.Fprint(&b, i18n.Tf(" やる日 %s", t.Plan))
 	}
 	if t.Due != "" {
-		fmt.Fprintf(&b, " 期限 %s", t.Due)
+		fmt.Fprint(&b, i18n.Tf(" 期限 %s", t.Due))
 	}
 	if t.Project != "" {
 		fmt.Fprintf(&b, " [%s]", t.Project)

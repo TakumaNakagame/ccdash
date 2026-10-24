@@ -86,8 +86,9 @@ want, says what it will change, installs and verifies. The skill also
 answers "how do I …" questions about ccdash from these docs.
 
 **Requirements**: macOS or Linux (amd64 / arm64; Windows via WSL2), Claude
-Code signed in, `curl`; `git` and `tmux` are optional. The TUI is in
-English; the web portal is in Japanese only for now.
+Code signed in, `curl`; `git` and `tmux` are optional. English and
+Japanese: the web portal follows your browser (⚙ Display → Language to
+change it), the TUI and CLI follow `$LANG` (settings → Language).
 
 ## What it does
 

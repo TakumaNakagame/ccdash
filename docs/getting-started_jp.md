@@ -42,7 +42,7 @@ https://raw.githubusercontent.com/TakumaNakagame/ccdash/main/plugins/ccdash/skil
 - **Claude Code**: `claude` コマンドが入っていて、ログイン済みであること
 - **curl**: hook がイベントを送るのに使います
 - あると良いもの: `git`（ブランチ表示・差分レビュー）、`tmux`（TUI からペインへジャンプ）
-- **画面の言語**: TUI は英語、ブラウザのポータルは日本語です（ポータルの言語切り替えは今のところありません）
+- **画面の言語**: 日本語と英語に対応しています。ポータルはブラウザの言語に合わせます（⚙ 表示 → 言語 で変更）。TUI と CLI の ccdash 自身の文言は `$LANG` に合わせます（設定 `,` → Language で変更）。`$LANG` が日本語でない環境（`C.UTF-8` など）で日本語にしたい場合は Language を `ja` にしてください
 
 ## 1. インストール
 
