@@ -11,7 +11,7 @@ runs `claude` (call it `dev-box`):
 ```sh
 ccdash server --listen 0.0.0.0:9123
 # or a specific address if the host has more than one interface:
-ccdash server --listen 192.168.20.132:9123
+ccdash server --listen 192.168.1.50:9123
 ```
 
 `--listen` is opt-in (without it the collector stays `127.0.0.1:9123`; the
@@ -58,7 +58,7 @@ scp dev-box:~/.local/state/ccdash/token ~/.config/ccdash/collector.token
 **3. Configure the remote once**, then use `-r` from anywhere:
 
 ```sh
-ccdash remote set --url http://192.168.20.132:9123 \
+ccdash remote set --url http://192.168.1.50:9123 \
   --token-file ~/.config/ccdash/collector.token \
   --ssh-target dev-box        # optional; defaults to the URL hostname
 ccdash remote show            # prints the effective config + sources
@@ -71,7 +71,7 @@ ccdash -r                     # open the TUI against the configured remote
 ```json
 {
   "remote": {
-    "url": "http://192.168.20.132:9123",
+    "url": "http://192.168.1.50:9123",
     "token_file": "/home/op/.config/ccdash/collector.token",
     "ssh_target": "dev-box"
   }

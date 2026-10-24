@@ -25,7 +25,7 @@ import (
 
 // Config is the persisted join state.
 type Config struct {
-	URL   string `json:"url"`   // hub origin, e.g. https://ccdash.g3.lab-dev.net
+	URL   string `json:"url"`   // hub origin, e.g. https://ccdash.example.net
 	Token string `json:"token"` // device token issued by the hub's "Add device"
 	// Letter and Name are what the hub calls this machine, written by the
 	// collector each time its tunnel connects (the hub sends them on the

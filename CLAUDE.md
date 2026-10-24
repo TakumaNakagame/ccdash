@@ -88,9 +88,12 @@ internal/grokmcp/               `ccdash grok-mcp`: Streamable HTTP MCP (bearer t
 internal/tasks/                 the to-do list's rules (plan buckets, order, edits + timeline entries, sync merge, tasks.json import); db/tasks.go persists, cli/tasks.go = `ccdash tasks`, mcpserver/tasks.go = the task tools
 internal/model/                 plain data types (Session / Event / Approval) and DisplayTitle
 docs/design.md                  portal design rules (tokens, icons, colour, status words) — read before touching internal/hub/web
+docs/getting-started_{en,jp}.md first-time walkthrough (install → check → pick a setup); keep in step with the setup skill below
 docs/usage_en.md                hands-on usage guide (English)
 docs/usage_jp.md                hands-on usage guide (Japanese)
 task.md                         original product spec; historical, not authoritative
+.claude-plugin/marketplace.json  this repo as a Claude Code plugin marketplace (`/plugin marketplace add TakumaNakagame/ccdash`)
+plugins/ccdash/                 the plugin: skills/ccdash-setup = Claude-driven install / verify / troubleshoot / uninstall (reads docs from raw GitHub URLs)
 ```
 
 ### Data flow

@@ -108,7 +108,7 @@ spawns a collector — everything goes over HTTP.`,
 	root.PersistentFlags().BoolVarP(&rf.remoteEnabled, "remote", "r", false,
 		"use the remote collector configured via `ccdash remote set` (~/.config/ccdash/config.json)")
 	root.PersistentFlags().StringVar(&rf.remoteURL, "remote-url", "",
-		"remote collector URL, e.g. http://192.168.20.132:9123 (implies -r; overrides the configured url)")
+		"remote collector URL, e.g. http://192.168.1.50:9123 (implies -r; overrides the configured url)")
 	root.PersistentFlags().StringVar(&rf.tokenFile, "token-file", "",
 		"path to the remote collector's token file (overrides config; falls back to $CCDASH_TOKEN)")
 	root.PersistentFlags().StringVar(&rf.sshTarget, "ssh-target", "",
@@ -172,7 +172,7 @@ first (writes %s), or pass --remote-url explicitly`, cfgPath)
 	}
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("remote URL must be a full URL like http://192.168.20.132:9123, got %q", rawURL)
+		return nil, fmt.Errorf("remote URL must be a full URL like http://192.168.1.50:9123, got %q", rawURL)
 	}
 	token, err := resolveToken(rf, fileCfg, rawURL)
 	if err != nil {
@@ -259,7 +259,7 @@ func remoteSetCmd() *cobra.Command {
 			if urlFlag != "" {
 				u, err := url.Parse(urlFlag)
 				if err != nil || u.Scheme == "" || u.Host == "" {
-					return fmt.Errorf("--url must be a full URL like http://192.168.20.132:9123, got %q", urlFlag)
+					return fmt.Errorf("--url must be a full URL like http://192.168.1.50:9123, got %q", urlFlag)
 				}
 				cfg.Remote.URL = strings.TrimRight(urlFlag, "/")
 			}
@@ -286,7 +286,7 @@ func remoteSetCmd() *cobra.Command {
 			return printRemoteConfig(cfg)
 		},
 	}
-	c.Flags().StringVar(&urlFlag, "url", "", "collector origin, e.g. http://192.168.20.132:9123")
+	c.Flags().StringVar(&urlFlag, "url", "", "collector origin, e.g. http://192.168.1.50:9123")
 	c.Flags().StringVar(&tokenFile, "token-file", "", "path to a local copy of the collector's token")
 	c.Flags().StringVar(&sshTarget, "ssh-target", "", "user@host for ssh attach (default: URL hostname)")
 	return c
@@ -543,7 +543,7 @@ talk to loopback, remote clients use the --listen address.`,
 	// hides it from --help and prints a notice when used).
 	_ = c.Flags().MarkDeprecated("addr", "use --listen instead")
 	c.Flags().StringVar(&listen, "listen", "",
-		"bind a non-default address for remote mode, e.g. 0.0.0.0:9123 or 192.168.20.132:9123 "+
+		"bind a non-default address for remote mode, e.g. 0.0.0.0:9123 or 192.168.1.50:9123 "+
 			"(opt-in; overrides --addr; non-loopback also keeps a 127.0.0.1 listener for hooks; "+
 			"see docs/remote-mode.md / docs/security.md)")
 	c.AddCommand(serverStopCmd())
@@ -714,7 +714,7 @@ func trustCmd(rf *remoteFlags) *cobra.Command {
 so a brand-new folder doesn't stop at Claude Code's "do you trust this folder?" question.
 
   ccdash trust                          # list
-  ccdash trust ~/DevWorks/TakumaNakagame  # add
+  ccdash trust ~/src  # add
   ccdash trust --remove ~/old           # remove
 
 Same as "Trusted folders" on the TUI settings page.`,

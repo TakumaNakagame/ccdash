@@ -329,7 +329,7 @@ ccdash の介入度合いを「観察のみ」まで下げられます。
 - **Title generation timeout (s)**: `claude -p` のタイムアウト。デフォルト 180
 - **Auto-archive after (days)**: これより長く動きのないセッションを 1 日 1 回アーカイブ (§6「自動アーカイブ」)。デフォルト 7、`0` で無効
 - **Refresh interval (ms)**: TUI が DB を再クエリする間隔。デフォルト 1000
-- **Trusted folders**: 信頼するフォルダをカンマ区切りで指定 (`~/` 可。例: `~/DevWorks/TakumaNakagame`)。ccdash がこの配下 (サブフォルダ含む) で claude を起動するとき (`n`・ポータル・MCP の `start_session`)、先に `~/.claude.json` でそのフォルダを信頼済みにするので、新しいフォルダでも Claude Code の「このフォルダを信頼しますか？」で止まらない。空なら無効。シェルからは `ccdash trust` (一覧)・`ccdash trust <dir>` (追加)・`ccdash trust --remove <dir>` (削除) でも編集できる。なお、セッション登録前にダイアログで止まった起動は、TUI では「waiting for you」の行、ポータルでは「起動中（未登録）」の 要対応 (プッシュ通知あり)、MCP では `start_session` / `overview` の `waiting_on` として出る
+- **Trusted folders**: 信頼するフォルダをカンマ区切りで指定 (`~/` 可。例: `~/src`)。ccdash がこの配下 (サブフォルダ含む) で claude を起動するとき (`n`・ポータル・MCP の `start_session`)、先に `~/.claude.json` でそのフォルダを信頼済みにするので、新しいフォルダでも Claude Code の「このフォルダを信頼しますか？」で止まらない。空なら無効。シェルからは `ccdash trust` (一覧)・`ccdash trust <dir>` (追加)・`ccdash trust --remove <dir>` (削除) でも編集できる。なお、セッション登録前にダイアログで止まった起動は、TUI では「waiting for you」の行、ポータルでは「起動中（未登録）」の 要対応 (プッシュ通知あり)、MCP では `start_session` / `overview` の `waiting_on` として出る
 - **Session list size (%)**: セッション一覧が使う割合 (横並びなら幅、上下なら高さ)。残りが作業ペイン。デフォルト 50、範囲 10〜90。ダッシュボードの `<` / `>` で 5% ずつ調整できる
 - **Invert list scroll**: セッション一覧上のマウスホイールの向きを逆にする (ホイール下で選択が上へ)。右ペインは対象外。デフォルト OFF
 
@@ -397,10 +397,14 @@ curl -fsSL https://raw.githubusercontent.com/TakumaNakagame/ccdash/main/install.
 ## 12. アンインストール
 
 ```sh
-ccdash uninstall-hooks       # ~/.claude/settings.json から ccdash エントリを削除
-rm -rf ~/.local/state/ccdash # DB / token / ログを削除
-rm $(which ccdash)           # バイナリ削除
+ccdash uninstall-hooks                 # ~/.claude/settings.json から ccdash のエントリ (と statusLine の中継) を削除
+claude mcp remove --scope user ccdash  # `ccdash setup` が登録した MCP サーバーを外す
+ccdash hub leave                       # hub につないでいた場合
+rm -rf ~/.local/state/ccdash ~/.config/ccdash   # DB / token / ログ / クライアント設定を削除
+rm "$(command -v ccdash)"              # バイナリ削除
 ```
+
+`ccdash setup` は `~/.claude/settings.json` の `permissions.allow` に `mcp__ccdash__set_status` も足しています。害はありませんが、消したい場合は手で削除してください。
 
 `uninstall-hooks` は ccdash のエントリ (`X-Ccdash-Managed: true` マーカー付き、または `ccdash/hook.sh` を呼ぶもの) と `hook.sh` だけを削除。他の user hook は残ります。
 
@@ -551,6 +555,8 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | `schedule_restart` | 作業中のセッションが無くなったらコレクタを再起動するよう予約する (上の「作業が終わってから再起動」)。`cancel: true` で取り消し、`timeout_minutes` で待つ上限。呼んだセッション自身も、ターンが終わるまでは「作業中」として待たれる。`overview` の `restart_pending` に予約の状態が出る |
 | `resume_session` | 停止中のセッションを `claude --resume` で再開し (cwd はそのセッションのもの、ccdash がホスト)、ccdash に再び動いている状態で出す。アーカイブ済みなら解除する。まだ動いているもの (ccdash 内外とも) は拒否。最初の `prompt` / `permission_mode` を指定可。Attach が OFF なら使えない |
 
+hub で複数台をつないでいる場合は、`list_hosts` で届く端末が分かり、他のツールは `host` を受け取ります (18 章)。やることリストには専用のツールがあります (`list_tasks`・`add_task` など、17 章)。
+
 承認の判断はできません。`ccdash mcp --read-only` にすると上の 4 つ (参照系) と `set_status` だけになります。
 
 ### 状態申告 (`set_status`)
@@ -571,3 +577,60 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 呼び出し元のセッションは MCP サーバーの親プロセス (`~/.claude/sessions/<pid>.json`) から自動で特定します。`ccdash setup` は `set_status` を許可リストに入れるので、毎回の許可確認は出ません。設定後、動いている claude を再起動すると新しいルールが効きます。
 
 この端末がハブに参加している (`ccdash hub join` 済み) と、各セッションに `url` (`https://<ハブ>/s/<セッションID>`) が付きます。ブラウザやインストールしたアプリで開くと、ハブがそのセッションを持つ端末を探してチャット画面を開きます (未ログインならログイン後に移動)。「対応が必要なセッションを、開けるリンク付きで一覧にして」と頼めば、管理役の Claude がそのまま飛べるリストを作れます。ハブの URL は `--hub-url` で指定・上書きできます。ポータルのチャット内でこのリンクをタップすると、新しいタブを開かずにその場でそのチャットへ移動します (アプリでもアプリ内で移動)。
+
+## 17. タスク (やること)
+
+ccdash は、セッションの隣にやることリストを持っています。端末ごとに collector の DB に保存されます。**リストを更新するのは主に Claude です。** どのセッションでも「リリースノートを書くタスクを足して」「#11 のレビューが終わった」と言えば、Claude が MCP のツールでリストを更新し、進み具合をタスクのタイムラインに書いて、そのセッションをタスクに紐づけます。人がやるのは、並べ替え・完了のチェック・予定日を決めることくらいです。
+
+- **状態**: todo / doing / waiting / done / cancelled。削除はなく、done か cancelled のタスクはアーカイブできます (戻すこともできます)
+- **優先度** (1 すぐ 〜 4 いつか) と **予定** (取りかかる日) は別のものです。一覧は予定で分かれます: 今日 / 明日 / 今週中 / 来週 / 再来週以降 / 未定
+- **番号は変わりません**。「#11」はずっと同じタスクを指します。hub で複数台をつないでいる場合は、ホストの文字が付きます (「B#11」)
+- タスクには ccdash のプロジェクトを付けられ、リンク (URL・作業ディレクトリ・PR・Jira キー・Slack スレッド) を持てます
+
+**TUI**: 右端の列がタスクペインです (`w` で表示／非表示、`W` でフォーカス、`b` でセッション一覧をたたんで幅を空ける)。ペインの中では、`space` で完了／todo に戻す、`s` で todo → doing → waiting、`c` で取り消し、`1`〜`4` で予定を今日／明日／今週／来週 (`0` で未定)、`[` / `]` で並べ替え、`enter` で詳細とタイムライン、`y` で「#N について、」をコピー (そのタスクについて頼み始めるとき用)、`n` でタスク用のセッションを起動、`x` でアーカイブ。幅は設定の **Pane widths** で決まります。
+
+**ポータル**: どのページでも右側にタスクペインがあり、オンラインの全端末のタスクが並びます (チップで端末を絞れる)。ホームの「やること」には今日と明日の分が出ます。
+
+**CLI** (スクリプトから使うとき):
+
+```sh
+ccdash tasks list                      # 予定ごとの未完了タスク (--all で完了・アーカイブ済みも)
+ccdash tasks add "リリースノートを書く" --plan tomorrow --priority 2 --project docs
+ccdash tasks note 11 "レビュー依頼を出した"
+ccdash tasks status 11 done
+ccdash tasks plan 12 week --why "API 待ち"
+ccdash tasks show 11                   # リンクとタイムライン全部
+ccdash tasks md                        # Markdown で出力
+```
+
+**MCP ツール**: `list_tasks`、`get_task`、`add_task`、`update_task`、`set_task_status`、`plan_task`、`add_task_note`、`link_task`、`order_tasks`、`archive_task`。自動で回す処理 (たとえば、Slack / Jira / GitHub をそれぞれの MCP で読む定期実行の `claude -p`) には、`task_context` が未完了のタスクとリンクを渡し、`sync_tasks` (または標準入力から `ccdash tasks sync`) がその提案を取り込みます。取り込みでは人の編集が常に優先されます: タイトル・優先度・メモは上書きせず、今日人が決めた予定は動かさず、完了したタスクを開き直すこともありません。ccdash 自身が Slack・Jira・GitHub に書き込むことはありません。
+
+## 18. 1 つの Claude から複数台を扱う (マルチホスト)
+
+hub につないだ端末同士なら、ある端末の `ccdash mcp` から他の端末のセッションを見たり操作したりできます。たとえば、ノート PC の Claude に「サーバーで私の返事待ちになっているのは？」と聞けます。
+
+1. ポータルの 端末 → 他の端末に入らせたい端末 → 管理 → 他の端末へのアクセス で、オフ (既定) / 閲覧 / 操作 を選びます
+2. その端末の `ccdash mcp` (`ccdash setup` で登録したもの) に `list_hosts` が増え、読み取り系のツールが届く全端末を対象にします (行に `host` が付く)。操作系のツール (`start_session`・`set_project` など) は、`host` を指定しない限りこの端末に対して動きます
+
+セッションは **ref** で指します。ホストの文字と番号の組み合わせで (「A231」)、文字なしの「#231」はこの端末のセッションです。文字は hub が登録順に割り当て、端末メニューで変えられます。他の端末からは、承認・セッションへの入力・端末管理・設定の変更はできません。相手の端末自身のスイッチ (Attach・Approval blocking) もそのまま効きます。
+
+## 19. 別のアシスタントから Claude に仕事を渡す (`ccdash grok-mcp`)
+
+`ccdash grok-mcp` は、Claude Code の外のアシスタント向けの小さな HTTP の MCP サーバーです (MCP ゲートウェイ越しの Grok 向けに作りましたが、Streamable HTTP の MCP を話すクライアントなら何でも使えます)。決まった 1 つのディレクトリで Claude のセッションを **起動** し、その続きをやり取りできます。それ以外のセッションには触れません。
+
+| ツール | すること |
+|---|---|
+| `start_session` | `--cwd` で新しい claude を起動 (auto モード)。`--project` のプロジェクトに入る (既定 "Grok") |
+| `list_sessions` | 全セッション。ただし ref・タイトル・状態・1 行の状態メモだけ |
+| `read_session` | 自分が起動したセッションの会話 (テキストだけ) |
+| `send_message` | 自分が起動したセッションに続きを送る (止まっていれば再開する) |
+
+承認やダイアログには答えません。リクエストには `Authorization: Bearer <token>` が必要です。
+
+```sh
+openssl rand -hex 32 > ~/.config/ccdash/grok.token && chmod 600 ~/.config/ccdash/grok.token
+ccdash grok-mcp --cwd ~/src/inbox --token-file ~/.config/ccdash/grok.token \
+  --listen 127.0.0.1:9131 --allow 100.64.0.0/10    # 接続元 (既定: 制限なし)
+```
+
+MCP のエンドポイントは `http://<listen>/mcp` です。`--listen` はループバックかプライベートなネットワークに置き、`--allow` で接続元を絞ってください。その端末で collector が動いている必要があります。

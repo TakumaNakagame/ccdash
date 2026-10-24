@@ -32,7 +32,7 @@ type Remote struct {
 }
 
 // NewRemote builds a Remote store. baseURL is the collector's origin, e.g.
-// "http://192.168.20.132:9123" (no trailing slash required).
+// "http://192.168.1.50:9123" (no trailing slash required).
 func NewRemote(baseURL, token string) *Remote {
 	return &Remote{
 		baseURL: strings.TrimRight(baseURL, "/"),

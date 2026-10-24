@@ -330,7 +330,7 @@ func TestListenAddrs(t *testing.T) {
 		// Specific non-loopback IP: MUST add a loopback listener on the
 		// same port, or the host's own Claude Code hooks (hardcoded to
 		// 127.0.0.1) get connection-refused.
-		{"192.168.20.132:9123", []string{"192.168.20.132:9123", "127.0.0.1:9123"}},
+		{"192.168.1.50:9123", []string{"192.168.1.50:9123", "127.0.0.1:9123"}},
 		{"10.0.0.5:8080", []string{"10.0.0.5:8080", "127.0.0.1:8080"}},
 		// Non-IP hostname: conservative, add loopback too.
 		{"devbox:9123", []string{"devbox:9123", "127.0.0.1:9123"}},

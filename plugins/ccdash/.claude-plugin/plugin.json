@@ -1,0 +1,10 @@
+{
+  "name": "ccdash",
+  "description": "Set up, verify, troubleshoot and remove ccdash (TUI, local web portal, hub, MCP) with Claude's help",
+  "author": {
+    "name": "kameneko"
+  },
+  "homepage": "https://github.com/TakumaNakagame/ccdash",
+  "repository": "https://github.com/TakumaNakagame/ccdash",
+  "license": "MIT"
+}
