@@ -41,7 +41,7 @@ type StartRequest struct {
 	Project string `json:"project,omitempty"`
 	// PermissionMode is "", manual, acceptEdits, auto or plan.
 	PermissionMode string `json:"permissionMode,omitempty"`
-	// Origin marks who started it for whom ("grok" = ccdash grok-mcp);
+	// Origin marks who started it for whom (the --origin of ccdash handoff-mcp, e.g. "grok");
 	// the collector stores it with the session (model.Session.Origin).
 	Origin string `json:"origin,omitempty"`
 	// SessionID + ResumeID (both the session's id) resume an existing

@@ -1,10 +1,11 @@
-// Package grokmcp is `ccdash grok-mcp`: a small MCP server over Streamable
-// HTTP for an outside assistant (Grok, through the operator's MCP gateway)
-// that may hand work to Claude but must not drive the operator's own
-// sessions. Its four tools:
+// Package handoffmcp is `ccdash handoff-mcp` (formerly `grok-mcp`): a small
+// MCP server over Streamable HTTP for an outside caller (an assistant through
+// the operator's MCP gateway, or a bot) that may hand work to Claude but must
+// not drive the operator's own sessions. Its four tools:
 //
 //   - start_session: a new claude in one fixed directory (the flag, never an
-//     argument), in auto mode, marked origin "grok" (model.Session.Origin)
+//     argument), in auto mode, marked with the instance's origin
+//     (Config.Origin → model.Session.Origin)
 //   - list_sessions: every session, but only ref / title / status / the
 //     declared one-line note
 //   - read_session: the conversation (user and assistant text, no tool
@@ -18,7 +19,7 @@
 //
 // It is stateless: every POST is one JSON-RPC message, answered as
 // application/json (the Streamable HTTP transport without a session or SSE).
-package grokmcp
+package handoffmcp
 
 import (
 	"bytes"
@@ -37,8 +38,9 @@ import (
 	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
 
-// Origin is what the sessions it starts are marked with.
-const Origin = "grok"
+// DefaultOrigin marks the sessions it starts unless Config.Origin says otherwise.
+// Each instance sees only the sessions carrying its own origin.
+const DefaultOrigin = "handoff"
 
 // maxText caps a request / message (runes).
 const maxText = 8000
@@ -48,6 +50,10 @@ type Config struct {
 	Cwd     string // where start_session starts claude (absolute)
 	Project string // ccdash project the new sessions join ("" = none)
 	HubURL  string // hub origin for session links ("" = no links)
+	Origin  string // marks the sessions it starts ("" = DefaultOrigin)
+	// StartHint is appended to start_session's description: advice for this
+	// caller on writing the request (the grok-mcp alias: speech-recognition fixes).
+	StartHint string
 }
 
 // Server answers the tools over a store.
@@ -64,13 +70,15 @@ type Server struct {
 // New returns a server over st.
 func New(st store.Store, cfg Config, version string) *Server {
 	cfg.HubURL = strings.TrimRight(cfg.HubURL, "/")
+	if cfg.Origin == "" {
+		cfg.Origin = DefaultOrigin
+	}
 	return &Server{st: st, cfg: cfg, version: version, now: time.Now, startWait: 20 * time.Second, tick: time.Second}
 }
 
 const instructions = `ccdash runs Claude Code sessions on the operator's work machine.
 Hand Claude a piece of work with start_session (one request in plain words; Claude works in auto
-mode in a fixed inbox directory and opens a pull request for the operator to merge — it never
-merges or applies anything itself). list_sessions shows every session briefly; read_session
+mode in a fixed inbox directory, whose own instructions say how far it goes). list_sessions shows every session briefly; read_session
 shows the conversation of a session you started; send_message adds to a session you started
 (a follow-up, a correction, "how is it going?"). Sessions you did not start are the
 operator's: you can see their title and status only.`
@@ -81,11 +89,9 @@ func (s *Server) tools() []map[string]any {
 		{
 			"name": "start_session",
 			"description": "Start a new Claude Code session (auto mode) on the operator's work machine with this request as its first message. " +
-				"Write the whole request in plain words: what to look into or change, and what you already know. The operator usually speaks to you, " +
-				"so rewrite what they said as clear written text first: fix speech-recognition mistakes (names of tools, repositories and services), " +
-				"and if a word is still unclear, ask the operator before starting. Claude proceeds on its own, " +
-				"chooses the recommended option instead of asking, and ends with a pull request for the operator to review and merge. " +
-				"Returns the session's ref; follow it with read_session.",
+				"Write the whole request in plain words: what to look into or change, and what you already know. " + s.cfg.StartHint +
+				"Claude proceeds on its own; how far it goes is set by the inbox directory's instructions. " +
+				"Returns the session's ref (and a link when the machine is joined to a hub); follow it with read_session.",
 			"inputSchema": object(map[string]any{
 				"request": map[string]any{"type": "string", "description": "the request, in plain words (no leading / ! # or -)"},
 			}, "request"),
@@ -205,7 +211,7 @@ func (s *Server) startSession(ctx context.Context, request string) (any, error) 
 		known[x.SessionID] = true
 	}
 	key, err := s.st.StartSession(ctx, store.StartRequest{
-		Cwd: s.cfg.Cwd, Prompt: prompt, Project: s.cfg.Project, PermissionMode: "auto", Origin: Origin,
+		Cwd: s.cfg.Cwd, Prompt: prompt, Project: s.cfg.Project, PermissionMode: "auto", Origin: s.cfg.Origin,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not start the session (is the ccdash collector running with sessions allowed?): %w", err)
@@ -216,7 +222,7 @@ func (s *Server) startSession(ctx context.Context, request string) (any, error) 
 	for {
 		if ss, err := s.st.ListSessions(ctx, false); err == nil {
 			for _, x := range ss {
-				if !known[x.SessionID] && x.Origin == Origin && x.Num > 0 {
+				if !known[x.SessionID] && x.Origin == s.cfg.Origin && x.Num > 0 {
 					return map[string]any{"started": s.view(x, true), "note": "Claude is working on it; check with read_session in a minute or two."}, nil
 				}
 			}
@@ -322,7 +328,7 @@ func (s *Server) listSessions(ctx context.Context, mineOnly bool, limit int) (an
 	sort.SliceStable(ss, func(i, j int) bool { return activity(ss[i]).After(activity(ss[j])) })
 	rows := []row{}
 	for _, x := range ss {
-		mine := x.Origin == Origin
+		mine := x.Origin == s.cfg.Origin
 		if mineOnly && !mine {
 			continue
 		}
@@ -357,7 +363,7 @@ func (s *Server) own(ctx context.Context, ref string) (model.Session, error) {
 			if !refMatches(x, ref) {
 				continue
 			}
-			if x.Origin != Origin {
+			if x.Origin != s.cfg.Origin {
 				return model.Session{}, fmt.Errorf("%s is not a session you started; only its title and status are visible (list_sessions)", ref)
 			}
 			return x, nil

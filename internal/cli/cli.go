@@ -132,7 +132,7 @@ spawns a collector — everything goes over HTTP.`,
 	root.AddCommand(updateCmd(version))
 	root.AddCommand(restartCmd(rf))
 	root.AddCommand(mcpCmd(rf, version))
-	root.AddCommand(grokMCPCmd(rf, version))
+	root.AddCommand(handoffMCPCmd(rf, version), grokMCPCmd(rf, version))
 	return root
 }
 

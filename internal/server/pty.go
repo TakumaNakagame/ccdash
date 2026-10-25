@@ -103,7 +103,7 @@ type ptyStartReq struct {
 	// Project puts the new session into this project once its session ID
 	// is known (applyPTYProjects).
 	Project string `json:"project"`
-	// Origin marks who started it for whom ("grok" = ccdash grok-mcp),
+	// Origin marks who started it for whom (e.g. "grok" = ccdash handoff-mcp for Grok),
 	// stored with the session the same way (model.Session.Origin).
 	Origin string `json:"origin"`
 }

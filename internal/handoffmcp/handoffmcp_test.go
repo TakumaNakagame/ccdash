@@ -1,4 +1,4 @@
-package grokmcp
+package handoffmcp
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 // TestMain keeps the tests off the real state dir (a joined machine's
 // hub.json would give the rows a letter).
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "ccdash-grok-test")
+	dir, err := os.MkdirTemp("", "ccdash-handoff-test")
 	if err != nil {
 		panic(err)
 	}
@@ -86,12 +86,12 @@ func setup(t *testing.T) (*Server, *fake) {
 			t.Fatal(err)
 		}
 	}
-	if err := d.SetOrigin(ctx, "own", Origin); err != nil {
+	if err := d.SetOrigin(ctx, "own", "grok"); err != nil {
 		t.Fatal(err)
 	}
 	_ = d.SetWait(ctx, "ops", model.WaitReport, "PR #3 merged\nall good")
 	f := &fake{Store: store.NewLocal(d), d: d, inputs: map[string][]store.Input{}, hosted: []string{"own", "ops"}}
-	s := New(f, Config{Cwd: "/home/u/inbox", Project: "Grok"}, "test")
+	s := New(f, Config{Cwd: "/home/u/inbox", Project: "Grok", Origin: "grok"}, "test")
 	s.startWait, s.tick = 2*time.Second, 10*time.Millisecond
 	return s, f
 }
@@ -139,6 +139,27 @@ func TestReadOnlyOwn(t *testing.T) {
 		if _, err := call(t, s, "read_session", `{"session":"`+ref+`"}`); err == nil || !strings.Contains(err.Error(), "not a session you started") {
 			t.Errorf("read %s: %v", ref, err)
 		}
+	}
+}
+
+// TestOtherOriginIsNotOwn: an instance with another origin (one per caller)
+// cannot read or message the sessions of the "grok" one, and lists none as its own.
+func TestOtherOriginIsNotOwn(t *testing.T) {
+	g, f := setup(t)
+	s := New(f, Config{Cwd: "/home/u/inbox"}, "test")
+	s.startWait, s.tick = g.startWait, g.tick
+	if s.cfg.Origin != DefaultOrigin {
+		t.Fatalf("origin = %q", s.cfg.Origin)
+	}
+	if _, err := call(t, s, "read_session", `{"session":"own"}`); err == nil || !strings.Contains(err.Error(), "not a session you started") {
+		t.Errorf("read of another origin's session: %v", err)
+	}
+	if _, err := call(t, s, "send_message", `{"session":"own","text":"hi"}`); err == nil {
+		t.Error("message to another origin's session went through")
+	}
+	out, err := call(t, s, "list_sessions", `{"started_by_me":true}`)
+	if err != nil || strings.Contains(out, `"you"`) {
+		t.Errorf("list started_by_me = %s, %v", out, err)
 	}
 }
 
@@ -191,7 +212,7 @@ func TestStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := f.starts[0]
-	if r.Cwd != "/home/u/inbox" || r.PermissionMode != "auto" || r.Origin != Origin || r.Project != "Grok" || r.Prompt != "調べて PR にして" {
+	if r.Cwd != "/home/u/inbox" || r.PermissionMode != "auto" || r.Origin != "grok" || r.Project != "Grok" || r.Prompt != "調べて PR にして" {
 		t.Errorf("start = %+v", r)
 	}
 	if !strings.Contains(out, `"#3"`) {

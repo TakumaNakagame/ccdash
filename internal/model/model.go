@@ -78,8 +78,9 @@ type Session struct {
 	WaitNote string    `json:"wait_note,omitempty"`
 	WaitAt   time.Time `json:"wait_at,omitzero"`
 	// Origin is who started the session through ccdash for someone else:
-	// "grok" = the Grok MCP (ccdash grok-mcp), which may read and drive
-	// only the sessions it started. "" for everything else. Set once.
+	// the --origin of a `ccdash handoff-mcp` ("grok" for Grok, "handoff" by
+	// default), which may read and drive only the sessions carrying its own
+	// origin. "" for everything else. Set once.
 	Origin string `json:"origin,omitempty"`
 	// LastActivity is when the session last did anything (newest
 	// transcript entry, or a hook); SeenAt when the operator last looked
