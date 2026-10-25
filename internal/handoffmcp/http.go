@@ -1,4 +1,4 @@
-package grokmcp
+package handoffmcp
 
 import (
 	"crypto/sha256"
@@ -97,7 +97,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, resp)
 	if req.Method == "tools/call" {
-		log.Printf("grok-mcp: %s from %s in %s", callSummary(req.Params, result), r.RemoteAddr, time.Since(start).Round(time.Millisecond))
+		log.Printf("handoff-mcp: %s from %s in %s", callSummary(req.Params, result), r.RemoteAddr, time.Since(start).Round(time.Millisecond))
 	}
 }
 
@@ -115,7 +115,7 @@ func (h *Handler) handle(r *http.Request, req request) (any, *rpcError) {
 		return map[string]any{
 			"protocolVersion": v,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "ccdash-grok", "version": h.srv.version},
+			"serverInfo":      map[string]any{"name": "ccdash-handoff", "version": h.srv.version},
 			"instructions":    instructions,
 		}, nil
 	case "ping":

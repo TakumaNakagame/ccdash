@@ -927,30 +927,39 @@ in registration order and can be changed in the device menu. Peers never get
 approvals, typing into a session, device management or settings — and each
 target machine's own switches (Attach, Approval blocking) still apply.
 
-## 19. Letting another assistant hand work to Claude (`ccdash grok-mcp`)
+## 19. Letting another assistant or a bot hand work to Claude (`ccdash handoff-mcp`)
 
-`ccdash grok-mcp` is a small MCP server over HTTP for an assistant outside
-Claude Code (it was built for Grok behind an MCP gateway; any client that
-speaks Streamable HTTP MCP works). It can **start** Claude sessions in one
-fixed directory and follow up on them, but it can't touch your other
-sessions:
+`ccdash handoff-mcp` is a small MCP server over HTTP for a caller outside
+Claude Code: an assistant behind an MCP gateway (it was built for Grok), or
+a bot of your own; any client that speaks Streamable HTTP MCP works. It can
+**start** Claude sessions in one fixed directory and follow up on them, but
+it can't touch your other sessions:
 
 | Tool | What it does |
 |---|---|
-| `start_session` | a new claude in `--cwd` (auto permission mode), in the `--project` project (default "Grok") |
+| `start_session` | a new claude in `--cwd` (auto permission mode), marked with `--origin`, in the `--project` project (default: none) |
 | `list_sessions` | every session, but only ref / title / status / the one-line status note |
-| `read_session` | the conversation (text only) of a session it started |
-| `send_message` | more text for a session it started (resumes it when stopped) |
+| `read_session` | the conversation (text only) of a session this server started |
+| `send_message` | more text for a session this server started (resumes it when stopped) |
 
-It never answers approvals or dialogs. Every request needs
-`Authorization: Bearer <token>`.
+"Started by this server" means carrying its `--origin` (default `handoff`).
+Run one instance per caller with its own origin, token and directory; they
+never see each other's conversations. How far Claude goes (look only, a pull
+request, a merge) is up to the directory's own `CLAUDE.md` and
+`.claude/settings.json`. It never answers approvals or dialogs. Every request
+needs `Authorization: Bearer <token>`.
 
 ```sh
-openssl rand -hex 32 > ~/.config/ccdash/grok.token && chmod 600 ~/.config/ccdash/grok.token
-ccdash grok-mcp --cwd ~/src/inbox --token-file ~/.config/ccdash/grok.token \
+openssl rand -hex 32 > ~/.config/ccdash/alerts.token && chmod 600 ~/.config/ccdash/alerts.token
+ccdash handoff-mcp --cwd ~/src/inbox --origin alerts --project Alerts \
+  --token-file ~/.config/ccdash/alerts.token \
   --listen 127.0.0.1:9131 --allow 100.64.0.0/10    # client addresses (default: any)
 ```
 
 The MCP endpoint is `http://<listen>/mcp`. Keep `--listen` on loopback or
 a private network and narrow `--allow`; a collector must be running on the
 machine.
+
+`ccdash grok-mcp` is the old name, kept as a hidden alias: the same server
+with `--origin grok --project Grok` and advice to Grok on fixing
+speech-recognition mistakes in the request.

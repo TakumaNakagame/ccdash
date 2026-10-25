@@ -615,23 +615,26 @@ hub につないだ端末同士なら、ある端末の `ccdash mcp` から他�
 
 セッションは **ref** で指します。ホストの文字と番号の組み合わせで (「A231」)、文字なしの「#231」はこの端末のセッションです。文字は hub が登録順に割り当て、端末メニューで変えられます。他の端末からは、承認・セッションへの入力・端末管理・設定の変更はできません。相手の端末自身のスイッチ (Attach・Approval blocking) もそのまま効きます。
 
-## 19. 別のアシスタントから Claude に仕事を渡す (`ccdash grok-mcp`)
+## 19. 別のアシスタントや Bot から Claude に仕事を渡す (`ccdash handoff-mcp`)
 
-`ccdash grok-mcp` は、Claude Code の外のアシスタント向けの小さな HTTP の MCP サーバーです (MCP ゲートウェイ越しの Grok 向けに作りましたが、Streamable HTTP の MCP を話すクライアントなら何でも使えます)。決まった 1 つのディレクトリで Claude のセッションを **起動** し、その続きをやり取りできます。それ以外のセッションには触れません。
+`ccdash handoff-mcp` は、Claude Code の外から呼ぶ人向けの小さな HTTP の MCP サーバーです (MCP ゲートウェイ越しのアシスタント (Grok 向けに作りました) や自作の Bot など、Streamable HTTP の MCP を話すクライアントなら何でも使えます)。決まった 1 つのディレクトリで Claude のセッションを **起動** し、その続きをやり取りできます。それ以外のセッションには触れません。
 
 | ツール | すること |
 |---|---|
-| `start_session` | `--cwd` で新しい claude を起動 (auto モード)。`--project` のプロジェクトに入る (既定 "Grok") |
+| `start_session` | `--cwd` で新しい claude を起動 (auto モード)。`--origin` の印を付け、`--project` のプロジェクトに入る (既定はなし) |
 | `list_sessions` | 全セッション。ただし ref・タイトル・状態・1 行の状態メモだけ |
-| `read_session` | 自分が起動したセッションの会話 (テキストだけ) |
-| `send_message` | 自分が起動したセッションに続きを送る (止まっていれば再開する) |
+| `read_session` | このサーバーが起動したセッションの会話 (テキストだけ) |
+| `send_message` | このサーバーが起動したセッションに続きを送る (止まっていれば再開する) |
 
-承認やダイアログには答えません。リクエストには `Authorization: Bearer <token>` が必要です。
+「このサーバーが起動した」は、`--origin` (既定 `handoff`) の印が付いていることです。呼ぶ相手ごとに origin・トークン・ディレクトリを分けて 1 つずつ動かせば、互いの会話は見えません。Claude がどこまでやるか (調べるだけ・PR まで・マージまで) は、そのディレクトリの `CLAUDE.md` と `.claude/settings.json` で決めます。承認やダイアログには答えません。リクエストには `Authorization: Bearer <token>` が必要です。
 
 ```sh
-openssl rand -hex 32 > ~/.config/ccdash/grok.token && chmod 600 ~/.config/ccdash/grok.token
-ccdash grok-mcp --cwd ~/src/inbox --token-file ~/.config/ccdash/grok.token \
+openssl rand -hex 32 > ~/.config/ccdash/alerts.token && chmod 600 ~/.config/ccdash/alerts.token
+ccdash handoff-mcp --cwd ~/src/inbox --origin alerts --project Alerts \
+  --token-file ~/.config/ccdash/alerts.token \
   --listen 127.0.0.1:9131 --allow 100.64.0.0/10    # 接続元 (既定: 制限なし)
 ```
 
 MCP のエンドポイントは `http://<listen>/mcp` です。`--listen` はループバックかプライベートなネットワークに置き、`--allow` で接続元を絞ってください。その端末で collector が動いている必要があります。
+
+`ccdash grok-mcp` は古い名前で、隠しコマンドとして残しています。中身は同じサーバーで、`--origin grok --project Grok` と、依頼文の音声認識の誤りを直すよう Grok に伝える一文が付きます。

@@ -873,7 +873,7 @@ func (d *DB) SetGrid(ctx context.Context, sessionID string, on bool) error {
 }
 
 // SetOrigin records who started the session ("grok" = the Grok MCP,
-// ccdash grok-mcp). The first origin sticks: a later call never moves a
+// ccdash handoff-mcp). The first origin sticks: a later call never moves a
 // session into or out of what it was started as.
 func (d *DB) SetOrigin(ctx context.Context, sessionID, origin string) error {
 	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET origin = ? WHERE session_id = ? AND COALESCE(origin,'') = ''`, origin, sessionID)
