@@ -1,6 +1,6 @@
 # Container image for the hub (`ccdash hub serve`). Devices keep using the
 # release binaries; only the portal runs in a container.
-FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
