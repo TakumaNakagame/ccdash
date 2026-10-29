@@ -160,7 +160,10 @@ input[type=text], input:not([type]) {
 /* Second line of a session row: badges (host / NEW / live / 作業待ち), the
    state, then the model / context / cost. The badges are compact and never
    cut; on a narrow pane the model drops under them instead. */
-.item.srow .sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; white-space: normal; }
+.item.srow .sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; white-space: normal; margin-top: 3px; }
+/* A two-line row gets more air above and below (phone too: this beats the
+   12px of the edge-to-edge list); the sides keep the separators' inset. */
+.list > .item.srow { padding-top: 14px; padding-bottom: 14px; }
 .item.srow .sub .stat { margin-right: 0; }
 .item.srow .sub-text.usage { font-variant-numeric: tabular-nums; }
 .item.srow .sub-text { flex: 1 1 8em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
