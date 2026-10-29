@@ -158,10 +158,11 @@ input[type=text], input:not([type]) {
 .item.srow > .grow { flex: 1 1 9em; }
 .srow-tail { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 /* Second line of a session row: badges (host / NEW / live / 作業待ち), the
-   state, then the path etc. The badges are compact and never cut; on a
-   narrow pane the text drops under them instead. */
+   state, then the model / context / cost. The badges are compact and never
+   cut; on a narrow pane the model drops under them instead. */
 .item.srow .sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; white-space: normal; }
 .item.srow .sub .stat { margin-right: 0; }
+.item.srow .sub-text.usage { font-variant-numeric: tabular-nums; }
 .item.srow .sub-text { flex: 1 1 8em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badges { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .badges .chip { line-height: 16px; padding: 0 5px; }
