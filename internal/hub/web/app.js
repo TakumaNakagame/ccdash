@@ -1589,7 +1589,7 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, host
   }
   const proj = s.project ? `;--proj:${projectColorOf(s.project, s.project_color)}` : "";
   return h("div", { class: "item srow" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : "") + (s.status === "active" ? " working" : "") +
-    (s.unseen ? " unseen" : "") + (justNew(id, s) ? " just-new" : ""), "data-sid": s.session_id, "data-dev": id,
+    (s.unseen ? " unseen" : "") + (justNew(id, s) ? " just-new" : ""), "data-sid": s.session_id, "data-dev": id, title: sub || null,
     style: `--sess:${sessionColorOf(s)}${proj}`, onclick: (e) => {
     if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
     if (e.currentTarget.dataset.longpressed) { delete e.currentTarget.dataset.longpressed; return; }
@@ -1612,10 +1612,10 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, host
     h("span", { class: "num" }, sref(s, id)),
     h("div", { class: "grow" },
       h("div", { class: titleClass("title", s), title: s.title_status === "running" ? TITLING_TIP : null }, s.favorite ? h("span", { class: "pin", title: T("ピン留め") }, icon("pin")) : null, sessionTitle(s)),
-      // The tags ride at the head of the second line as small badges, so
-      // the title gets the whole first line up to the grid mark.
-      h("div", { class: "sub" }, chips.length ? h("span", { class: "badges" }, ...chips) : null, statusTag(s.status), sub ? h("span", { class: "sub-text" }, sub) : null),
-      brief ? h("div", { class: "sub meta" }, usageLine(brief)) : null),
+      // Two lines only: the title, then badges · state · model. The details
+      // (reason, path, branch, when) are the row's tooltip.
+      h("div", { class: "sub" }, chips.length ? h("span", { class: "badges" }, ...chips) : null, statusTag(s.status),
+        brief ? h("span", { class: "sub-text usage" }, usageLine(brief)) : null)),
     h("span", { class: "srow-tail" }, mark),
     s.status === "active" ? beamEl() : null);
 }
