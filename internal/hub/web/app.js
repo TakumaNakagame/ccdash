@@ -1612,9 +1612,11 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, host
     h("span", { class: "num" }, sref(s, id)),
     h("div", { class: "grow" },
       h("div", { class: titleClass("title", s), title: s.title_status === "running" ? TITLING_TIP : null }, s.favorite ? h("span", { class: "pin", title: T("ピン留め") }, icon("pin")) : null, sessionTitle(s)),
-      h("div", { class: "sub" }, statusTag(s.status), sub),
+      // The tags ride at the head of the second line as small badges, so
+      // the title gets the whole first line up to the grid mark.
+      h("div", { class: "sub" }, chips.length ? h("span", { class: "badges" }, ...chips) : null, statusTag(s.status), sub ? h("span", { class: "sub-text" }, sub) : null),
       brief ? h("div", { class: "sub meta" }, usageLine(brief)) : null),
-    h("span", { class: "srow-tail" }, ...chips, mark),
+    h("span", { class: "srow-tail" }, mark),
     s.status === "active" ? beamEl() : null);
 }
 
