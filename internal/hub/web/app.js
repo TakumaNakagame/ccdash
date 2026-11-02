@@ -3,6 +3,7 @@
 //   #/d/<dev>               one device: approvals, sessions, new session
 //   #/d/<dev>/s/<session>   a session: live terminal if hosted, else transcript + resume
 //   #/d/<dev>/p/<ptyKey>    a fresh spawn's terminal (before discovery names it)
+//   #/intake?url=…          quick request: a page (URL, screenshot) becomes a new session
 "use strict";
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -436,6 +437,7 @@ function route() {
   mainMount = view;
   if (parts[0] === "grid") return gridPage();
   if (parts[0] === "tasks") return tasksPage(parts[1]);
+  if (parts[0].split("?")[0] === "intake") return intakePage();
   if (parts[0] === "s") return devicePage();
   if (inDevice) {
     if (parts[2] === "s" && parts[3] && parts[4] === "diff") return diffPage(parts[1], parts[3]);
@@ -5182,6 +5184,279 @@ function tasksPage(only) {
   taskList(list, { only: only || "" });
 }
 
+// ---------- quick request (#/intake) ----------
+//
+// A page the operator was looking at becomes a new session: its URL, title
+// and selected text (from the bookmarklet or the phone's share sheet), a
+// screenshot (pasted, picked, shared or grabbed with getDisplayMedia) and a
+// line of request. /api/intake holds where each URL goes (routes: the
+// longest prefix wins) and a footer appended to every request. Screenshots
+// go to the chosen host's upload dir (/hub/upload) like chat attachments,
+// so they never leave the operator's machines.
+
+// The entry points arrive as a query (/?intake=1&url=…) rather than a hash:
+// a login round trip keeps the query (next=) and drops the fragment.
+// Share targets: GET (title / text / url) and POST with files, which the
+// service worker parks in Cache Storage under ?share=<id>.
+function intakeFromQuery() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has("intake") && !q.has("share")) return;
+  const out = new URLSearchParams();
+  let url = q.get("url") || "", text = q.get("text") || "";
+  // Android's share sheet often puts the link in text, not url.
+  if (!url) {
+    const m = text.match(/https?:\/\/\S+/);
+    if (m) { url = m[0]; text = text.replace(m[0], "").trim(); }
+  }
+  for (const [k, v] of [["url", url], ["title", q.get("title") || ""], ["sel", q.get("sel") || text], ["share", q.get("share") || ""]]) if (v) out.set(k, v);
+  history.replaceState(null, "", "/#/intake?" + out);
+}
+
+// intakeRoute picks the route for url: the longest match that prefixes it.
+function intakeRoute(routes, url) {
+  let best = null;
+  for (const r of routes || []) if (url && url.startsWith(r.match) && (!best || r.match.length > best.match.length)) best = r;
+  return best;
+}
+
+// intakeMatch is what "remember" saves for url: its origin and first path
+// segment (https://app.example/admin/…), or the origin alone.
+function intakeMatch(url) {
+  try {
+    const u = new URL(url);
+    const seg = u.pathname.split("/").filter(Boolean)[0];
+    return u.origin + "/" + (seg && u.pathname.split("/").length > 2 ? seg + "/" : "");
+  } catch { return ""; }
+}
+
+// intakePrompt is the first message of the new session.
+function intakePrompt({ url, title, sel, text, paths, footer }) {
+  const lines = [T("【クイック依頼】{0}", title || url || "")];
+  if (url) lines.push(T("画面の URL: {0}", url));
+  if (sel) lines.push("", T("選択していた文字:"), ...sel.split("\n").map((l) => "> " + l));
+  if (paths.length) lines.push("", T("添付した画面（Read で開いて見ること）:"), ...paths.map((p) => "- " + p));
+  lines.push("", T("依頼:"), text);
+  if (footer?.trim()) lines.push("", footer.trim());
+  return lines.join("\n");
+}
+
+// grabScreen asks the browser for one frame of a tab / window / screen the
+// operator picks (desktop browsers; phones have no getDisplayMedia).
+async function grabScreen() {
+  const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false, selfBrowserSurface: "exclude", surfaceSwitching: "exclude" });
+  try {
+    const v = document.createElement("video");
+    v.muted = true;
+    v.srcObject = stream;
+    await v.play();
+    await new Promise((r) => setTimeout(r, 250)); // the first frame can be black
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0);
+    return await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error("encode failed"))), "image/png"));
+  } finally { stream.getTracks().forEach((t) => t.stop()); }
+}
+
+// sharedFiles takes the files the service worker parked for a share.
+async function sharedFiles(id) {
+  if (!id || !("caches" in window)) return [];
+  const out = [];
+  try {
+    const cache = await caches.open("ccdash-share");
+    for (const req of await cache.keys()) {
+      if (!new URL(req.url).pathname.startsWith(`/__share/${id}/`)) continue;
+      const r = await cache.match(req);
+      if (r) out.push(new File([await r.blob()], decodeURIComponent(r.headers.get("X-Filename") || "shared"), { type: r.headers.get("Content-Type") || "" }));
+      await cache.delete(req);
+    }
+  } catch {}
+  return out;
+}
+
+async function intakePage() {
+  crumbs({ text: T("ホーム"), href: "#/" }, { text: T("クイック依頼") });
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const bucket = cleanup;
+  const page = h("div", { class: "page intake" });
+  view.append(page);
+  const [ds, cfg0] = await Promise.all([onlineDevices().catch(() => []), api("/api/intake").catch(() => ({ routes: [], footer: "" }))]);
+  let cfg = cfg0;
+
+  const url = h("input", { class: "grow mono", value: q.get("url") || "", placeholder: "https://…", "aria-label": T("画面の URL") });
+  const title = h("input", { class: "grow", value: q.get("title") || "", placeholder: T("画面の名前（任意）"), "aria-label": T("画面の名前") });
+  const sel = h("textarea", { rows: 2, class: "grow", placeholder: T("選択していた文字（任意）"), "aria-label": T("選択していた文字") });
+  sel.value = q.get("sel") || "";
+  const text = h("textarea", { rows: 4, class: "grow", placeholder: T("何をしてほしいか（例: この一覧に並べ替えを足して）"), "aria-label": T("依頼") });
+
+  // Attachments, as in the chat composer: picked, pasted or dropped.
+  let attachments = [];
+  let previewBox = null, paintPreview = () => {};
+  const thumbs = h("div", { class: "thumbs" });
+  const renderThumbs = () => thumbs.replaceChildren(...attachments.map((a, i) => h("div", { class: "thumb", title: a.name },
+    h("img", { src: a.url, alt: "" }),
+    h("button", { type: "button", title: T("外す"), "aria-label": T("外す"), onclick: () => { URL.revokeObjectURL(a.url); attachments.splice(i, 1); renderThumbs(); } }, icon("x")))));
+  const addFiles = async (files) => {
+    for (const f of files) {
+      if (!f.type.startsWith("image/") || f.type === "image/svg+xml") { toast(T("{0} は画像ではないので外しました", f.name || T("ファイル"))); continue; }
+      try {
+        const blob = await prepareImage(f);
+        attachments.push({ blob, url: URL.createObjectURL(blob), name: f.name || "screen.png" });
+      } catch (e) { toast(T("画像を読み込めませんでした: ") + e.message); }
+    }
+    renderThumbs();
+    if (previewBox?.open) paintPreview();
+  };
+  bucket.push(() => attachments.forEach((a) => URL.revokeObjectURL(a.url)));
+  const fileInput = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
+  fileInput.addEventListener("change", () => { addFiles([...fileInput.files]); fileInput.value = ""; });
+  const onPaste = (e) => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (files.length) { e.preventDefault(); addFiles(files); }
+  };
+  document.addEventListener("paste", onPaste);
+  bucket.push(() => document.removeEventListener("paste", onPaste));
+  page.addEventListener("dragover", (e) => e.preventDefault());
+  page.addEventListener("drop", (e) => { e.preventDefault(); addFiles([...(e.dataTransfer?.files || [])]); });
+  const grabBtn = navigator.mediaDevices?.getDisplayMedia && !matchMedia("(pointer: coarse)").matches
+    ? h("button", { type: "button", class: "btn", title: T("開いているタブやウィンドウを 1 枚撮る"), onclick: async () => {
+      try { await addFiles([new File([await grabScreen()], "screen.png", { type: "image/png" })]); }
+      catch (e) { if (e.name !== "NotAllowedError") toast(T("画面を撮れませんでした: ") + e.message); }
+    } }, icon("image"), T("画面を撮る")) : null;
+  const pickBtn = h("button", { type: "button", class: "btn", onclick: () => fileInput.click() }, icon("clip"), T("画像を選ぶ"));
+  addFiles(await sharedFiles(q.get("share")));
+
+  // Where it goes: the route for the URL, else the last host's default dir.
+  const hostSel = h("select", { class: "grow mode", "aria-label": T("起動するホスト") },
+    ...ds.map((d) => h("option", { value: d.id, disabled: !d.online }, d.name + (d.online ? "" : T(" — オフライン")))));
+  const cwd = h("input", { class: "grow mono", "aria-label": T("ディレクトリ") });
+  const project = h("input", { class: "grow", placeholder: T("プロジェクト（任意）"), "aria-label": T("プロジェクト") });
+  const mode = h("select", { class: "mode", "aria-label": T("権限モード") },
+    h("option", { value: "" }, T("権限モード: 既定")),
+    h("option", { value: "manual" }, T("manual（毎回確認）")),
+    h("option", { value: "acceptEdits" }, T("acceptEdits（編集は自動許可）")),
+    h("option", { value: "auto" }, T("auto（自動判断）")),
+    h("option", { value: "plan" }, T("plan（計画だけ立てる）")));
+  const routeNote = h("p", { class: "muted small" });
+  const remember = h("input", { type: "checkbox" });
+  const rememberRow = h("label", { class: "row small" }, remember, h("span", {}, ""));
+  let routed = null;
+  const applyRoute = async () => {
+    routed = intakeRoute(cfg.routes, url.value.trim());
+    const r = routed;
+    if (r && ds.some((d) => d.id === r.host)) {
+      hostSel.value = r.host;
+      cwd.value = r.cwd;
+      project.value = r.project || "";
+      mode.value = r.mode || "";
+      routeNote.textContent = T("行き先の表の「{0}」に合いました", r.match);
+    } else {
+      const id = lastHost();
+      if (id) hostSel.value = id;
+      const info = await deviceInfo(hostSel.value).catch(() => null);
+      cwd.value = info?.newSessionDir || "";
+      project.value = "";
+      mode.value = "auto";
+      routeNote.textContent = r ? T("行き先の表のホスト {0} がありません。既定の場所に出します", r.host) : T("行き先の表に合う URL がありません。既定の場所に出します");
+    }
+    const m = intakeMatch(url.value.trim());
+    remember.checked = false;
+    rememberRow.hidden = !m;
+    rememberRow.lastChild.textContent = T("{0} の行き先として覚える", m);
+  };
+  url.addEventListener("change", applyRoute);
+  hostSel.addEventListener("change", async () => {
+    const info = await deviceInfo(hostSel.value).catch(() => null);
+    if (!routed || routed.host !== hostSel.value) cwd.value = info?.newSessionDir || cwd.value;
+  });
+  await applyRoute();
+
+  const preview = h("pre", { class: "intake-preview mono small" });
+  paintPreview = () => {
+    preview.textContent = intakePrompt({ url: url.value.trim(), title: title.value.trim(), sel: sel.value.trim(), text: text.value.trim() || T("（依頼を書いてください）"),
+      paths: attachments.map((a, i) => T("（送るときに決まるパス {0}）", i + 1)), footer: cfg.footer });
+  };
+  previewBox = h("details", { class: "intake-more" }, h("summary", {}, T("送る文面を見る")), preview);
+  previewBox.addEventListener("toggle", paintPreview);
+  for (const el of [url, title, sel, text]) el.addEventListener("input", () => { if (previewBox.open) paintPreview(); });
+
+  const sendBtn = h("button", { class: "btn primary" }, T("新しいセッションで依頼"));
+  sendBtn.addEventListener("click", async () => {
+    const body = text.value.trim();
+    if (!body) { toast(T("依頼を書いてください")); text.focus(); return; }
+    const id = hostSel.value;
+    if (!id) { toast(T("接続中のホストがありません。")); return; }
+    sendBtn.disabled = true;
+    haptic();
+    try {
+      const info = await deviceInfo(id).catch(() => null);
+      if (info && !info.attachEnabled) throw new Error(T("このホストは attach が OFF のため、新規セッションを起動できません。"));
+      const paths = [];
+      for (const a of attachments) {
+        const r = await fetch(`/api/d/${id}/hub/upload`, { method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": a.blob.type || "application/octet-stream", "X-Filename": encodeURIComponent(a.name || "") }, body: a.blob });
+        if (!r.ok) throw new Error(T("{0} のアップロードに失敗: ", a.name || T("ファイル")) + ((await r.text()).trim() || r.status));
+        paths.push((await r.json()).path);
+      }
+      if (remember.checked) {
+        const match = intakeMatch(url.value.trim());
+        const routes = cfg.routes.filter((r) => r.match !== match);
+        routes.push({ match, host: id, cwd: cwd.value.trim(), project: project.value.trim(), mode: mode.value });
+        cfg = await api("/api/intake", { method: "PUT", json: { ...cfg, routes } });
+      }
+      const prompt = intakePrompt({ url: url.value.trim(), title: title.value.trim(), sel: sel.value.trim(), text: body, paths, footer: cfg.footer });
+      const r = await dev(id).post("/pty/start", { cwd: cwd.value.trim(), cols: 120, rows: 36, prompt, permissionMode: mode.value, project: project.value.trim() });
+      try { localStorage.setItem("ccdash.newSessionHost", id); } catch {}
+      location.hash = `#/d/${id}/p/${encodeURIComponent(r.ptyKey)}`;
+    } catch (e) { toast(e.message, 5000); sendBtn.disabled = false; }
+  });
+
+  page.append(
+    h("h1", {}, T("クイック依頼")),
+    h("div", { class: "col" },
+      h("label", { class: "col" }, h("span", { class: "muted small" }, T("依頼")), text),
+      h("div", { class: "row wrap" }, pickBtn, grabBtn, h("span", { class: "muted small" }, T("画像は貼り付け・ドロップでも足せます"))),
+      thumbs, fileInput,
+      h("label", { class: "col" }, h("span", { class: "muted small" }, T("画面")), url, title),
+      sel.value ? h("label", { class: "col" }, h("span", { class: "muted small" }, T("選択していた文字")), sel) : null,
+      h("div", { class: "card col" },
+        h("div", { class: "row" }, h("span", { class: "muted small" }, T("ホスト")), hostSel),
+        cwd, h("div", { class: "row" }, project, mode), routeNote, rememberRow),
+      previewBox,
+      h("div", { class: "actions" }, sendBtn)),
+    intakeSetup(() => cfg, (c) => { cfg = c; applyRoute(); }));
+  text.focus();
+}
+
+// intakeSetup: the bookmarklet, the routes and the footer.
+function intakeSetup(get, set) {
+  const origin = location.origin;
+  // The bookmarklet opens the portal in a new tab with the page's URL,
+  // title and selection; it reads nothing else from the page.
+  const js = `javascript:(()=>{const q=new URLSearchParams({intake:1,url:location.href,title:document.title,sel:String(getSelection()).slice(0,4000)});window.open(${JSON.stringify(origin + "/?")}+q,"_blank")})()`;
+  const routes = h("textarea", { rows: 8, class: "grow mono small", spellcheck: false, "aria-label": T("行き先の表（JSON）") });
+  const footer = h("textarea", { rows: 6, class: "grow small", "aria-label": T("毎回添える文") });
+  const fill = () => { const c = get(); routes.value = JSON.stringify(c.routes, null, 2); footer.value = c.footer || ""; };
+  const save = h("button", { class: "btn", onclick: async () => {
+    let rs;
+    try { rs = JSON.parse(routes.value || "[]"); } catch (e) { toast(T("行き先の表が JSON として読めません: ") + e.message, 5000); return; }
+    try { set(await api("/api/intake", { method: "PUT", json: { routes: rs, footer: footer.value } })); fill(); toast(T("保存しました")); }
+    catch (e) { toast(e.message, 5000); }
+  } }, T("保存"));
+  const box = h("details", { class: "intake-more" }, h("summary", {}, T("入口と設定")),
+    h("div", { class: "col" },
+      h("p", { class: "small" }, T("PC のブラウザ: 次のリンクをブックマークバーへドラッグし、見ている画面で押すと、この画面が URL・タイトル・選択した文字を入れて開きます。")),
+      h("p", {}, h("a", { href: js, class: "btn", onclick: (e) => { e.preventDefault(); toast(T("ブックマークバーへドラッグしてください")); } }, T("ccdash に依頼"))),
+      h("p", { class: "small" }, T("スマホ: このポータルをアプリとして入れると、共有シートに ccdash が出ます。スクリーンショットや URL を共有すると、この画面が開きます。")),
+      h("span", { class: "muted small" }, T("行き先の表: match（URL の先頭）・host（端末 ID）・cwd・project・mode。長く合うものが勝ちます")),
+      routes,
+      h("span", { class: "muted small" }, T("毎回添える文（依頼の最後に付きます）")),
+      footer,
+      h("div", { class: "actions" }, save)));
+  box.addEventListener("toggle", () => { if (box.open) fill(); });
+  return box;
+}
+
 // The session list folds away on wide screens (the header's sidebar
 // button), leaving the session and the tasks.
 const listFoldKey = "ccdash.listFolded";
@@ -5260,5 +5535,6 @@ function installListFold() {
   installTaskPane();
   installListFold();
   wideQuery.addEventListener("change", () => { closeSplit(); route(); });
+  intakeFromQuery();
   route();
 })();

@@ -963,3 +963,14 @@ machine.
 `ccdash grok-mcp` is the old name, kept as a hidden alias: the same server
 with `--origin grok --project Grok` and advice to Grok on fixing
 speech-recognition mistakes in the request.
+
+## 20. Asking from the page you are looking at (quick request, `#/intake`)
+
+When something on a page (your own app, say) should change, start a session from there with the page's URL, title, selected text and a screenshot — without going back to the portal first.
+
+- **Desktop browser**: open `#/intake` in the portal → "Entry points and setup", and drag the "Ask ccdash" link to the bookmarks bar. Clicking it on any page opens the quick request form in a new tab. Add a screenshot with "Capture screen" (one shot of a tab or window) or by pasting / dropping an OS screenshot
+- **Phone**: install the portal as an app and ccdash appears in the share sheet; sharing a screenshot or a URL opens the form (Chrome on Android; iOS has no share targets for web apps)
+- **Routes**: per URL prefix (`match`), the host, directory, project and permission mode to start in; the longest match wins, and with none the last host's default directory is used. Tick "Remember this as the target for …" when sending to add one
+- **Footer**: text appended to every request (your standing rules)
+
+The bookmarklet reads only the URL, title and selection. Images go to the target machine's upload dir (`$XDG_STATE_HOME/ccdash/uploads`, removed after 7 days) and the request carries their paths. Routes and footer are stored in the hub per login; keep secrets out of them.
