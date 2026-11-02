@@ -54,7 +54,7 @@ func envOr(flagVal, env string) string {
 }
 
 func hubServeCmd() *cobra.Command {
-	var listen, dataDir, publicURL, issuer, clientID, secretFile, readTokenFile string
+	var listen, dataDir, publicURL, issuer, clientID, secretFile, readTokenFile, intakeAppsFile string
 	var stateSecret, clusterPeers, clusterListen, clusterAdvertise string
 	var emails []string
 	var noAuth, tsAuth bool
@@ -133,6 +133,12 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 				}
 				readTokens = append(readTokens, ft...)
 			}
+			var intakeApps []hub.IntakeApp
+			if f := envOr(intakeAppsFile, "CCDASH_HUB_INTAKE_APPS_FILE"); f != "" {
+				if intakeApps, err = hub.LoadIntakeApps(f); err != nil {
+					return err
+				}
+			}
 			if tsAuth {
 				host, _, err := net.SplitHostPort(listen)
 				if err != nil || !isLoopbackHost(host) {
@@ -176,6 +182,7 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 					BreakGlassPassword: os.Getenv("CCDASH_HUB_BREAK_GLASS_PASSWORD"),
 				},
 				ReadTokens: readTokens,
+				IntakeApps: intakeApps,
 			})
 			if err != nil {
 				return err
@@ -197,6 +204,7 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 	c.Flags().StringVar(&clusterPeers, "cluster-peers", "", "run as one of several replicas: DNS name of a headless Service listing them (or host:port,host:port); needs --state-secret")
 	c.Flags().StringVar(&clusterListen, "cluster-listen", ":8081", "replica-to-replica port (keep it off the ingress)")
 	c.Flags().StringVar(&clusterAdvertise, "cluster-advertise", "", "this replica's host:port as the others reach it (default $POD_IP and the --cluster-listen port)")
+	c.Flags().StringVar(&intakeAppsFile, "intake-apps-file", "", "JSON file of apps that may hand in requests with their own token (contrib/intake-widget; else $CCDASH_HUB_INTAKE_APPS_FILE)")
 	c.Flags().StringVar(&readTokenFile, "read-token-file", "", "file of read-only bearer tokens for machine clients, one per line (adds to $CCDASH_HUB_READ_TOKENS)")
 	return c
 }

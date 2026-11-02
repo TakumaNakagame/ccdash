@@ -56,6 +56,9 @@ type Config struct {
 	// ReadTokens are bearer tokens for machine clients: GET-only access to
 	// a fixed set of read routes (see readtoken.go). Empty disables them.
 	ReadTokens []string
+	// IntakeApps may POST /api/intake/requests with their bearer token
+	// (intakeapps.go). Empty: the route answers 404.
+	IntakeApps []IntakeApp
 	// StateSecret keeps the state in this Kubernetes Secret (k8sstore.go)
 	// instead of DataDir/hub.sqlite, which is then only imported once
 	// when the Secret doesn't exist yet. Required for several replicas.
@@ -78,6 +81,10 @@ type Hub struct {
 	assets string // hash of the embedded web files; the SPA reloads when it changes
 
 	readTokens [][32]byte // SHA-256 of each read token; never the tokens themselves
+
+	intakeApps map[string]*IntakeApp  // hex SHA-256 of the token → app
+	intakeRate map[string][]time.Time // app → its requests in the last hour (under mu)
+	intakeMu   sync.Mutex             // drafts read-modify-write on this replica
 
 	pushClient webpush.HTTPClient // nil = a plain http.Client (tests capture pushes)
 
@@ -169,6 +176,15 @@ func New(ctx context.Context, cfg Config) (*Hub, error) {
 		conns:  map[string]*deviceConn{},
 
 		readTokens: readTokens,
+		intakeApps: map[string]*IntakeApp{},
+		intakeRate: map[string][]time.Time{},
+	}
+	if err := checkIntakeApps(cfg.IntakeApps); err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	for i := range cfg.IntakeApps {
+		h.intakeApps[cfg.IntakeApps[i].TokenSHA256] = &cfg.IntakeApps[i]
 	}
 	if cfg.Cluster.Peers != "" && cfg.Local == nil {
 		ck, err := st.secret(ctx, clusterKeyName, func() string { return randHex(32) })
@@ -322,6 +338,8 @@ func (h *Hub) Handler() http.Handler {
 	api.HandleFunc("PUT /api/quick", h.handleQuickPut)
 	api.HandleFunc("GET /api/intake", h.handleIntakeGet)
 	api.HandleFunc("PUT /api/intake", h.handleIntakePut)
+	api.HandleFunc("GET /api/intake/drafts", h.handleIntakeDrafts)
+	api.HandleFunc("DELETE /api/intake/drafts/{id}", h.handleIntakeDraftDelete)
 	api.HandleFunc("GET /api/prefs", h.handlePrefsGet)
 	api.HandleFunc("PUT /api/prefs", h.handlePrefsPut)
 	api.HandleFunc("GET /api/push/key", h.handlePushKey)
@@ -335,6 +353,12 @@ func (h *Hub) Handler() http.Handler {
 	// can't ride the session cookie into a device action. apiAuth lets a
 	// read token (Authorization: Bearer) through for a few GET routes and
 	// sends everything else to the cookie login.
+	// Apps hand in requests with their own bearer token, server to server
+	// (intakeapps.go): outside apiAuth, which knows only cookies and read /
+	// device tokens.
+	if h.cfg.Local == nil && len(h.intakeApps) > 0 {
+		mux.HandleFunc("POST /api/intake/requests", h.handleIntakeRequest)
+	}
 	mux.Handle("/api/", h.apiAuth(http.NewCrossOriginProtection().Handler(api)))
 
 	static, _ := fs.Sub(webFS, "web")

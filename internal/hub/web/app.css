@@ -1056,3 +1056,7 @@ body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #res
 .intake > .intake-more { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 12px; }
 .intake-preview { white-space: pre-wrap; word-break: break-word; background: var(--chip); border-radius: var(--r-sm); padding: 8px 10px; max-height: 320px; overflow: auto; }
 @media (pointer: coarse) { .intake .btn, .intake select, .intake input { min-height: 40px; } }
+.intake-drafts .row { border-top: 1px solid var(--line); padding-top: 6px; }
+.intake-drafts .row:first-of-type { border-top: 0; }
+.intake-drafts a { color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.intake-drafts a b { margin-right: 4px; }
