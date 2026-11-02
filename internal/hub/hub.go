@@ -490,7 +490,8 @@ func (h *Hub) handleQuickPut(w http.ResponseWriter, r *http.Request) {
 // intake is the setup of the portal's quick request (#/intake: a page's
 // URL, a screenshot and a line of text become a new session), per login
 // like quick and prefs. routes pick where a page's request goes: the
-// longest Match that prefixes the page URL wins; Host is a device id.
+// longest Match that prefixes the page URL wins; Host is a device id (or
+// name).
 // footer is text appended to every request (the operator's standing
 // rules). It holds no secrets; it lives in the hub so every browser and
 // the installed app share it.
@@ -567,7 +568,7 @@ func (c *intakeConfig) check() error {
 		case x.Match == "" || len(x.Match) > 500:
 			return fmt.Errorf("route %d: match must be a URL prefix (1-500 characters)", i+1)
 		case x.Host == "" || len(x.Host) > 200:
-			return fmt.Errorf("route %d: host must be a device id", i+1)
+			return fmt.Errorf("route %d: host must be a device id or name", i+1)
 		case !strings.HasPrefix(x.Cwd, "/") && !strings.HasPrefix(x.Cwd, "~") || len(x.Cwd) > 1000:
 			return fmt.Errorf("route %d: cwd must be an absolute path", i+1)
 		case len(x.Project) > 200:

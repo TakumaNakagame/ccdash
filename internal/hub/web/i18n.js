@@ -661,6 +661,6 @@ const EN = {
   "ブックマークバーへドラッグしてください": "Drag it to the bookmarks bar",
   "ccdash に依頼": "Ask ccdash",
   "スマホ: このポータルをアプリとして入れると、共有シートに ccdash が出ます。スクリーンショットや URL を共有すると、この画面が開きます。": "Phone: install this portal as an app and ccdash appears in the share sheet. Sharing a screenshot or a URL opens this form.",
-  "行き先の表: match（URL の先頭）・host（端末 ID）・cwd・project・mode。長く合うものが勝ちます": "Routes: match (URL prefix), host (device id), cwd, project, mode. The longest match wins.",
+  "行き先の表: match（URL の先頭）・host（端末 ID か名前）・cwd・project・mode。長く合うものが勝ちます": "Routes: match (URL prefix), host (device id or name), cwd, project, mode. The longest match wins.",
   "毎回添える文（依頼の最後に付きます）": "Footer (appended to every request)",
 };

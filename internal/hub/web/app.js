@@ -5190,7 +5190,7 @@ function tasksPage(only) {
 // and selected text (from the bookmarklet or the phone's share sheet), a
 // screenshot (pasted, picked, shared or grabbed with getDisplayMedia) and a
 // line of request. /api/intake holds where each URL goes (routes: the
-// longest prefix wins) and a footer appended to every request. Screenshots
+// longest prefix wins; host by device id or name) and a footer appended to every request. Screenshots
 // go to the chosen host's upload dir (/hub/upload) like chat attachments,
 // so they never leave the operator's machines.
 
@@ -5344,8 +5344,10 @@ async function intakePage() {
   const applyRoute = async () => {
     routed = intakeRoute(cfg.routes, url.value.trim());
     const r = routed;
-    if (r && ds.some((d) => d.id === r.host)) {
-      hostSel.value = r.host;
+    // host is a device id; a device name works too (easier to write by hand).
+    const target = r && (ds.find((d) => d.id === r.host) || ds.find((d) => d.name === r.host));
+    if (target) {
+      hostSel.value = target.id;
       cwd.value = r.cwd;
       project.value = r.project || "";
       mode.value = r.mode || "";
@@ -5448,7 +5450,7 @@ function intakeSetup(get, set) {
       h("p", { class: "small" }, T("PC のブラウザ: 次のリンクをブックマークバーへドラッグし、見ている画面で押すと、この画面が URL・タイトル・選択した文字を入れて開きます。")),
       h("p", {}, h("a", { href: js, class: "btn", onclick: (e) => { e.preventDefault(); toast(T("ブックマークバーへドラッグしてください")); } }, T("ccdash に依頼"))),
       h("p", { class: "small" }, T("スマホ: このポータルをアプリとして入れると、共有シートに ccdash が出ます。スクリーンショットや URL を共有すると、この画面が開きます。")),
-      h("span", { class: "muted small" }, T("行き先の表: match（URL の先頭）・host（端末 ID）・cwd・project・mode。長く合うものが勝ちます")),
+      h("span", { class: "muted small" }, T("行き先の表: match（URL の先頭）・host（端末 ID か名前）・cwd・project・mode。長く合うものが勝ちます")),
       routes,
       h("span", { class: "muted small" }, T("毎回添える文（依頼の最後に付きます）")),
       footer,
