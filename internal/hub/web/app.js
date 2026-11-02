@@ -790,6 +790,17 @@ function newFirst(rows) {
 function newFirstOn() {
   return look.new_first !== "off";
 }
+// 更新順 (list_order "recent", a per-user pref like new_first): one flat
+// list, the session that moved last first, whatever its project — no
+// project, pin, あとで見る or 新着 blocks; only date bands by that same
+// time, so the order and the bands agree. Off = the project blocks.
+function recentOrderOn() {
+  return look.list_order === "recent";
+}
+const activityAt = (s) => new Date(s.last_activity || s.last_seen || 0).getTime();
+function byActivity(rows) {
+  return [...rows].sort((a, b) => (activityAt(b) - activityAt(a)) || ((b.num || 0) - (a.num || 0)));
+}
 // With several hosts a project is one block whatever host its sessions run
 // on (each host keeps its own order; the block takes the lowest).
 function projectsFirst(rows) {
@@ -945,9 +956,9 @@ function uniqueGroups(sessions, autoRepo) {
 }
 
 // dateBucket follows the TUI's date grouping (pinned sessions on top).
-function dateBucket(s) {
-  if (s.favorite) return T("ピン留め");
-  const t = new Date(s.last_seen);
+function dateBucket(s, flat = false) {
+  if (s.favorite && !flat) return T("ピン留め");
+  const t = new Date(flat ? activityAt(s) : s.last_seen);
   const now = new Date();
   const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const days = Math.round((day(now) - day(t)) / 86400000);
@@ -1042,6 +1053,12 @@ async function devicePage(opts = {}) {
       setLook({ ...look, new_first: newFirstOn() ? "off" : "on" });
       render();
     } }, T("新着を上に"));
+  const orderBtn = h("button", { class: "btn small" + (recentOrderOn() ? " on" : ""), title: T("プロジェクトでまとめず、最近動いた順に全部を並べる"),
+    onclick: () => {
+      setLook({ ...look, list_order: recentOrderOn() ? "" : "recent" });
+      limit = 100;
+      render();
+    } }, T("更新順"));
   const archBtn = h("button", { class: "btn small", onclick: () => { showArchived = !showArchived; selected.clear(); paintSel(); archBtn.classList.toggle("on", showArchived); archBtn.textContent = showArchived ? T("アーカイブ表示中") : T("アーカイブ"); refreshNow(); } }, T("アーカイブ"));
   const status = h("div", { class: "muted small" });
   const settingsBox = h("details", { class: "settings-box", hidden: !one }, h("summary", {}, T("端末の設定（閲覧のみ）")));
@@ -1177,7 +1194,7 @@ async function devicePage(opts = {}) {
       } }, T("すべてのホストを表示"))) : null,
     status, usageCard, approvals, spawns,
     tabs,
-    h("div", { class: "row", style: "margin-bottom:8px" }, h("label", { class: "search grow" }, icon("search"), filter), liftBtn, archBtn),
+    h("div", { class: "row", style: "margin-bottom:8px" }, h("label", { class: "search grow" }, icon("search"), filter), orderBtn, liftBtn, archBtn),
     selBar, list, more, settingsBox));
 
   let last = null, tab = loadTab(one || ALL_HOSTS), limit = 100, briefs = {}, briefsAt = 0, shownTab = null;
@@ -1216,9 +1233,13 @@ async function devicePage(opts = {}) {
       .filter((s) => !tab || groupOf(s) === tab)
       .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${sref(s, s._dev)} ${groupOf(s)} ${s.project || ""} ${s._devName}`.toLowerCase().includes(q))
       .sort((a, b) => (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (new Date(b.last_seen) - new Date(a.last_seen)));
-    const sorted = laterFirst(projectsFirst(rows));
-    // Read on every render: another browser may have flipped it (loadLook).
-    const lift = newFirstOn();
+    // Read on every render: another browser may have flipped them (loadLook).
+    const flat = recentOrderOn();
+    orderBtn.classList.toggle("on", flat);
+    // 新着を上に has nothing to lift in 更新順: what moved is on top already.
+    liftBtn.hidden = flat;
+    const sorted = flat ? byActivity(rows) : laterFirst(projectsFirst(rows));
+    const lift = newFirstOn() && !flat;
     liftBtn.classList.toggle("on", lift);
     const ordered = lift && !showArchived ? newFirst(sorted) : sorted;
     const freshRows = ordered.filter((s) => s.unseen);
@@ -1227,11 +1248,12 @@ async function devicePage(opts = {}) {
     visible = ordered.slice(0, limit).map(sessKey);
     for (const s of ordered.slice(0, limit)) {
       // A project is one block across hosts: two hosts' "web" merge.
-      const b = lift && s.unseen ? "\0new" : s.later ? "\0later" : s.project ? "\0p\0" + s.project : dateBucket(s);
+      const b = flat ? dateBucket(s, true) : lift && s.unseen ? "\0new" : s.later ? "\0later" : s.project ? "\0p\0" + s.project : dateBucket(s);
       if (b !== bk) {
         bk = b;
         out.push(b === "\0new" ? h("div", { class: "bucket new" }, icon("bell"), T("新着 {0}", freshRows.length), h("span", { class: "grow" }),
           h("button", { type: "button", class: "btn small", title: T("新着をすべて既読にする"), onclick: (e) => { e.stopPropagation(); markAllSeen(freshRows); } }, T("すべて既読")))
+          : flat ? h("div", { class: "bucket" }, b)
           : s.later ? h("div", { class: "bucket later" }, icon("clock"), T("あとで見る"))
           : s.project
           ? projectHeader(s.project, projectColorOf(s.project, s.project_color),
@@ -1246,7 +1268,7 @@ async function devicePage(opts = {}) {
             })
           : h("div", { class: "bucket" }, b));
       }
-      out.push(sessionRow(s._dev, s, live.has(s._dev + "\t" + s.session_id), infos[s._dev], !tab, sel, briefs[sessKey(s)], multi ? s._devName : ""));
+      out.push(sessionRow(s._dev, s, live.has(s._dev + "\t" + s.session_id), infos[s._dev], !tab, sel, briefs[sessKey(s)], multi ? s._devName : "", flat));
     }
     list.replaceChildren(...(out.length ? out : [h("div", { class: "empty" }, q ? T("該当なし") : devs.some((d) => d.online) ? T("セッションがありません") : T("接続中のホストがありません"))]));
     more.replaceChildren(...(rows.length > limit
@@ -1557,8 +1579,14 @@ function justNew(dev, s) {
 }
 const NEW_FLASH_MS = 2400;
 
-function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, hostName = "") {
+// projectChip: in 更新順 there is no project band over a row, so the row
+// names its project itself, in the project's color.
+function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, hostName = "", projectChip = false) {
   const chips = [];
+  if (projectChip && s.project) {
+    const c = projectColorOf(s.project, s.project_color);
+    chips.push(h("span", { class: "chip proj", style: `--proj:${c};--ink:${inkOn(c)}`, title: T("プロジェクト") }, s.project));
+  }
   if (hostName) chips.push(h("span", { class: "chip host", title: T("このセッションが動くホスト") }, hostName));
   const fresh = freshChip(s);
   if (fresh) chips.push(fresh);
@@ -4611,7 +4639,7 @@ let look = {};
 try { look = JSON.parse(localStorage.getItem("ccdash.look") || "{}"); } catch {}
 function setLook(p, save = true) {
   const relang = (p.lang || "") !== (look.lang || "");
-  look = { theme: p.theme || "", accent: p.accent || "", new_first: p.new_first || "", lang: p.lang || "" };
+  look = { theme: p.theme || "", accent: p.accent || "", new_first: p.new_first || "", list_order: p.list_order || "", lang: p.lang || "" };
   let stored = false;
   try { localStorage.setItem("ccdash.look", JSON.stringify(look)); stored = true; } catch {}
   window.applyLook?.(look);
@@ -4635,7 +4663,7 @@ function loadLook() {
     let old = null;
     try { old = localStorage.getItem("ccdash.newFirst"); localStorage.removeItem("ccdash.newFirst"); } catch {}
     if (!p.new_first && (old === "1" || old === "0")) { setLook({ ...p, new_first: old === "1" ? "on" : "off" }); return; }
-    if (p.theme !== look.theme || p.accent !== look.accent || (p.new_first || "") !== (look.new_first || "") || (p.lang || "") !== (look.lang || "")) setLook(p, false);
+    if (p.theme !== look.theme || p.accent !== look.accent || (p.new_first || "") !== (look.new_first || "") || (p.list_order || "") !== (look.list_order || "") || (p.lang || "") !== (look.lang || "")) setLook(p, false);
   }).catch(() => {});
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => window.applyLook?.(look));

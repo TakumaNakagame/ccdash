@@ -181,6 +181,7 @@ input[type=text], input:not([type]) {
 .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; line-height: 1.6; padding: 0 7px; border-radius: var(--r-sm); background: var(--chip); color: var(--muted); white-space: nowrap; }
 .chip.later { background: none; color: var(--warn); padding: 0; font-weight: 600; }
 .chip.new { background: var(--accent); color: var(--accent-text); font-weight: 700; }
+.chip.proj { display: inline-block; background: var(--proj); color: var(--ink); font-weight: 600; max-width: 12em; overflow: hidden; text-overflow: ellipsis; }
 .chip.active { color: var(--accent); }
 .chip.idle { color: var(--ok); }
 .chip.live { background: none; border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent); padding: 0 6px; }

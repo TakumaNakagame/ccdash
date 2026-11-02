@@ -612,16 +612,19 @@ func (c *intakeConfig) check() error {
 
 // prefs is a portal user's look: theme ("" = follow the system, "light",
 // "dark") and accent ("" = the default, else "#rrggbb"), plus the session
-// list's 新着を上に (new_first: "" = the default, on; "on" / "off") and the
+// list's 新着を上に (new_first: "" = the default, on; "on" / "off"), its
+// order (list_order: "" = project blocks, the default; "recent" = one flat
+// list, the most recently active first, projects ignored) and the
 // language (lang: "" = the browser's, "ja", "en"). Kept
 // per login in hub.sqlite, so every browser and the installed app share it
 // — localStorage is per origin, so the local portal (127.0.0.1) never saw
 // a choice made on the hub's.
 type prefs struct {
-	Theme    string `json:"theme"`
-	Accent   string `json:"accent"`
-	NewFirst string `json:"new_first"`
-	Lang     string `json:"lang"` // the portal's language: "" = the browser's, "ja", "en"
+	Theme     string `json:"theme"`
+	Accent    string `json:"accent"`
+	NewFirst  string `json:"new_first"`
+	ListOrder string `json:"list_order"`
+	Lang      string `json:"lang"` // the portal's language: "" = the browser's, "ja", "en"
 }
 
 var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
@@ -653,7 +656,7 @@ func (h *Hub) handlePrefsPut(w http.ResponseWriter, r *http.Request) {
 	var p prefs
 	_ = json.Unmarshal([]byte(cur), &p)
 	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&p); err != nil {
-		http.Error(w, "want {theme, accent, new_first, lang}", http.StatusBadRequest)
+		http.Error(w, "want {theme, accent, new_first, list_order, lang}", http.StatusBadRequest)
 		return
 	}
 	if p.Theme != "" && p.Theme != "light" && p.Theme != "dark" {
@@ -666,6 +669,10 @@ func (h *Hub) handlePrefsPut(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.NewFirst != "" && p.NewFirst != "on" && p.NewFirst != "off" {
 		http.Error(w, `new_first must be "", "on" or "off"`, http.StatusBadRequest)
+		return
+	}
+	if p.ListOrder != "" && p.ListOrder != "recent" {
+		http.Error(w, `list_order must be "" or "recent"`, http.StatusBadRequest)
 		return
 	}
 	if p.Lang != "" && p.Lang != "ja" && p.Lang != "en" {

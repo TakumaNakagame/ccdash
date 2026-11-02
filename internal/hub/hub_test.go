@@ -235,13 +235,16 @@ func TestPrefs(t *testing.T) {
 	if w := serve(h, "PUT", "/api/prefs", `{"new_first":"off"}`, nil); w.Code != http.StatusOK {
 		t.Fatalf("put new_first = %d %s", w.Code, w.Body)
 	}
+	if w := serve(h, "PUT", "/api/prefs", `{"list_order":"recent"}`, nil); w.Code != http.StatusOK {
+		t.Fatalf("put list_order = %d %s", w.Code, w.Body)
+	}
 	if w := serve(h, "PUT", "/api/prefs", `{"theme":"light","accent":""}`, nil); w.Code != http.StatusOK {
 		t.Fatalf("put look = %d %s", w.Code, w.Body)
 	}
-	if w := serve(h, "GET", "/api/prefs", "", nil); !strings.Contains(w.Body.String(), `"new_first":"off"`) || !strings.Contains(w.Body.String(), `"theme":"light"`) {
+	if w := serve(h, "GET", "/api/prefs", "", nil); !strings.Contains(w.Body.String(), `"new_first":"off"`) || !strings.Contains(w.Body.String(), `"list_order":"recent"`) || !strings.Contains(w.Body.String(), `"theme":"light"`) {
 		t.Fatalf("merged = %s", w.Body)
 	}
-	for _, bad := range []string{`{"theme":"blue"}`, `{"accent":"red"}`, `{"accent":"#12345"}`, `{"new_first":"yes"}`} {
+	for _, bad := range []string{`{"theme":"blue"}`, `{"accent":"red"}`, `{"accent":"#12345"}`, `{"new_first":"yes"}`, `{"list_order":"project"}`} {
 		if w := serve(h, "PUT", "/api/prefs", bad, nil); w.Code != http.StatusBadRequest {
 			t.Errorf("%s = %d", bad, w.Code)
 		}
