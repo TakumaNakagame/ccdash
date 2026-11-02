@@ -134,6 +134,8 @@ Sessions are bucketed by `last_seen`:
 
 `L` marks a session **watch later**: marked sessions gather in a ⏰ block at the very top (most recently marked first) until you press `L` again. Rows show **NEW** when the session made progress after you last looked at it (selected it in the TUI, or had its chat open in the portal).
 
+`O` switches the list to **recent order**: every session in one run, the one that moved last first, ignoring projects, pins and watch later (only date groups; each row names its project in its color). `O` again goes back to project blocks. The portal has the same as the **更新順 / Recent** button next to the search box.
+
 Sessions in a **project** (`p`, see §7) are pulled out of these date
 buckets and shown as project blocks at the newest end of the list.
 
