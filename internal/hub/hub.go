@@ -32,6 +32,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/coder/websocket"
@@ -319,6 +320,8 @@ func (h *Hub) Handler() http.Handler {
 	api.HandleFunc("GET /api/locate/{session}", h.handleLocate)
 	api.HandleFunc("GET /api/quick", h.handleQuickGet)
 	api.HandleFunc("PUT /api/quick", h.handleQuickPut)
+	api.HandleFunc("GET /api/intake", h.handleIntakeGet)
+	api.HandleFunc("PUT /api/intake", h.handleIntakePut)
 	api.HandleFunc("GET /api/prefs", h.handlePrefsGet)
 	api.HandleFunc("PUT /api/prefs", h.handlePrefsPut)
 	api.HandleFunc("GET /api/push/key", h.handlePushKey)
@@ -482,6 +485,105 @@ func (h *Hub) handleQuickPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, out)
+}
+
+// intake is the setup of the portal's quick request (#/intake: a page's
+// URL, a screenshot and a line of text become a new session), per login
+// like quick and prefs. routes pick where a page's request goes: the
+// longest Match that prefixes the page URL wins; Host is a device id (or
+// name).
+// footer is text appended to every request (the operator's standing
+// rules). It holds no secrets; it lives in the hub so every browser and
+// the installed app share it.
+type intakeRoute struct {
+	Match   string `json:"match"`
+	Host    string `json:"host"`
+	Cwd     string `json:"cwd"`
+	Project string `json:"project,omitempty"`
+	Mode    string `json:"mode,omitempty"`
+}
+
+type intakeConfig struct {
+	Routes []intakeRoute `json:"routes"`
+	Footer string        `json:"footer"`
+}
+
+const (
+	maxIntakeRoutes = 100
+	maxIntakeFooter = 8000 // runes
+)
+
+var intakeModes = map[string]bool{"": true, "manual": true, "acceptEdits": true, "auto": true, "plan": true}
+
+func (h *Hub) intakeKey(r *http.Request) string {
+	email, _ := h.auth.user(r)
+	return "intake:" + email
+}
+
+func (h *Hub) handleIntakeGet(w http.ResponseWriter, r *http.Request) {
+	v, err := h.st.secret(r.Context(), h.intakeKey(r), func() string { return `{"routes":[],"footer":""}` })
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var c intakeConfig
+	_ = json.Unmarshal([]byte(v), &c)
+	if c.Routes == nil {
+		c.Routes = []intakeRoute{}
+	}
+	writeJSON(w, c)
+}
+
+// handleIntakePut replaces the whole setup (the page edits it as one form).
+func (h *Hub) handleIntakePut(w http.ResponseWriter, r *http.Request) {
+	var c intakeConfig
+	if err := json.NewDecoder(io.LimitReader(r.Body, 128<<10)).Decode(&c); err != nil {
+		http.Error(w, "want {routes: [{match, host, cwd, project, mode}], footer}", http.StatusBadRequest)
+		return
+	}
+	if err := c.check(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	b, _ := json.Marshal(c)
+	if err := h.st.putKV(r.Context(), h.intakeKey(r), string(b)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, c)
+}
+
+// check trims the fields and refuses what the page could not use.
+func (c *intakeConfig) check() error {
+	if len(c.Routes) > maxIntakeRoutes {
+		return fmt.Errorf("at most %d routes", maxIntakeRoutes)
+	}
+	if c.Routes == nil {
+		c.Routes = []intakeRoute{}
+	}
+	for i := range c.Routes {
+		x := &c.Routes[i]
+		x.Match, x.Host, x.Cwd, x.Project = strings.TrimSpace(x.Match), strings.TrimSpace(x.Host), strings.TrimSpace(x.Cwd), strings.TrimSpace(x.Project)
+		switch {
+		case x.Match == "" || len(x.Match) > 500:
+			return fmt.Errorf("route %d: match must be a URL prefix (1-500 characters)", i+1)
+		case x.Host == "" || len(x.Host) > 200:
+			return fmt.Errorf("route %d: host must be a device id or name", i+1)
+		case !strings.HasPrefix(x.Cwd, "/") && !strings.HasPrefix(x.Cwd, "~") || len(x.Cwd) > 1000:
+			return fmt.Errorf("route %d: cwd must be an absolute path", i+1)
+		case len(x.Project) > 200:
+			return fmt.Errorf("route %d: project is too long", i+1)
+		case !intakeModes[x.Mode]:
+			return fmt.Errorf("route %d: mode must be \"\", manual, acceptEdits, auto or plan", i+1)
+		}
+		if strings.ContainsFunc(x.Match+x.Host+x.Cwd+x.Project, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return fmt.Errorf("route %d: control characters", i+1)
+		}
+	}
+	if utf8.RuneCountInString(c.Footer) > maxIntakeFooter {
+		return fmt.Errorf("footer: at most %d characters", maxIntakeFooter)
+	}
+	return nil
 }
 
 // prefs is a portal user's look: theme ("" = follow the system, "light",

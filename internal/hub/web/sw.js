@@ -1,7 +1,9 @@
-// ccdash hub service worker: makes the portal installable and shows the
-// hub's push notifications. Everything is live (sessions, terminals,
-// tunnels to devices), so nothing is cached and no request is intercepted:
-// the browser fetches as if there were no worker at all.
+// ccdash hub service worker: makes the portal installable, shows the
+// hub's push notifications and receives the share sheet (share_target in
+// the manifest). Everything is live (sessions, terminals, tunnels to
+// devices), so nothing is cached and the one request it intercepts is the
+// share POST: every other fetch goes to the network as if there were no
+// worker at all.
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
@@ -62,5 +64,34 @@ self.addEventListener("notificationclick", (event) => {
       }
     }
     return self.clients.openWindow(url);
+  })());
+});
+
+// The share sheet POSTs title / text / url and screenshots to
+// /share-target. The files wait in Cache Storage under /__share/<id>/ until
+// the quick request page (#/intake) takes them; the rest rides the query.
+self.addEventListener("fetch", (event) => {
+  const u = new URL(event.request.url);
+  if (event.request.method !== "POST" || u.origin !== self.location.origin || u.pathname !== "/share-target") return;
+  event.respondWith((async () => {
+    const q = new URLSearchParams({ intake: "1" });
+    try {
+      const form = await event.request.formData();
+      for (const k of ["title", "text", "url"]) if (form.get(k)) q.set(k, String(form.get(k)));
+      const files = form.getAll("files").filter((f) => f && typeof f !== "string" && f.size);
+      if (files.length) {
+        const id = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+        const cache = await caches.open("ccdash-share");
+        // Shares nobody opened (the page was closed) go after a day.
+        for (const req of await cache.keys()) {
+          const t = parseInt(new URL(req.url).pathname.split("/")[2].split("-")[0], 36);
+          if (!(t > Date.now() - 86400e3)) await cache.delete(req);
+        }
+        await Promise.all(files.slice(0, 10).map((f, i) => cache.put(`/__share/${id}/${i}`,
+          new Response(f, { headers: { "Content-Type": f.type || "application/octet-stream", "X-Filename": encodeURIComponent(f.name || "") } }))));
+        q.set("share", id);
+      }
+    } catch {}
+    return Response.redirect("/?" + q, 303);
   })());
 });

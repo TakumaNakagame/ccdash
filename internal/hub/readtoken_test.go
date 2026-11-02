@@ -160,6 +160,8 @@ func TestReadTokenForbiddenRoutes(t *testing.T) {
 		{"POST", "/api/devices/dev1/rotate"},
 		{"PUT", "/api/quick"},
 		{"GET", "/api/quick"},
+		{"PUT", "/api/intake"},
+		{"GET", "/api/intake"},
 		{"GET", "/api/me"},
 		{"GET", "/api/push/key"},
 		{"POST", "/api/push/test"},

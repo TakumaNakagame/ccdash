@@ -248,6 +248,36 @@ func TestPrefs(t *testing.T) {
 	}
 }
 
+// TestIntake: the quick-request setup starts empty, is replaced whole by a
+// PUT, and refuses routes the page could not start a session from.
+func TestIntake(t *testing.T) {
+	h := newTestHub(t, true).Handler()
+	if w := serve(h, "GET", "/api/intake", "", nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"routes":[]`) {
+		t.Fatalf("default = %d %s", w.Code, w.Body)
+	}
+	good := `{"routes":[{"match":" https://app.example/ ","host":"dev1","cwd":"/src/app","project":"App","mode":"auto"}],"footer":"答えは日本語で"}`
+	if w := serve(h, "PUT", "/api/intake", good, nil); w.Code != http.StatusOK {
+		t.Fatalf("put = %d %s", w.Code, w.Body)
+	}
+	w := serve(h, "GET", "/api/intake", "", nil)
+	if !strings.Contains(w.Body.String(), `"match":"https://app.example/"`) || !strings.Contains(w.Body.String(), `"footer":"答えは日本語で"`) {
+		t.Fatalf("get = %s", w.Body)
+	}
+	for _, bad := range []string{
+		`{"routes":[{"match":"","host":"d","cwd":"/x"}]}`,
+		`{"routes":[{"match":"https://a/","host":"","cwd":"/x"}]}`,
+		`{"routes":[{"match":"https://a/","host":"d","cwd":"relative"}]}`,
+		`{"routes":[{"match":"https://a/","host":"d","cwd":"/x","mode":"bypassPermissions"}]}`,
+		`{"routes":[{"match":"https://a/\n","host":"d","cwd":"/x\u0007"}]}`,
+		`{"routes":[],"footer":"` + strings.Repeat("あ", maxIntakeFooter+1) + `"}`,
+		`[]`,
+	} {
+		if w := serve(h, "PUT", "/api/intake", bad, nil); w.Code != http.StatusBadRequest {
+			t.Errorf("%.60s = %d", bad, w.Code)
+		}
+	}
+}
+
 // TestHostGuard: a DNS-rebinding page arrives with its own name in Host.
 // Hubs whose login such a page could satisfy (--no-auth, --tailscale-auth)
 // accept only loopback names and the public host.

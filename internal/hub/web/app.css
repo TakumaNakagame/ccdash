@@ -1040,3 +1040,19 @@ body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #res
 .composer .btn.attach.slash { font-family: var(--mono, ui-monospace, monospace); font-weight: 700; font-size: 16px; }
 .composer .btn.attach.slash.on { color: var(--accent); border-color: var(--accent); }
 .host-note { margin: 0 0 8px; align-items: center; }
+
+/* Quick request (#/intake): one column of fields, the target in a card. */
+.intake { max-width: 720px; }
+.intake .col { display: flex; flex-direction: column; gap: 8px; }
+.intake > .col { gap: 14px; }
+.intake .row.wrap { flex-wrap: wrap; }
+.intake .btn .ic { margin-right: 4px; }
+.intake textarea { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: var(--r-sm); padding: 6px 10px; font: inherit; line-height: 1.6; resize: vertical; }
+.intake textarea.mono { font-family: var(--mono); line-height: 1.4; }
+.intake .card { border: 1px solid var(--line); background: var(--panel); border-radius: var(--r-md); padding: 10px 12px; }
+.intake .actions { display: flex; justify-content: flex-end; gap: 8px; }
+.intake-more > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-sm); font-weight: 600; padding: 4px 0; }
+.intake-more { margin-top: 4px; }
+.intake > .intake-more { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 12px; }
+.intake-preview { white-space: pre-wrap; word-break: break-word; background: var(--chip); border-radius: var(--r-sm); padding: 8px 10px; max-height: 320px; overflow: auto; }
+@media (pointer: coarse) { .intake .btn, .intake select, .intake input { min-height: 40px; } }
