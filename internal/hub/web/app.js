@@ -5212,6 +5212,8 @@ function intakeFromQuery() {
   history.replaceState(null, "", "/#/intake?" + out);
 }
 
+const firstLineOf = (s, n = 60) => { const l = String(s || "").split("\n")[0]; return l.length > n ? l.slice(0, n) + "…" : l; };
+
 // intakeRoute picks the route for url: the longest match that prefixes it.
 function intakeRoute(routes, url) {
   let best = null;
@@ -5230,11 +5232,12 @@ function intakeMatch(url) {
 }
 
 // intakePrompt is the first message of the new session.
-function intakePrompt({ url, title, sel, text, paths, footer }) {
-  const lines = [T("【クイック依頼】{0}", title || url || "")];
+function intakePrompt({ url, title, sel, text, paths, notes, app, footer }) {
+  const lines = [T("【クイック依頼】{0}", (title || url || "") + (app ? T("（{0} から）", app) : ""))];
   if (url) lines.push(T("画面の URL: {0}", url));
   if (sel) lines.push("", T("選択していた文字:"), ...sel.split("\n").map((l) => "> " + l));
   if (paths.length) lines.push("", T("添付した画面（Read で開いて見ること）:"), ...paths.map((p) => "- " + p));
+  if (notes) lines.push("", T("アプリが添えた状態とエラー（Read で開くこと）: {0}", notes));
   lines.push("", T("依頼:"), text);
   if (footer?.trim()) lines.push("", footer.trim());
   return lines.join("\n");
@@ -5280,14 +5283,21 @@ async function intakePage() {
   const bucket = cleanup;
   const page = h("div", { class: "page intake" });
   view.append(page);
-  const [ds, cfg0] = await Promise.all([onlineDevices().catch(() => []), api("/api/intake").catch(() => ({ routes: [], footer: "" }))]);
+  const [ds, cfg0, drafts] = await Promise.all([onlineDevices().catch(() => []), api("/api/intake").catch(() => ({ routes: [], footer: "" })),
+    api("/api/intake/drafts").catch(() => [])]);
   let cfg = cfg0;
+  // A draft an app handed in (POST /api/intake/requests): its target and
+  // files are fixed by the app's token; the images are already on its host.
+  const draft = q.get("draft") ? (drafts || []).find((d) => d.id === q.get("draft")) : null;
+  if (q.get("draft") && !draft) toast(T("下書きが見つかりません（起動済みか、捨てられています）"), 5000);
+  if (draft) for (const [k, v] of [["url", draft.url], ["title", draft.title], ["sel", draft.sel]]) if (v) q.set(k, v);
 
   const url = h("input", { class: "grow mono", value: q.get("url") || "", placeholder: "https://…", "aria-label": T("画面の URL") });
   const title = h("input", { class: "grow", value: q.get("title") || "", placeholder: T("画面の名前（任意）"), "aria-label": T("画面の名前") });
   const sel = h("textarea", { rows: 2, class: "grow", placeholder: T("選択していた文字（任意）"), "aria-label": T("選択していた文字") });
   sel.value = q.get("sel") || "";
   const text = h("textarea", { rows: 4, class: "grow", placeholder: T("何をしてほしいか（例: この一覧に並べ替えを足して）"), "aria-label": T("依頼") });
+  if (draft) text.value = draft.text || "";
 
   // Attachments, as in the chat composer: picked, pasted or dropped.
   let attachments = [];
@@ -5372,11 +5382,22 @@ async function intakePage() {
     if (!routed || routed.host !== hostSel.value) cwd.value = info?.newSessionDir || cwd.value;
   });
   await applyRoute();
+  if (draft) {
+    if (ds.some((d) => d.id === draft.host)) hostSel.value = draft.host;
+    cwd.value = draft.cwd;
+    project.value = draft.project || "";
+    mode.value = draft.mode || "";
+    routeNote.textContent = T("アプリ {0} からの下書きです。行き先はアプリの設定で決まっています", draft.app);
+    rememberRow.hidden = true;
+  }
+  const draftPaths = draft?.paths || [];
+  const draftFiles = draft && (draftPaths.length || draft.notes)
+    ? h("p", { class: "muted small" }, T("アプリが送った画像 {0} 枚と状態のメモは、起動先の端末に置いてあります", draftPaths.length)) : null;
 
   const preview = h("pre", { class: "intake-preview mono small" });
   paintPreview = () => {
     preview.textContent = intakePrompt({ url: url.value.trim(), title: title.value.trim(), sel: sel.value.trim(), text: text.value.trim() || T("（依頼を書いてください）"),
-      paths: attachments.map((a, i) => T("（送るときに決まるパス {0}）", i + 1)), footer: cfg.footer });
+      paths: [...draftPaths, ...attachments.map((a, i) => T("（送るときに決まるパス {0}）", i + 1))], notes: draft?.notes, app: draft?.app, footer: cfg.footer });
   };
   previewBox = h("details", { class: "intake-more" }, h("summary", {}, T("送る文面を見る")), preview);
   previewBox.addEventListener("toggle", paintPreview);
@@ -5406,27 +5427,45 @@ async function intakePage() {
         routes.push({ match, host: id, cwd: cwd.value.trim(), project: project.value.trim(), mode: mode.value });
         cfg = await api("/api/intake", { method: "PUT", json: { ...cfg, routes } });
       }
-      const prompt = intakePrompt({ url: url.value.trim(), title: title.value.trim(), sel: sel.value.trim(), text: body, paths, footer: cfg.footer });
+      if (draft && id !== draft.host && (draftPaths.length || draft.notes)) throw new Error(T("アプリの画像は {0} にあります。ホストを戻してください", deviceCache.get(draft.host)?.name || draft.host));
+      const prompt = intakePrompt({ url: url.value.trim(), title: title.value.trim(), sel: sel.value.trim(), text: body, paths: [...draftPaths, ...paths], notes: draft?.notes, app: draft?.app, footer: cfg.footer });
       const r = await dev(id).post("/pty/start", { cwd: cwd.value.trim(), cols: 120, rows: 36, prompt, permissionMode: mode.value, project: project.value.trim() });
       try { localStorage.setItem("ccdash.newSessionHost", id); } catch {}
+      if (draft) await api(`/api/intake/drafts/${encodeURIComponent(draft.id)}`, { method: "DELETE" }).catch(() => {});
       location.hash = `#/d/${id}/p/${encodeURIComponent(r.ptyKey)}`;
     } catch (e) { toast(e.message, 5000); sendBtn.disabled = false; }
   });
 
-  page.append(
-    h("h1", {}, T("クイック依頼")),
+  const others = (drafts || []).filter((d) => d.id !== draft?.id);
+  const draftList = others.length ? h("div", { class: "card col intake-drafts" },
+    h("span", { class: "muted small" }, T("アプリからの下書き（{0} 件）", others.length)),
+    ...others.map((d) => h("div", { class: "row" },
+      h("a", { class: "grow", href: "#/intake?draft=" + encodeURIComponent(d.id) }, h("b", {}, d.app), " ", firstLineOf(d.text)),
+      h("span", { class: "muted small" }, new Date(d.created).toLocaleString()),
+      h("button", { type: "button", class: "btn small", title: T("捨てる"), "aria-label": T("捨てる"), onclick: async (e) => {
+        await api(`/api/intake/drafts/${encodeURIComponent(d.id)}`, { method: "DELETE" }).catch((err) => toast(err.message));
+        e.target.closest(".row")?.remove();
+      } }, icon("x"))))) : null;
+  page.append(...[
+    h("h1", {}, draft ? T("アプリからの依頼") : T("クイック依頼")),
+    draftList,
     h("div", { class: "col" },
       h("label", { class: "col" }, h("span", { class: "muted small" }, T("依頼")), text),
       h("div", { class: "row wrap" }, pickBtn, grabBtn, h("span", { class: "muted small" }, T("画像は貼り付け・ドロップでも足せます"))),
-      thumbs, fileInput,
+      draftFiles, thumbs, fileInput,
       h("label", { class: "col" }, h("span", { class: "muted small" }, T("画面")), url, title),
       sel.value ? h("label", { class: "col" }, h("span", { class: "muted small" }, T("選択していた文字")), sel) : null,
       h("div", { class: "card col" },
         h("div", { class: "row" }, h("span", { class: "muted small" }, T("ホスト")), hostSel),
         cwd, h("div", { class: "row" }, project, mode), routeNote, rememberRow),
       previewBox,
-      h("div", { class: "actions" }, sendBtn)),
-    intakeSetup(() => cfg, (c) => { cfg = c; applyRoute(); }));
+      h("div", { class: "actions" },
+        draft ? h("button", { type: "button", class: "btn", onclick: async () => {
+          await api(`/api/intake/drafts/${encodeURIComponent(draft.id)}`, { method: "DELETE" }).catch((e) => toast(e.message));
+          location.hash = "#/intake";
+        } }, T("捨てる")) : null,
+        sendBtn)),
+    intakeSetup(() => cfg, (c) => { cfg = c; applyRoute(); })].filter(Boolean)); // Element.append prints null
   text.focus();
 }
 

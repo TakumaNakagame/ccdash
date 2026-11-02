@@ -974,3 +974,7 @@ When something on a page (your own app, say) should change, start a session from
 - **Footer**: text appended to every request (your standing rules)
 
 The bookmarklet reads only the URL, title and selection. Images go to the target machine's upload dir (`$XDG_STATE_HOME/ccdash/uploads`, removed after 7 days) and the request carries their paths. Routes and footer are stored in the hub per login; keep secrets out of them.
+
+### Requests from your own apps (`--intake-apps-file`)
+
+Put the "ask" button (`contrib/intake-widget/ccdash-intake.js`) in your own web apps and a page's URL, screenshot, app state and console errors reach the hub: the app's server relays to `POST /api/intake/requests` with the app's own token (the browser never sees it). Where it runs (machine, directory, project, permission mode) and whether it starts at once or waits as a draft are set in the hub's `--intake-apps-file` next to the token's hash; the caller can't change them. Drafts are listed on the quick request page and announced by push. See `contrib/intake-widget/README.md`.
