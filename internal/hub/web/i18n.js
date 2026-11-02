@@ -155,6 +155,8 @@ const EN = {
   "絞り込み": "Filter",
   "未読（NEW）のセッションを一覧の先頭にまとめる": "Gather unread (NEW) sessions at the top of the list",
   "新着を上に": "New first",
+  "プロジェクトでまとめず、最近動いた順に全部を並べる": "List everything by latest activity, not by project",
+  "更新順": "Recent",
   "アーカイブ表示中": "Showing archive",
   "アーカイブ": "Archive",
   "端末の設定（閲覧のみ）": "Device settings (read-only)",
