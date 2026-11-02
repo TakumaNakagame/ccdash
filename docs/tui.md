@@ -16,6 +16,7 @@ A working session's spinner is joined by a band of light running across the row,
 | `t` | rename the session (operator override of auto / generated title) |
 | `f` | pin / unpin (pins stay on top — inside a project, on top of its block — latest pin first; activity never moves them) |
 | `L` | watch later on / off: marked sessions gather in their own block at the very top until cleared |
+| `O` | recent order on / off: one flat list by latest activity, projects, pins and watch later ignored (date groups only; each row names its project). Kept in settings (`recent_order`). The web portal has the same as 更新順 |
 | `c` / `C` | next color / re-roll for the session's bar (shared with the portal). Running sessions get a stored color that stands apart from the other running ones; `C` re-rolls by the same rule |
 | `ctrl+r` | restart the session's ccdash-hosted claude (kill + `claude --resume`), after `y` |
 | `!` | show only sessions that need you (`?`: approval, question, menu on screen) or finished a turn you haven't looked at (`✓`) |

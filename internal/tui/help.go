@@ -59,6 +59,7 @@ var helpSections = []helpSection{
 		{"R", "toggle auto repo tabs"},
 		{"f", "pin / unpin (pins stay on top, latest pin first)"},
 		{"L", "watch later on / off (own block at the top)"},
+		{"O", "recent order on / off (flat by latest activity, projects ignored)"},
 		{"c / C", "next color / random color"},
 		{"x", "archive / unarchive"},
 		{"ctrl+x", "archive the whole tab"},

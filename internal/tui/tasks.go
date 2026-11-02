@@ -345,6 +345,35 @@ func (m *model) toggleListCollapsed() {
 	m.settings = next
 }
 
+// toggleRecentOrder is O (persisted): the session list flat by latest
+// activity, or back to project blocks.
+func (m *model) toggleRecentOrder() {
+	next, err := settings.Set(m.ctx, m.store, m.settings, "recent_order", !m.settings.RecentOrder)
+	if err != nil {
+		m.err = err
+		return
+	}
+	// Keep the cursor on the same session; it only moves in the list.
+	cur := ""
+	if m.selSess >= 0 && m.selSess < len(m.sessions) {
+		cur = m.sessions[m.selSess].SessionID
+	}
+	m.settings = next
+	m.applyGroupFilter()
+	m.selSess = m.defaultSelectionIdx()
+	for i, s := range m.sessions {
+		if cur != "" && s.SessionID == cur {
+			m.selSess = i
+			break
+		}
+	}
+	if next.RecentOrder {
+		m.flash = "recent order: latest activity first, projects ignored (O to undo)"
+	} else {
+		m.flash = "project order"
+	}
+}
+
 // taskPassKeys reach the dashboard even while the task pane has focus.
 var taskPassKeys = map[string]bool{"q": true, "ctrl+c": true, "?": true, "w": true, "b": true, "V": true, ",": true, "<": true, ">": true}
 

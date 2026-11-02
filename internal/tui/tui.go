@@ -1321,6 +1321,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "b":
 		m.toggleListCollapsed()
 		return m, nil
+	case "O":
+		m.toggleRecentOrder()
+		return m, nil
 	case "j", "down":
 		return m, m.moveWrap(1, msg.IsRepeat)
 	case "k", "up":
@@ -1608,7 +1611,11 @@ func (m *model) applyGroupFilter() {
 		}
 		src = out
 	}
-	src = laterFirst(projectsFirst(src))
+	if m.settings.RecentOrder {
+		src = byActivity(src)
+	} else {
+		src = laterFirst(projectsFirst(src))
+	}
 	if m.settings.NewestAtBottom {
 		// Reverse a copy: with no filter active src still aliases
 		// m.allSessions, and reversing that in place would flip the
@@ -1619,6 +1626,29 @@ func (m *model) applyGroupFilter() {
 		}
 	}
 	m.sessions = src
+}
+
+// activityAt is when a session last moved: LastActivity (newest transcript
+// entry or hook), else LastSeen.
+func activityAt(s mdl.Session) time.Time {
+	if !s.LastActivity.IsZero() {
+		return s.LastActivity
+	}
+	return s.LastSeen
+}
+
+// byActivity is recent order: a sorted copy (src may alias allSessions),
+// the session that moved last first, projects and pins ignored.
+func byActivity(src []mdl.Session) []mdl.Session {
+	out := append([]mdl.Session(nil), src...)
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := activityAt(out[i]), activityAt(out[j])
+		if !a.Equal(b) {
+			return a.After(b)
+		}
+		return out[i].Num > out[j].Num
+	})
+	return out
 }
 
 // laterFirst puts "watch later" sessions (L) at the very newest end, in
@@ -4048,19 +4078,21 @@ func (m *model) renderSessionsList(width, height int) string {
 		rowW--
 	}
 	prevBucket := ""
+	flat := m.settings.RecentOrder
 	for i, s := range m.sessions {
-		bucket := bucketFor(s, now)
+		bucket := bucketFor(s, now, flat)
+		inProject := strings.HasPrefix(bucket, projectBucketPrefix)
 		if bucket != prevBucket {
 			// A blank line around each project block keeps neighbouring
 			// projects (and the date groups after them) apart.
-			if len(rows) > 0 && (s.Project != "" || strings.HasPrefix(prevBucket, projectBucketPrefix)) {
+			if len(rows) > 0 && (inProject || strings.HasPrefix(prevBucket, projectBucketPrefix)) {
 				rows = append(rows, rowEntry{lines: []string{""}, sessionIdx: -1})
 			}
 			var header string
 			switch {
 			case bucket == bucketLater:
 				header = laterHeaderStyle.Render(padRight("⏰ "+bucket+"  (L to clear)", width))
-			case s.Project != "":
+			case inProject:
 				header = renderProjectHeader(s, stats[s.Project], width)
 			case bucket == bucketFavorites:
 				header = groupHeaderStyle.Render(padRight("📌 "+bucket, width))
@@ -4209,20 +4241,27 @@ func renderProjectHeader(s mdl.Session, st projectStat, width int) string {
 // members are grouped by project (projectsFirst puts them at the newest
 // end); pinned sessions go to the top regardless of date; everything else is
 // bucketed by last_seen.
-func bucketFor(s mdl.Session, now time.Time) string {
-	if s.Later {
-		return bucketLater
+// In recent order (flat) there are only date groups, by the same time
+// the list is sorted on (activityAt).
+func bucketFor(s mdl.Session, now time.Time, flat bool) string {
+	at := s.LastSeen
+	if flat {
+		at = activityAt(s)
+	} else {
+		if s.Later {
+			return bucketLater
+		}
+		if s.Project != "" {
+			return projectBucketPrefix + s.Project
+		}
+		if s.Favorite {
+			return bucketFavorites
+		}
 	}
-	if s.Project != "" {
-		return projectBucketPrefix + s.Project
-	}
-	if s.Favorite {
-		return bucketFavorites
-	}
-	if s.LastSeen.IsZero() {
+	if at.IsZero() {
 		return "Unknown"
 	}
-	t := s.LastSeen.Local()
+	t := at.Local()
 	today := now.Local()
 	if sameYMD(t, today) {
 		return "Today"
@@ -4262,6 +4301,9 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	}
 	width--
 	age := m.sessionTime(s.LastSeen)
+	if m.settings.RecentOrder {
+		age = m.sessionTime(activityAt(s))
+	}
 	// Line-2 indent aligns with where the title starts on line 1:
 	// marker(1) + " "(1) + dot(1) + " "(1) + age + " "(1).
 	indent := strings.Repeat(" ", 5+runewidth.StringWidth(age))
@@ -4377,16 +4419,26 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	}
 	meta := strings.Join(parts, " · ")
 	metaBudget := width - runewidth.StringWidth(indent)
+	// No project band above the row in recent order: the row names its
+	// project, in the project's color (kept out of shorten, which would
+	// count the color codes).
+	proj := ""
+	if m.settings.RecentOrder && s.Project != "" {
+		name := shorten(s.Project, 20)
+		pc := mdl.ProjectColorOf(s.Project, s.ProjectColor)
+		proj = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(pc)).Render(name) + subtitleStyle.Render(" · ")
+		metaBudget -= runewidth.StringWidth(name) + 3
+	}
 	if metaBudget < 10 {
 		metaBudget = 10
 	}
-	line2 := indent + subtitleStyle.Render(shorten(meta, metaBudget))
+	line2 := indent + proj + subtitleStyle.Render(shorten(meta, metaBudget))
 	if w := workLine(s, time.Now()); w != "" {
 		// While it works, what it's doing beats where it is: it leads,
 		// and the rest gets what's left of the line.
 		w = shorten(w, metaBudget)
 		rest := metaBudget - runewidth.StringWidth(w) - 3
-		line2 = indent + statusActive.Render(w)
+		line2 = indent + proj + statusActive.Render(w)
 		if rest >= 10 {
 			line2 += subtitleStyle.Render(" · " + shorten(meta, rest))
 		}
