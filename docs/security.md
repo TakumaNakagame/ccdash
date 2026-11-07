@@ -108,7 +108,8 @@ credentials or OAuth tokens.
   remote TUI can't ask the collector to read an arbitrary path.
 - Hub mode: the hub is effectively a remote operator for every joined
   device, so it is gated by OIDC login + an email allowlist, signed
-  HttpOnly/SameSite cookies, Go's cross-origin protection on state-changing
+  HttpOnly/SameSite cookies (lifetime `--session-ttl`, slid forward while
+  in use; *Log out all other devices* voids every other one), Go's cross-origin protection on state-changing
   API calls, and a same-origin check on the terminal WebSocket. Device
   tokens are stored only as SHA-256 hashes on the hub and 0600 on the
   device; rotating or deleting a device in the portal cuts its tunnel

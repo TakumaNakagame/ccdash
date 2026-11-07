@@ -245,6 +245,32 @@ the hostname) in front: devices dial the tunnel with their device token and
 can't pass an interactive login. Use the provider as the hub's OIDC issuer
 instead.
 
+### How long a login lasts
+
+A portal login is a signed cookie that lasts `--session-ttl`
+(`CCDASH_HUB_SESSION_TTL`, default `24h`, at most `2160h`). While the portal
+or the app is open it polls `/api/me`, which slides the expiry forward once
+half of it has passed, so a hub in daily use stays logged in and one left
+unused for a whole TTL asks again. When it does, the hub goes back to the
+provider; if the provider still has a session (Cloudflare Access: the
+team's global session, Zero Trust → Settings → Authentication → Global
+session timeout) that round trip is invisible. Keep the provider's session
+at least as long as `--session-ttl`, or the expired cookie will show the
+provider's login page.
+
+- The portal starts that login only while the page is visible: a tab or
+  installed app polling in the background waits, so a provider's login page
+  is never left open for hours. (Cloudflare Access answers a login page
+  finished too late with "Current authentication token is expired.")
+- A callback that comes back after its login state expired starts one fresh
+  login by itself instead of showing an error.
+- **Lost a device?** The portal's *Log out* → *Log out all other devices*
+  (`POST /api/logout-others`) voids every login but the current browser's,
+  the Android app's included. Also end the provider's sessions (Cloudflare
+  Access: Zero Trust → My Team → Users → *Revoke session*) so the device
+  can't simply log in again, and remove a joined machine with the portal's
+  device menu.
+
 ### Break glass (optional)
 
 If the OIDC provider is down, nobody can log in. Setting

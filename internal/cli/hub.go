@@ -58,6 +58,7 @@ func hubServeCmd() *cobra.Command {
 	var stateSecret, clusterPeers, clusterListen, clusterAdvertise string
 	var emails []string
 	var noAuth, tsAuth bool
+	var sessionTTL string
 	c := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the hub (web portal + device tunnel endpoint)",
@@ -74,7 +75,13 @@ is configured:
   CCDASH_HUB_ALLOWED_EMAILS (comma-separated),
   CCDASH_HUB_READ_TOKENS (comma-separated; or --read-token-file /
   CCDASH_HUB_READ_TOKEN_FILE),
+  CCDASH_HUB_SESSION_TTL,
   CCDASH_HUB_BREAK_GLASS_PASSWORD (environment only)
+
+--session-ttl is how long a login lasts without use (default 24h, at most
+2160h = 90 days). The portal and the app slide it forward while they are
+open, so keep it at least as long as the gap between uses you want to
+survive. The portal's "log out other devices" ends every other login.
 
 CCDASH_HUB_BREAK_GLASS_PASSWORD turns on a password login at
 /auth/break-glass for when the OIDC provider is down: one-hour sessions,
@@ -88,6 +95,14 @@ Read tokens are for machine clients (bots, scripts): a request with
 
 TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var ttl time.Duration
+			if v := envOr(sessionTTL, "CCDASH_HUB_SESSION_TTL"); v != "" {
+				d, err := time.ParseDuration(v)
+				if err != nil || d < time.Minute || d > hub.MaxSessionTTL {
+					return fmt.Errorf("--session-ttl %q: want a duration from 1m to %s, e.g. 720h", v, hub.MaxSessionTTL)
+				}
+				ttl = d
+			}
 			listen = envOr(listen, "CCDASH_HUB_LISTEN")
 			if listen == "" {
 				listen = "127.0.0.1:8080"
@@ -178,6 +193,7 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 					AllowedEmails:  emails,
 					NoAuth:         noAuth,
 					TailscaleServe: tsAuth,
+					SessionTTL:     ttl,
 
 					BreakGlassPassword: os.Getenv("CCDASH_HUB_BREAK_GLASS_PASSWORD"),
 				},
@@ -199,6 +215,7 @@ TLS is expected to terminate in front of the hub (Caddy / ingress).`,
 	c.Flags().StringVar(&secretFile, "oidc-client-secret-file", "", "file holding the OIDC client secret (else $CCDASH_HUB_OIDC_CLIENT_SECRET)")
 	c.Flags().StringSliceVar(&emails, "allowed-email", nil, "email allowed to log in (repeatable; your own addresses — the hub is for one person)")
 	c.Flags().BoolVar(&tsAuth, "tailscale-auth", false, "log users in by the Tailscale-User-Login header of `tailscale serve` (loopback --listen; logins must be in --allowed-email)")
+	c.Flags().StringVar(&sessionTTL, "session-ttl", "", "how long a login lasts without use, e.g. 720h (default 24h; the portal slides it forward while open; else $CCDASH_HUB_SESSION_TTL)")
 	c.Flags().BoolVar(&noAuth, "no-auth", false, "skip login (local development only; loopback --listen required)")
 	c.Flags().StringVar(&stateSecret, "state-secret", "", "keep the state in this Kubernetes Secret (in-cluster service account) instead of hub.sqlite; an existing <data-dir>/hub.sqlite is imported once (else $CCDASH_HUB_STATE_SECRET)")
 	c.Flags().StringVar(&clusterPeers, "cluster-peers", "", "run as one of several replicas: DNS name of a headless Service listing them (or host:port,host:port); needs --state-secret")

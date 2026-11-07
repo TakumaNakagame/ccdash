@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +40,19 @@ type AuthConfig struct {
 	// BreakGlassPassword, when set on an OIDC hub, opens a password login
 	// at /auth/break-glass for when the provider is down (breakglass.go).
 	BreakGlassPassword string
+	// SessionTTL is how long a login lasts without use (0 = DefaultSessionTTL).
+	// The portal and the app poll /api/me, which slides the expiry forward
+	// once half of it has passed, so a hub in daily use stays logged in;
+	// "log out other devices" (POST /api/logout-others) ends the rest.
+	SessionTTL time.Duration
 }
+
+// DefaultSessionTTL is the hub login's lifetime when --session-ttl is unset;
+// MaxSessionTTL caps the flag.
+const (
+	DefaultSessionTTL = 24 * time.Hour
+	MaxSessionTTL     = 90 * 24 * time.Hour
+)
 
 // tailscaleLoginHeader is the identity header `tailscale serve` adds.
 const tailscaleLoginHeader = "Tailscale-User-Login"
@@ -53,8 +66,18 @@ const (
 	// with "state mismatch".
 	loginCookie = "ccdash_hub_login_"
 	loginPath   = "/auth/"
-	sessionTTL  = 24 * time.Hour
 	loginTTL    = 10 * time.Minute
+	// reloginCookie marks a login the hub restarted by itself because the
+	// callback came back after its state had expired (a login page left
+	// open on the phone, then finished hours later). Only one restart per
+	// reloginTTL, so a browser that drops cookies can't loop.
+	reloginCookie = "ccdash_hub_relogin"
+	reloginTTL    = 2 * time.Minute
+	// notBeforeKey is the kv row holding the Unix time before which
+	// sessions are void ("log out other devices"); notBeforeCache is how
+	// long a replica trusts its copy.
+	notBeforeKey   = "session_not_before"
+	notBeforeCache = 5 * time.Second
 )
 
 type authn struct {
@@ -70,6 +93,106 @@ type authn struct {
 	bgMu    sync.Mutex
 	bgFails []time.Time   // recent break-glass failures (per replica)
 	bgDelay time.Duration // pause after a failure
+
+	// st holds notBeforeKey (nil in tests that build an authn by hand:
+	// nothing is ever revoked there).
+	st     stateStore
+	nbMu   sync.Mutex
+	nbVal  int64
+	nbRead time.Time
+}
+
+func (a *authn) sessionTTL() time.Duration {
+	if a.cfg.SessionTTL > 0 {
+		return a.cfg.SessionTTL
+	}
+	return DefaultSessionTTL
+}
+
+// notBefore is the Unix time before which a session cookie no longer
+// counts, read through a short cache (every API call checks it).
+func (a *authn) notBefore(ctx context.Context) int64 {
+	if a.st == nil {
+		return 0
+	}
+	a.nbMu.Lock()
+	defer a.nbMu.Unlock()
+	if time.Since(a.nbRead) < notBeforeCache {
+		return a.nbVal
+	}
+	v, err := a.st.secret(ctx, notBeforeKey, func() string { return "0" })
+	if err != nil {
+		log.Printf("hub: read %s: %v", notBeforeKey, err)
+		return a.nbVal // keep the last known value
+	}
+	n, _ := strconv.ParseInt(v, 10, 64)
+	a.nbVal, a.nbRead = n, time.Now()
+	return n
+}
+
+// newSession sets the login cookie for email, issued at iat.
+func (a *authn) newSession(w http.ResponseWriter, email string, iat int64) {
+	ttl := a.sessionTTL()
+	a.setCookie(w, sessionCookie, a.sign(sessionClaims{
+		Email: email,
+		Exp:   time.Now().Add(ttl).Unix(),
+		Iat:   iat,
+	}), ttl)
+}
+
+// session returns the valid session claims on r, if any.
+func (a *authn) session(r *http.Request) (sessionClaims, bool) {
+	var sc sessionClaims
+	c, err := r.Cookie(sessionCookie)
+	if err != nil || !a.open(c.Value, &sc) || time.Now().Unix() > sc.Exp {
+		return sc, false
+	}
+	if sc.Iat < a.notBefore(r.Context()) {
+		return sc, false
+	}
+	return sc, true
+}
+
+// renewSession slides an OIDC session forward once half of its lifetime
+// has passed (the portal polls /api/me). Break-glass sessions keep their
+// hour.
+func (a *authn) renewSession(w http.ResponseWriter, r *http.Request) {
+	if a.local != nil || a.cfg.NoAuth || a.cfg.TailscaleServe {
+		return
+	}
+	sc, ok := a.session(r)
+	if !ok || sc.BreakGlass || !a.allowed(sc.Email) {
+		return
+	}
+	if time.Until(time.Unix(sc.Exp, 0)) < a.sessionTTL()/2 {
+		a.newSession(w, sc.Email, sc.Iat)
+	}
+}
+
+// handleLogoutOthers voids every session but the caller's: a lost phone's
+// login, say. The caller gets a fresh cookie issued at the cut-off.
+func (a *authn) handleLogoutOthers(w http.ResponseWriter, r *http.Request) {
+	sc, ok := a.session(r)
+	if !ok {
+		http.Error(w, "login required", http.StatusUnauthorized)
+		return
+	}
+	now := time.Now().Unix()
+	if err := a.st.putKV(r.Context(), notBeforeKey, strconv.FormatInt(now, 10)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.nbMu.Lock()
+	a.nbVal, a.nbRead = now, time.Now()
+	a.nbMu.Unlock()
+	log.Printf("hub: %s logged out every other session", sc.Email)
+	if sc.BreakGlass {
+		// Keep the break-glass hour rather than turning it into a full login.
+		a.setCookie(w, sessionCookie, a.sign(sessionClaims{Email: sc.Email, Exp: sc.Exp, Iat: now, BreakGlass: true}), time.Until(time.Unix(sc.Exp, 0)))
+	} else {
+		a.newSession(w, sc.Email, now)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *authn) oauth(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVerifier, error) {
@@ -124,6 +247,9 @@ func (a *authn) open(s string, v any) bool {
 type sessionClaims struct {
 	Email string `json:"e"`
 	Exp   int64  `json:"x"`
+	// Iat is when the login happened (0 on cookies from before it was
+	// recorded); a session issued before notBeforeKey is void.
+	Iat int64 `json:"i,omitempty"`
 	// BreakGlass marks a session from the break-glass login: valid only
 	// while the password is still configured.
 	BreakGlass bool `json:"bg,omitempty"`
@@ -149,12 +275,8 @@ func (a *authn) user(r *http.Request) (string, bool) {
 		login := strings.ToLower(strings.TrimSpace(r.Header.Get(tailscaleLoginHeader)))
 		return login, a.allowed(login)
 	}
-	c, err := r.Cookie(sessionCookie)
-	if err != nil {
-		return "", false
-	}
-	var sc sessionClaims
-	if !a.open(c.Value, &sc) || time.Now().Unix() > sc.Exp {
+	sc, ok := a.session(r)
+	if !ok {
 		return "", false
 	}
 	if sc.BreakGlass {
@@ -229,6 +351,7 @@ func (a *authn) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Exp:      time.Now().Add(loginTTL).Unix(),
 	}
 	a.setCookiePath(w, loginCookie+ls.State, a.sign(ls), loginPath, loginTTL)
+	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, oc.AuthCodeURL(ls.State, oidc.Nonce(ls.Nonce), oauth2.S256ChallengeOption(ls.Verifier)), http.StatusFound)
 }
 
@@ -241,6 +364,16 @@ func (a *authn) handleCallback(w http.ResponseWriter, r *http.Request) {
 		// finished: the browser is logged in, so just go back.
 		if _, ok := a.user(r); ok {
 			http.Redirect(w, r, "/", http.StatusFound)
+			return
+		}
+		// The login page sat open past its state's lifetime (a phone left
+		// on the provider's page): start a fresh login instead of an
+		// error, once per reloginTTL so a cookie-less browser can't loop.
+		if _, err := r.Cookie(reloginCookie); err != nil && r.URL.Query().Get("error") == "" {
+			log.Printf("hub: login state expired or missing; starting a new login")
+			a.setCookiePath(w, reloginCookie, "1", loginPath, reloginTTL)
+			w.Header().Set("Cache-Control", "no-store")
+			http.Redirect(w, r, "/auth/login?next=/", http.StatusFound)
 			return
 		}
 		a.loginFailed(w, "login expired — start again from the portal", http.StatusBadRequest)
@@ -295,10 +428,8 @@ func (a *authn) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("hub: login %s", claims.Email)
-	a.setCookie(w, sessionCookie, a.sign(sessionClaims{
-		Email: strings.ToLower(claims.Email),
-		Exp:   time.Now().Add(sessionTTL).Unix(),
-	}), sessionTTL)
+	a.clearCookiePath(w, reloginCookie, loginPath)
+	a.newSession(w, strings.ToLower(claims.Email), time.Now().Unix())
 	http.Redirect(w, r, ls.Next, http.StatusFound)
 }
 

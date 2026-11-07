@@ -72,6 +72,45 @@ class HTTPError extends Error {
 
 let loggingIn = false;
 
+// startLogin goes to the hub's login, but only while someone looks at the
+// page. A poll in a background tab (or the installed app left in the
+// background) used to start it at once, and the provider's login page then
+// sat there for hours; finishing it later failed on Cloudflare Access with
+// "Current authentication token is expired.". Wait for the page to be
+// shown, so every login starts fresh in front of the user.
+function startLogin() {
+  const go = () => {
+    try { sessionStorage.setItem("ccdash.next", location.hash); } catch {}
+    location.href = "/auth/login?next=/";
+  };
+  if (document.visibilityState !== "hidden") { go(); return; }
+  const onShow = () => {
+    if (document.visibilityState === "hidden") return;
+    document.removeEventListener("visibilitychange", onShow);
+    go();
+  };
+  document.addEventListener("visibilitychange", onShow);
+}
+
+// logoutDialog: log this browser out, or end every other login (a lost
+// phone or laptop) and stay logged in here.
+function logoutDialog(ev) {
+  ev.preventDefault();
+  dialog((body, close) => body.append(
+    h("h1", {}, T("ログアウト")),
+    h("p", {}, T("端末をなくしたときは「ほかの端末をすべてログアウト」で、このブラウザ以外のログイン（スマホのアプリも）を無効にできます。")),
+    h("div", { class: "actions" },
+      h("button", { type: "button", class: "btn danger", onclick: async () => {
+        if (!confirm(T("このブラウザ以外のログインをすべて無効にしますか？"))) return;
+        try {
+          await api("/api/logout-others", { method: "POST" });
+          close(); toast(T("ほかの端末をログアウトしました"));
+        } catch (e) { toast(e.message || String(e)); }
+      } }, T("ほかの端末をすべてログアウト")),
+      h("button", { type: "button", class: "btn", onclick: () => { location.href = "/auth/logout"; } }, T("このブラウザからログアウト")),
+      h("button", { class: "btn primary" }, T("閉じる")))));
+}
+
 async function api(path, opts = {}) {
   const init = { credentials: "same-origin", ...opts, headers: { ...(opts.headers || {}) } };
   if (opts.json !== undefined) {
@@ -84,8 +123,7 @@ async function api(path, opts = {}) {
     // Several polls hit the expired session at once; start one login.
     if (!loggingIn) {
       loggingIn = true;
-      try { sessionStorage.setItem("ccdash.next", location.hash); } catch {}
-      location.href = "/auth/login?next=/";
+      startLogin();
     }
     throw new HTTPError(401, "login required");
   }
@@ -5566,7 +5604,7 @@ function installListFold() {
       if (b) b.textContent = "web";
     }
     loadLook();
-    $("#me").replaceChildren(h("span", {}, lookButton(), notifyButton(), h("span", { class: "email" }, me.email), me.noAuth ? null : h("a", { href: "/auth/logout" }, T("ログアウト"))));
+    $("#me").replaceChildren(h("span", {}, lookButton(), notifyButton(), h("span", { class: "email" }, me.email), me.noAuth ? null : h("a", { href: "/auth/logout", onclick: logoutDialog }, T("ログアウト"))));
   } catch {}
   // Reload into a new hub build: a single-page app otherwise keeps running
   // the JS it loaded, however long the tab stays open. Wait while the user
