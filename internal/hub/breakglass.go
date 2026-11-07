@@ -84,6 +84,7 @@ func (a *authn) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	a.setCookie(w, sessionCookie, a.sign(sessionClaims{
 		Email:      breakGlassUser,
 		Exp:        time.Now().Add(breakGlassTTL).Unix(),
+		Iat:        time.Now().Unix(),
 		BreakGlass: true,
 	}), breakGlassTTL)
 	http.Redirect(w, r, "/", http.StatusFound)

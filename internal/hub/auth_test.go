@@ -162,8 +162,111 @@ func TestOIDCLogin(t *testing.T) {
 		t.Errorf("stale callback while logged in = %d, want 302", w.Code)
 	}
 
-	// A callback without the login cookie (CSRF / replay) is refused.
-	if w := serve(handler, "GET", "/auth/callback?code=good-code&state=x", "", nil); w.Code != http.StatusBadRequest {
-		t.Errorf("callback without login cookie = %d, want 400", w.Code)
+	// A callback without the login cookie (a login page left open past
+	// its lifetime, or a replay) starts a fresh login once instead of an
+	// error; the code is never exchanged.
+	w = serve(handler, "GET", "/auth/callback?code=good-code&state=x", "", nil)
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/auth/login?next=/" {
+		t.Fatalf("stale callback = %d %q, want a new login", w.Code, w.Header().Get("Location"))
+	}
+	var relogin *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == reloginCookie {
+			relogin = c
+		}
+		if c.Name == sessionCookie && c.Value != "" {
+			t.Fatal("stale callback issued a session")
+		}
+	}
+	if relogin == nil {
+		t.Fatal("no relogin marker")
+	}
+	// The second one within reloginTTL is an error, so it can't loop.
+	r = httptest.NewRequest("GET", "/auth/callback?code=good-code&state=x", nil)
+	r.AddCookie(relogin)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("repeated stale callback = %d, want 400", w.Code)
+	}
+	// A provider error is shown, not retried.
+	if w := serve(handler, "GET", "/auth/callback?error=access_denied&state=x", "", nil); w.Code != http.StatusBadRequest {
+		t.Errorf("stale callback with error = %d, want 400", w.Code)
+	}
+}
+
+func TestSessionRenewAndLogoutOthers(t *testing.T) {
+	h, err := New(context.Background(), Config{
+		DataDir:   t.TempDir(),
+		PublicURL: "https://hub.example",
+		Auth: AuthConfig{Issuer: "https://issuer.example", ClientID: "id", ClientSecret: "s",
+			AllowedEmails: []string{"me@example.com"}, SessionTTL: 30 * 24 * time.Hour},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	handler := h.Handler()
+	mk := func(c sessionClaims) *http.Cookie {
+		return &http.Cookie{Name: sessionCookie, Value: h.auth.sign(c)}
+	}
+	get := func(c *http.Cookie, method, path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, nil)
+		r.Host = "hub.example"
+		r.AddCookie(c)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	now := time.Now()
+
+	// Fresh: /api/me leaves it alone.
+	fresh := mk(sessionClaims{Email: "me@example.com", Exp: now.Add(29 * 24 * time.Hour).Unix(), Iat: now.Unix()})
+	if w := get(fresh, "GET", "/api/me"); w.Code != 200 || sessionOf(w) != nil {
+		t.Fatalf("fresh /api/me = %d, renewed=%v", w.Code, sessionOf(w) != nil)
+	}
+	// Past half: slid forward to the full TTL, same Iat.
+	old := mk(sessionClaims{Email: "me@example.com", Exp: now.Add(2 * 24 * time.Hour).Unix(), Iat: 123})
+	w := get(old, "GET", "/api/me")
+	c := sessionOf(w)
+	if c == nil || c.MaxAge < int((29*24*time.Hour).Seconds()) {
+		t.Fatalf("old session not renewed: %+v", c)
+	}
+	var sc sessionClaims
+	if !h.auth.open(c.Value, &sc) || sc.Iat != 123 || time.Until(time.Unix(sc.Exp, 0)) < 29*24*time.Hour {
+		t.Fatalf("renewed claims = %+v", sc)
+	}
+	// Break glass keeps its hour.
+	bg := mk(sessionClaims{Email: breakGlassUser, Exp: now.Add(time.Minute).Unix(), BreakGlass: true})
+	if w := get(bg, "GET", "/api/me"); sessionOf(w) != nil {
+		t.Error("break-glass session renewed")
+	}
+
+	// Log out other devices: the caller keeps working, an older cookie
+	// (and one from before Iat existed) is void.
+	legacy := mk(sessionClaims{Email: "me@example.com", Exp: now.Add(time.Hour).Unix()})
+	w = get(fresh, "POST", "/api/logout-others")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("logout-others = %d %s", w.Code, w.Body)
+	}
+	mine := sessionOf(w)
+	if mine == nil {
+		t.Fatal("caller got no new cookie")
+	}
+	if w := get(mine, "GET", "/api/devices"); w.Code != 200 {
+		t.Errorf("caller after logout-others = %d", w.Code)
+	}
+	// Another replica (no cache yet) reads the same cut-off from the store.
+	h.auth.nbMu.Lock()
+	h.auth.nbRead = time.Time{}
+	h.auth.nbMu.Unlock()
+	for name, c := range map[string]*http.Cookie{"older": mk(sessionClaims{Email: "me@example.com", Exp: now.Add(time.Hour).Unix(), Iat: now.Unix() - 10}), "legacy": legacy} {
+		if w := get(c, "GET", "/api/devices"); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s cookie after logout-others = %d, want 401", name, w.Code)
+		}
+	}
+	// Not without a session.
+	if w := serve(handler, "POST", "/api/logout-others", "", nil); w.Code != http.StatusUnauthorized {
+		t.Errorf("logout-others without login = %d", w.Code)
 	}
 }

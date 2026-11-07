@@ -161,7 +161,7 @@ func New(ctx context.Context, cfg Config) (*Hub, error) {
 	for i, e := range cfg.Auth.AllowedEmails {
 		cfg.Auth.AllowedEmails[i] = strings.ToLower(strings.TrimSpace(e))
 	}
-	a := &authn{cfg: cfg.Auth, publicURL: cfg.PublicURL, key: []byte(key), secure: pu.Scheme == "https", bgDelay: breakGlassDelay}
+	a := &authn{cfg: cfg.Auth, publicURL: cfg.PublicURL, key: []byte(key), secure: pu.Scheme == "https", bgDelay: breakGlassDelay, st: st}
 	if cfg.Local != nil {
 		if a.local, err = newLocalLogin(cfg.Local, cfg.PublicURL); err != nil {
 			_ = st.Close()
@@ -328,6 +328,7 @@ func (h *Hub) Handler() http.Handler {
 		api.HandleFunc("DELETE /api/devices/{id}", h.handleDeleteDevice)
 		api.HandleFunc("POST /api/devices/{id}/peer", h.handlePeerAccess)
 		api.HandleFunc("POST /api/devices/{id}/letter", h.handleSetLetter)
+		api.HandleFunc("POST /api/logout-others", h.auth.handleLogoutOthers)
 	}
 	api.HandleFunc("GET /api/me", h.handleMe)
 	api.HandleFunc("GET /api/devices", h.handleListDevices)
@@ -698,6 +699,8 @@ func (h *Hub) handleMe(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.Local != nil {
 		// The SPA polls this every 30 s: keep a portal in daily use logged in.
 		h.auth.renewLocal(w, r)
+	} else {
+		h.auth.renewSession(w, r)
 	}
 	writeJSON(w, map[string]any{"email": email, "version": buildinfo.Version, "publicUrl": h.cfg.PublicURL,
 		"noAuth": h.cfg.Auth.NoAuth || h.cfg.Auth.TailscaleServe || h.cfg.Local != nil,
