@@ -145,3 +145,26 @@ func TestSessionEndUnknown(t *testing.T) {
 		t.Fatalf("real session: ok=%v status=%q", ok, got.Status)
 	}
 }
+
+// TestIgnoredRunsTakeNoNumber: automated runs are outside ccdash — they
+// never get a session number, so the operator's sessions stay #1, #2, #3
+// with no gaps however many cron runs happened in between.
+func TestIgnoredRunsTakeNoNumber(t *testing.T) {
+	s, d, tok := newTestServer(t)
+	ctx := context.Background()
+	cfg, _ := settings.Load(ctx, d)
+	if _, err := settings.Set(ctx, d, cfg, "ignore_dirs", "/home/u/nudge"); err != nil {
+		t.Fatal(err)
+	}
+	ignoreHookReq(t, s, tok, "/hooks/session-start", "real1", "/home/u/p", nil)
+	fullTurn(t, s, tok, "marked", "/home/u", map[string]string{"X-Ccdash-Ignore": "1", "X-Ccdash-Entrypoint": "sdk-cli"})
+	fullTurn(t, s, tok, "slot", "/home/u/nudge", map[string]string{"X-Ccdash-Entrypoint": "sdk-cli"})
+	ignoreHookReq(t, s, tok, "/hooks/session-end", "mcp-list", "/home/u", map[string]string{"X-Ccdash-Entrypoint": "sdk-cli"})
+	s.discoverySkip(ctx, map[string]bool{}, "/home/u/nudge", "late", "/home/u/nudge", "sdk-cli")
+	ignoreHookReq(t, s, tok, "/hooks/session-start", "real2", "/home/u/p", nil)
+	r1, _, _ := d.GetSession(ctx, "real1")
+	r2, _, _ := d.GetSession(ctx, "real2")
+	if r1.Num != 1 || r2.Num != 2 {
+		t.Fatalf("nums = %d, %d; want 1, 2 (automated runs took numbers)", r1.Num, r2.Num)
+	}
+}

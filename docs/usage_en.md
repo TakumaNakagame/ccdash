@@ -516,7 +516,8 @@ portal's device-page restart button offers 作業が終わったら再起動 / �
   (plus a push), and `waiting_on` in MCP `start_session` / `overview`.
 - **Ignored folders**: comma-separated folders (`~/` allowed) whose
   headless claude runs (`claude -p`, e.g. a cron job) ccdash never records —
-  no row in the list, the archive, the portal, MCP or the unread counts.
+  no row in the list, the archive, the portal, MCP or the unread counts, and no
+  session number (your sessions' `#N` stay consecutive).
   Sessions ccdash starts there itself, and interactive ones, still show.
   A script can instead opt a single run out with `CCDASH_IGNORE=1` in
   claude's environment (forwarded by the hooks; ccdash's own spawns never
