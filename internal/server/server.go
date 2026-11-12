@@ -134,16 +134,18 @@ func (s *Server) routes() {
 	wrap := func(h http.HandlerFunc) http.HandlerFunc {
 		return s.rateLimited(s.requireToken(h))
 	}
-	s.mux.HandleFunc("/hooks/session-start", wrap(s.handleSessionStart))
-	s.mux.HandleFunc("/hooks/session-end", wrap(s.handleSessionEnd))
-	s.mux.HandleFunc("/hooks/user-prompt", wrap(s.handleUserPrompt))
-	s.mux.HandleFunc("/hooks/pre-tool", wrap(s.handlePreTool))
-	s.mux.HandleFunc("/hooks/post-tool", wrap(s.handlePostTool))
-	s.mux.HandleFunc("/hooks/post-tool-failure", wrap(s.handlePostToolFailure))
-	s.mux.HandleFunc("/hooks/permission-request", wrap(s.handlePermissionRequest))
-	s.mux.HandleFunc("/hooks/stop", wrap(s.handleStop))
-	s.mux.HandleFunc("/hooks/subagent-stop", wrap(s.handleSubagentStop))
-	s.mux.HandleFunc("/hooks/notification", wrap(s.handleNotification))
+	// Hook events also pass the automated-run gate (ignore.go).
+	hook := func(h http.HandlerFunc) http.HandlerFunc { return wrap(s.ignoreGate(h)) }
+	s.mux.HandleFunc("/hooks/session-start", hook(s.handleSessionStart))
+	s.mux.HandleFunc("/hooks/session-end", hook(s.handleSessionEnd))
+	s.mux.HandleFunc("/hooks/user-prompt", hook(s.handleUserPrompt))
+	s.mux.HandleFunc("/hooks/pre-tool", hook(s.handlePreTool))
+	s.mux.HandleFunc("/hooks/post-tool", hook(s.handlePostTool))
+	s.mux.HandleFunc("/hooks/post-tool-failure", hook(s.handlePostToolFailure))
+	s.mux.HandleFunc("/hooks/permission-request", hook(s.handlePermissionRequest))
+	s.mux.HandleFunc("/hooks/stop", hook(s.handleStop))
+	s.mux.HandleFunc("/hooks/subagent-stop", hook(s.handleSubagentStop))
+	s.mux.HandleFunc("/hooks/notification", hook(s.handleNotification))
 	// Not rate-limited: it fires on every UI update of every running
 	// claude and only touches memory (the limiter guards the SQLite writer).
 	s.mux.HandleFunc("POST /hooks/statusline", s.requireToken(s.handleStatusLine))
@@ -419,6 +421,12 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 		procs, _ := procmap.Snapshot(ctx, acc.Dir)
 		s.aliasPTYsByParent(ctx, procs)
 		hideHeadless := s.hideHeadless(ctx)
+		ignored, err := s.db.IgnoredIDs(ctx)
+		if err != nil {
+			log.Printf("discovery: ignored ids: %v", err)
+			ignored = map[string]bool{}
+		}
+		cfg, _ := settings.Load(ctx, s.db)
 
 		for _, d := range discovered {
 			s.titler.note(d)
@@ -435,6 +443,13 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 				Account:      acc.Name,
 				Entrypoint:   d.Entrypoint,
 				HideHeadless: hideHeadless,
+			}
+			entrypoint := d.Entrypoint
+			if entry, ok := procs[d.SessionID]; ok && entry.Entrypoint != "" {
+				entrypoint = entry.Entrypoint
+			}
+			if s.discoverySkip(ctx, ignored, cfg.IgnoreDirs, d.SessionID, d.Cwd, entrypoint) {
+				continue
 			}
 			if entry, ok := procs[d.SessionID]; ok {
 				sess.ProcPID = entry.PID
@@ -647,6 +662,13 @@ func (s *Server) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 	p, raw, err := readPayload(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	// A session that ends before ccdash ever saw it never ran a turn:
+	// `claude mcp list` and other subcommands fire only SessionEnd and
+	// write no transcript. Don't create a row for it.
+	if p.SessionID == "" || !s.db.SessionExists(r.Context(), p.SessionID) {
+		writeOK(w, nil)
 		return
 	}
 	// Closing a session isn't activity either (often it was only opened

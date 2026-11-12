@@ -514,6 +514,18 @@ portal's device-page restart button offers 作業が終わったら再起動 / �
   that does stop at a dialog before it has a session is flagged anyway:
   a "waiting for you" row in the TUI, 要対応 under 起動中 in the portal
   (plus a push), and `waiting_on` in MCP `start_session` / `overview`.
+- **Ignored folders**: comma-separated folders (`~/` allowed) whose
+  headless claude runs (`claude -p`, e.g. a cron job) ccdash never records —
+  no row in the list, the archive, the portal, MCP or the unread counts.
+  Sessions ccdash starts there itself, and interactive ones, still show.
+  A script can instead opt a single run out with `CCDASH_IGNORE=1` in
+  claude's environment (forwarded by the hooks; ccdash's own spawns never
+  inherit it). A run that only ever fires SessionEnd (`claude mcp list` and
+  other subcommands) is never recorded either. From a shell:
+  `ccdash ignore` lists, `ccdash ignore <dir>` adds, `ccdash ignore --remove
+  <dir>` removes; `ccdash ignore prune [--dir <dir>]` lists rows earlier
+  automated runs left behind and `--yes` deletes them (pinned / project /
+  renamed / task-linked rows are never touched).
 
 ## 11. Self-update
 

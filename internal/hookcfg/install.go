@@ -19,6 +19,10 @@ const MarkerKey = "X-Ccdash-Managed"
 // hook entry written by Apply().
 const TokenHeaderKey = "X-Ccdash-Token"
 
+// IgnoreHeaderKey forwards $CCDASH_IGNORE: an automated claude run sets it
+// so the collector never records the session.
+const IgnoreHeaderKey = "X-Ccdash-Ignore"
+
 // Endpoints maps Claude Code hook event names to ccdash HTTP paths.
 var Endpoints = map[string]string{
 	"SessionStart":       "/hooks/session-start",
@@ -63,6 +67,7 @@ var allowedEnvVars = []string{
 	"CCDASH_GIT_COMMIT",
 	"CCDASH_TMUX_PANE",
 	"CCDASH_TMUX_SESSION",
+	"CCDASH_IGNORE",
 }
 
 func defaultHeaders(token string) map[string]string {
@@ -75,6 +80,7 @@ func defaultHeaders(token string) map[string]string {
 		"X-Ccdash-Git-Commit":   "${CCDASH_GIT_COMMIT}",
 		"X-Ccdash-Tmux-Pane":    "${CCDASH_TMUX_PANE}",
 		"X-Ccdash-Tmux-Session": "${CCDASH_TMUX_SESSION}",
+		IgnoreHeaderKey:         "${CCDASH_IGNORE}",
 	}
 }
 
@@ -261,6 +267,10 @@ func NeedsResync(path string) (bool, error) {
 					if !blockingEvent(event) {
 						return true, nil
 					}
+					// Pre-CCDASH_IGNORE entries lack the header.
+					if hdr, _ := hm["headers"].(map[string]any); hdr[IgnoreHeaderKey] == nil {
+						return true, nil
+					}
 				case "command":
 					b, err := os.ReadFile(scriptPath)
 					if err != nil || !scriptCurrent(b) {
@@ -314,7 +324,8 @@ func shellQuote(s string) string {
 // hookScriptTemplate changes.
 //
 //	rev 2: forwards CLAUDE_CODE_ENTRYPOINT (tells `claude -p` runs apart)
-const hookScriptRev = "# rev 2"
+//	rev 3: forwards CCDASH_IGNORE (automated runs ccdash never lists)
+const hookScriptRev = "# rev 3"
 
 // hookScriptTemplate is the POSIX-sh forwarder. %s placeholders are, in order,
 // the collector base URL and the absolute token file path. It reads the hook
@@ -358,6 +369,7 @@ tok="$(printf '%%s' "$tok" | tr -d '[:space:]')"
     -H "X-Ccdash-Tmux-Pane: ${CCDASH_TMUX_PANE:-}" \
     -H "X-Ccdash-Tmux-Session: ${CCDASH_TMUX_SESSION:-}" \
     -H "X-Ccdash-Entrypoint: ${CLAUDE_CODE_ENTRYPOINT:-}" \
+    -H "X-Ccdash-Ignore: ${CCDASH_IGNORE:-}" \
     --data-binary @- \
 ) </dev/null >/dev/null 2>&1 &
 exit 0
