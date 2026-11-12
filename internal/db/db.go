@@ -96,6 +96,11 @@ func (d *DB) migrate() error {
 			value TEXT NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
+		// Automated runs ccdash must never list (ignore.go).
+		`CREATE TABLE IF NOT EXISTS ignored_sessions (
+			session_id TEXT PRIMARY KEY,
+			at INTEGER NOT NULL
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.sql.Exec(s); err != nil {

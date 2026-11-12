@@ -44,6 +44,9 @@ func SafeEnv() []string {
 		"CLAUDE_PID":           true,
 		"CLAUDE_EFFORT":        true,
 		"CLAUDE_PROJECT_DIR":   true,
+		// A collector started from an ignored run must not pass the
+		// marker on: the sessions it hosts are the operator's.
+		"CCDASH_IGNORE": true,
 	}
 	src := os.Environ()
 	out := make([]string, 0, len(src))

@@ -67,6 +67,11 @@ type Settings struct {
 	// before starting claude there (internal/claudecfg). Empty = off.
 	TrustedDirs string
 
+	// IgnoreDirs lists folders (comma/newline separated, ~/ allowed)
+	// whose automated claude runs ccdash never records (internal/server
+	// ignore.go). Sessions ccdash itself starts there still show. Empty = off.
+	IgnoreDirs string
+
 	// PaneRatio is "list:work:tasks" — how the dashboard's three columns
 	// share the width (ParsePaneRatio normalizes it). Without the task
 	// pane, list:work share it; in the vertical layout list:work splits
@@ -142,6 +147,7 @@ const (
 	keyRefreshIntervalMs = "refresh_interval_ms"
 	keyNewSessionDir     = "new_session_dir"
 	keyTrustedDirs       = "trusted_dirs"
+	keyIgnoreDirs        = "ignore_dirs"
 	keyPaneRatio         = "pane_ratio"
 	keyTasksPane         = "tasks_pane"
 	keyListCollapsed     = "list_collapsed"
@@ -231,6 +237,7 @@ func loadPairs(out *Settings) []loadPair {
 		{keyRefreshIntervalMs, func(v string) { out.RefreshIntervalMs = parseInt(v, out.RefreshIntervalMs) }},
 		{keyNewSessionDir, func(v string) { out.NewSessionDir = v }},
 		{keyTrustedDirs, func(v string) { out.TrustedDirs = v }},
+		{keyIgnoreDirs, func(v string) { out.IgnoreDirs = v }},
 		{keyPaneRatio, func(v string) {
 			if r, err := ParsePaneRatio(v); err == nil {
 				out.PaneRatio = r.String()
@@ -509,6 +516,7 @@ func AllSpecs() []Spec {
 		{Key: keyRefreshIntervalMs, Label: "Refresh interval (ms)", Help: "How often the TUI re-queries the DB for new state", Kind: KindInt, Min: 250, Max: 10000},
 		{Key: keyNewSessionDir, Label: "New session directory", Help: "Where the 'n' directory picker starts (~/ allowed). Empty = home directory.", Kind: KindString, Path: true},
 		{Key: keyTrustedDirs, Label: "Trusted folders", Help: "Folders (comma-separated, ~/ allowed) where claude started by ccdash (n, the portal, MCP start_session) skips Claude Code's folder-trust question: ccdash marks the folder trusted in ~/.claude.json first. Covers subfolders. Empty = off.", Kind: KindString},
+		{Key: keyIgnoreDirs, Label: "Ignored folders", Help: "Folders (comma-separated, ~/ allowed) whose claude runs ccdash never lists — for cron jobs and other automation (claude -p). Covers subfolders. Sessions ccdash starts there (n, the portal, MCP start_session) still show. A run can also opt out with CCDASH_IGNORE=1 in its environment. Empty = off.", Kind: KindString},
 		// System section (rendered under its own heading with the version;
 		// keep it last).
 		{Key: KeyUpdate, Label: "Update ccdash", Help: "Check for a new release, show its notes, install it (y), then offer to restart into it.", Kind: KindAction},
@@ -585,6 +593,8 @@ func Get(s Settings, key string) any {
 		return s.NewSessionDir
 	case keyTrustedDirs:
 		return s.TrustedDirs
+	case keyIgnoreDirs:
+		return s.IgnoreDirs
 	case keyPaneRatio:
 		return s.PaneRatio
 	case keyTimeFormat:
@@ -659,6 +669,8 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.NewSessionDir = value.(string)
 	case keyTrustedDirs:
 		s.TrustedDirs = value.(string)
+	case keyIgnoreDirs:
+		s.IgnoreDirs = value.(string)
 	case keyPaneRatio:
 		r, err := ParsePaneRatio(value.(string))
 		if err != nil {
