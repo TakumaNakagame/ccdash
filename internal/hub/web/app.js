@@ -1706,15 +1706,23 @@ function renderApprovals(el, id, aps, sessions, hostName = "") {
   if (!aps?.length) { el.replaceChildren(); return; }
   el.replaceChildren(h("h2", {}, T("承認待ち ({0})", aps.length) + (hostName ? ` · ${hostName}` : "")), ...aps.map((a) => {
     const s = byId.get(a.session_id);
+    // What it is for and the exact command, both in sight: the decision
+    // needs the command, so nothing is folded here.
+    const ti = a.tool_input && typeof a.tool_input === "object" ? a.tool_input : null;
+    const head = ti ? toolHead(a.tool, ti) : { text: "", said: false };
+    const cmd = ti ? toolCommand(ti) : "";
+    const rest = cmd ? toolRest(ti) : a.tool_input;
     let input = "";
-    try { input = JSON.stringify(a.tool_input, null, 2); } catch {}
+    try { if (rest != null) input = JSON.stringify(rest, null, 2); } catch {}
     const decide = async (behavior, keep = false) => {
       try { await dev(id).post(`/approvals/${a.id}/decide`, { behavior, keep }); toast(behavior === "allow" ? T("許可しました") : T("拒否しました")); }
       catch (e) { toast(e.message); }
     };
     return h("div", { class: "approval" },
-      h("div", { class: "row" }, h("b", {}, a.tool), h("span", { class: "grow muted small" }, s ? `${s.num ? sref(s, id) + " " : ""}${sessionTitle(s)}` : a.session_id)),
-      h("pre", { class: "mono" }, input),
+      h("div", { class: "row" }, h("b", { title: a.tool }, toolName(a.tool)), h("span", { class: "grow muted small" }, s ? `${s.num ? sref(s, id) + " " : ""}${sessionTitle(s)}` : a.session_id)),
+      head.said ? h("div", { class: "approval-why" }, head.text) : null,
+      cmd ? h("pre", { class: "mono" }, "$ " + cmd) : null,
+      input ? h("pre", { class: "mono" + (cmd ? " rest" : "") }, input) : null,
       h("div", { class: "row" },
         h("button", { class: "btn primary", onclick: () => decide("allow") }, T("許可")),
         h("button", { class: "btn", onclick: () => decide("allow", true) }, T("常に許可")),
@@ -2226,9 +2234,81 @@ function msgTime(it) {
   return h("div", { class: "msg-time " + (it.kind === "user" || it.role === "user" ? "mine" : "theirs"), title: new Date(it.at).toLocaleString("ja-JP") }, hhmm(it.at));
 }
 
-function toolArg(name, inp) {
-  const v = inp.command || inp.file_path || inp.path || inp.pattern || inp.url || inp.query || inp.description || inp.prompt || "";
-  return String(v).split("\n")[0].slice(0, 200);
+// >>> toolhead
+// What a tool call's row says while it is closed. Tested through node by
+// TestToolHead (internal/hub/toolhead_test.go, cases in testdata/toolhead.json);
+// the Android app's toolHead / toolName / toolCommand (logic/Transcript.kt) are
+// the twins — keep the rules alike.
+
+// toolName: "mcp__home-gw__grafana__query_loki_logs" → "home-gw/grafana/query_loki_logs".
+function toolName(name) {
+  name = String(name || "");
+  return name.startsWith("mcp__") ? name.slice(5).split("__").join("/") : name;
+}
+
+// toolHead is the headline: { text, said }. said = Claude's own one-line
+// `description` of the call ("Qm guest exec で Strata の設定を見る"), shown as
+// prose; otherwise the argument that names the call best (file name, search
+// pattern, URL, an MCP tool's arguments…), shown as code.
+function toolHead(name, inp) {
+  inp = inp && typeof inp === "object" && !Array.isArray(inp) ? inp : {};
+  const str = (k) => (typeof inp[k] === "string" ? inp[k].trim() : "");
+  const line = (v) => v.split("\n")[0].trim().slice(0, 200);
+  const base = (p) => p.replace(/\/+$/, "").split("/").pop() || p;
+  const code = (v) => ({ text: line(v), said: false });
+  const said = str("description");
+  if (said) return { text: line(said), said: true };
+  switch (name) {
+    case "Read": case "Edit": case "Write": case "MultiEdit": case "NotebookEdit": {
+      const f = str("file_path") || str("notebook_path");
+      if (f) return code(base(f));
+      break;
+    }
+    case "Grep": case "Glob":
+      if (str("pattern")) return code(str("pattern"));
+      break;
+    case "Skill":
+      if (str("skill")) return code(str("skill"));
+      break;
+    case "TodoWrite": {
+      const todos = Array.isArray(inp.todos) ? inp.todos : [];
+      const now = todos.find((t) => t && t.status === "in_progress") || todos[0];
+      if (now && typeof now.content === "string" && now.content.trim()) return { text: line(now.content.trim()), said: true };
+      break;
+    }
+  }
+  for (const k of ["command", "file_path", "path", "pattern", "url", "query", "prompt"]) {
+    if (str(k)) return code(k === "file_path" ? base(str(k)) : str(k));
+  }
+  // Anything else (MCP tools): the plain arguments as key=value; a lone
+  // text argument stands by itself.
+  const plain = Object.keys(inp).filter((k) => str(k) || typeof inp[k] === "number" || typeof inp[k] === "boolean");
+  if (plain.length === 1 && str(plain[0])) return code(str(plain[0]));
+  return code(plain.map((k) => k + "=" + (str(k) ? line(str(k)) : inp[k])).join(" "));
+}
+
+// toolCommand: the command line of a call that has one (Bash), else "".
+function toolCommand(inp) {
+  return inp && typeof inp.command === "string" ? inp.command : "";
+}
+
+// toolRest: the input without what the row already shows on its own (the
+// description in the headline, the command in its own block); null when
+// nothing is left.
+function toolRest(inp) {
+  const rest = {};
+  for (const k of Object.keys(inp || {})) if (k !== "command" && k !== "description") rest[k] = inp[k];
+  return Object.keys(rest).length ? rest : null;
+}
+// <<< toolhead
+
+// toolInputNodes: a call's input opened up — `$ command` in full, then the
+// other arguments; a call with no command shows its whole input.
+function toolInputNodes(inp) {
+  const cmd = toolCommand(inp);
+  if (!cmd) return [h("pre", {}, JSON.stringify(inp, null, 2).slice(0, 4000))];
+  const rest = toolRest(inp);
+  return [h("pre", { class: "cmd" }, "$ " + cmd), rest ? h("pre", { class: "rest" }, JSON.stringify(rest, null, 2).slice(0, 4000)) : null];
 }
 
 // askCard renders an AskUserQuestion. Pending (no tool_result yet) and the
@@ -2522,6 +2602,7 @@ function renderItemRaw(it, ctx) {
       return h("div", { class: "note" }, it.text);
     case "tool": {
       const state = it.result == null ? "…" : it.error ? "✗" : "✓";
+      const head = toolHead(it.name, it.input);
       const body = [];
       if (it.name === "Edit" && it.input.old_string != null) {
         body.push(h("pre", { class: "diff" }, ...String(it.input.old_string).split("\n").map((l) => h("div", { class: "del" }, "- " + l)),
@@ -2529,7 +2610,7 @@ function renderItemRaw(it, ctx) {
       } else if (it.name === "TodoWrite" && Array.isArray(it.input.todos)) {
         body.push(h("div", {}, it.input.todos.map((t) => h("div", {}, (t.status === "completed" ? "☑ " : t.status === "in_progress" ? "▶ " : "☐ ") + (t.content || "")))));
       } else {
-        body.push(h("pre", {}, JSON.stringify(it.input, null, 2).slice(0, 4000)));
+        body.push(...toolInputNodes(it.input));
       }
       if (it.result != null) body.push(h("pre", { class: it.error ? "err" : "" }, it.result.length > 6000 ? it.result.slice(0, 6000) + "\n…" : it.result));
       const agent = (it.name === "Agent" || it.name === "Task") && ctx?.agentFor?.(it.id);
@@ -2538,7 +2619,7 @@ function renderItemRaw(it, ctx) {
       const fp = it.input?.file_path;
       const doc = /^(Write|Edit|MultiEdit)$/.test(it.name) && fp && previewKind(fp) && ctx?.fileURL?.(fp);
       return h("details", { class: "tool" + (it.error ? " error" : "") },
-        h("summary", {}, h("span", { class: "tstate" }, state), h("b", {}, it.name), " ", h("span", { class: "targ" }, toolArg(it.name, it.input)),
+        h("summary", { title: it.name }, h("span", { class: "tstate" }, state), h("b", {}, toolName(it.name)), " ", h("span", { class: "targ" + (head.said ? " said" : "") }, head.text),
           doc ? h("button", { type: "button", class: "btn small preview-btn", onclick: (e) => { e.preventDefault(); e.stopPropagation(); previewFile(doc, fp); } }, icon("eye"), T("プレビュー")) : null),
         ...body);
     }
@@ -2799,11 +2880,9 @@ function gridTile(c) {
   return { el: v.el, update() {}, refresh: async () => {}, scrollLog: v.scrollBottom, destroy: v.destroy };
 }
 
-// toolLabel: "Bash npm test" — a tool call in one short line.
+// toolLabel: "Bash テストを流す" — a tool call in one short line (its headline).
 function toolLabel(it) {
-  const i = it.input || {};
-  const arg = i.command || i.description || i.file_path || i.pattern || i.url || i.query || "";
-  return (it.name + " " + String(arg).split("\n")[0]).trim().slice(0, 80);
+  return (toolName(it.name) + " " + toolHead(it.name, it.input || {}).text).trim().slice(0, 80);
 }
 
 function gridState(s) {
