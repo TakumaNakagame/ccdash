@@ -279,6 +279,10 @@ pre.bang-cmd { white-space: pre-wrap; word-break: break-all; background: var(--t
 .tool summary, .thinking summary { padding: 6px 10px; cursor: pointer; list-style: none; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
 .tool summary::-webkit-details-marker, .thinking summary::-webkit-details-marker { display: none; }
 .tool .targ { font-family: var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tool .targ.said { font-family: inherit; color: var(--text); }
+.tool summary b { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool pre.rest, .approval pre.rest { color: var(--muted); }
+.approval-why { margin-top: 6px; }
 .tool .tstate { color: var(--ok); width: 1em; flex: none; }
 .tool.error .tstate { color: var(--bad); }
 .tool pre { margin: 0; padding: 8px 10px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 320px; overflow: auto; }
