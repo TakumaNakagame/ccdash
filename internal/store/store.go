@@ -61,7 +61,40 @@ type StartRequest struct {
 	// session, nothing for a resume.
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
+	// Orchestrated marks a start by ccdash mcp's start_session — the only
+	// caller that sets it. The collector then takes an empty Cwd from the
+	// project's directory, appends the operator's notes (the common brief
+	// and the project's) to Prompt unless Plain, and runs the
+	// session_setup_command setting before claude
+	// (internal/server/setup.go).
+	Orchestrated bool `json:"orchestrated,omitempty"`
+	Plain        bool `json:"plain,omitempty"`
 }
+
+// Started is what the collector answers to a start.
+type Started struct {
+	// PtyKey is "pid-<N>" until the session ID is known.
+	PtyKey string `json:"ptyKey"`
+	// Orchestrated echoes StartRequest.Orchestrated from a collector that
+	// honours it; false from an older one, which appended nothing. Notes
+	// then names what went after the prompt ("common", "project") and Cwd
+	// where claude started.
+	Orchestrated bool     `json:"orchestrated,omitempty"`
+	Notes        []string `json:"notes,omitempty"`
+	Cwd          string   `json:"cwd,omitempty"`
+}
+
+// StartInfo is what a collector can fill in for a start that names no
+// directory (GET /api/start-info): the project's working directory, and
+// whether a setup command runs first (it may name one).
+type StartInfo struct {
+	Dir   string `json:"dir"`
+	Setup bool   `json:"setup"`
+}
+
+// orchestratedTimeout bounds a start that may run the operator's setup
+// command first (the collector gives that 60 s).
+const orchestratedTimeout = 75 * time.Second
 
 // Input is what POST /pty/{key}/input types into a hosted claude: Keys
 // raw, then Text (bracketed paste when multi-line or Paste), then Enter
@@ -125,7 +158,21 @@ type Store interface {
 	// returns its PTY key ("pid-<N>" until the session ID is known). Like
 	// DecideApproval this always goes over HTTP: the PTY lives in the
 	// collector process.
-	StartSession(ctx context.Context, req StartRequest) (string, error)
+	StartSession(ctx context.Context, req StartRequest) (Started, error)
+	// StartInfo asks the collector what it can fill in for a start with
+	// no directory. Over HTTP even for Local: it is also the check that
+	// the running collector is new enough to take such a start (an older
+	// one has no such route and would start claude in its own directory).
+	StartInfo(ctx context.Context, project string) (StartInfo, error)
+	// BriefCommon / SetBriefCommon / SetProjectBrief / SetProjectDir read
+	// and write the operator's notes for start_session briefs and a
+	// project's working directory. For people's tools only (`ccdash
+	// brief`, the portal has its own routes): nothing in ccdash mcp may
+	// call the setters — the notes are input to every child session.
+	BriefCommon(ctx context.Context) (string, error)
+	SetBriefCommon(ctx context.Context, text string) error
+	SetProjectBrief(ctx context.Context, project, brief string) error
+	SetProjectDir(ctx context.Context, project, dir string) (string, error)
 	// SendInput types into the hosted PTY ptyKey (POST /pty/{key}/input),
 	// over HTTP for the same reason as StartSession.
 	SendInput(ctx context.Context, ptyKey string, in Input) error

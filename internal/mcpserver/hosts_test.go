@@ -35,6 +35,10 @@ type fakeHub struct {
 	parents     map[string]string
 	parentHosts map[string]string
 	ptys        []store.PTY
+	// B's projects, and what its collector answers to /api/start-info
+	// (nil = an older collector without the route).
+	projects  []model.Project
+	startInfo *store.StartInfo
 }
 
 // serverTasks is B's to-do list: #11 worked on by this machine's lap-1,
@@ -97,7 +101,28 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var b map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&b)
 		f.started = append(f.started, b)
+		if b["orchestrated"] == true && f.startInfo != nil {
+			// A current collector: B's own notes and directory apply.
+			cwd, _ := b["cwd"].(string)
+			if cwd == "" {
+				cwd = f.startInfo.Dir
+			}
+			notes := []string{}
+			if b["plain"] != true && b["prompt"] != nil {
+				notes = []string{"common", "project"}
+			}
+			j(map[string]any{"ptyKey": "pid-42", "orchestrated": true, "notes": notes, "cwd": cwd})
+			return
+		}
 		j(map[string]any{"ptyKey": "pid-42"})
+	case p == "/api/d/B/api/start-info":
+		if f.startInfo == nil {
+			http.NotFound(w, r)
+			return
+		}
+		j(f.startInfo)
+	case p == "/api/d/B/api/projects" && f.projects != nil:
+		j(f.projects)
 	case p == "/api/d/B/pty/":
 		if f.ptys != nil {
 			j(f.ptys)

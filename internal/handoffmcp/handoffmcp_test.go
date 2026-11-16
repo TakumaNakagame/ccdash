@@ -42,18 +42,18 @@ type fake struct {
 	newID  string
 }
 
-func (f *fake) StartSession(ctx context.Context, req store.StartRequest) (string, error) {
+func (f *fake) StartSession(ctx context.Context, req store.StartRequest) (store.Started, error) {
 	f.starts = append(f.starts, req)
 	if req.ResumeID == "" && f.newID != "" {
 		s := model.Session{SessionID: f.newID, Cwd: req.Cwd, Title: req.Prompt, Status: model.StatusActive}
 		if err := f.d.UpsertSession(ctx, &s); err != nil {
-			return "", err
+			return store.Started{}, err
 		}
 		if err := f.d.SetOrigin(ctx, f.newID, req.Origin); err != nil {
-			return "", err
+			return store.Started{}, err
 		}
 	}
-	return "pid-1", nil
+	return store.Started{PtyKey: "pid-1"}, nil
 }
 
 func (f *fake) SendInput(ctx context.Context, key string, in store.Input) error {

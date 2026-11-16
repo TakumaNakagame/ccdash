@@ -103,7 +103,7 @@ func (r *Remote) doJSON(ctx context.Context, timeout time.Duration, method, path
 		req.Header.Set(auth.HeaderName, r.token)
 	}
 
-	resp, err := r.client.Do(req)
+	resp, err := clientFor(r.client, timeout).Do(req)
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
@@ -237,14 +237,46 @@ func (r *Remote) DecideApproval(ctx context.Context, id int64, behavior, reason 
 		map[string]any{"behavior": behavior, "reason": reason, "keep": keep}, nil)
 }
 
-func (r *Remote) StartSession(ctx context.Context, req StartRequest) (string, error) {
+func (r *Remote) StartSession(ctx context.Context, req StartRequest) (Started, error) {
+	var out Started
+	timeout := 10 * time.Second
+	if req.Orchestrated {
+		timeout = orchestratedTimeout
+	}
+	err := r.doJSON(ctx, timeout, http.MethodPost, "/pty/start", nil, req, &out)
+	return out, err
+}
+
+func (r *Remote) StartInfo(ctx context.Context, project string) (StartInfo, error) {
+	var out StartInfo
+	err := r.doJSON(ctx, 5*time.Second, http.MethodGet, "/api/start-info", url.Values{"project": {project}}, nil, &out)
+	return out, err
+}
+
+func (r *Remote) BriefCommon(ctx context.Context) (string, error) {
 	var out struct {
-		PtyKey string `json:"ptyKey"`
+		Brief string `json:"brief"`
 	}
-	if err := r.doJSON(ctx, 10*time.Second, http.MethodPost, "/pty/start", nil, req, &out); err != nil {
-		return "", err
+	err := r.doJSON(ctx, 5*time.Second, http.MethodGet, "/api/brief-common", nil, nil, &out)
+	return out.Brief, err
+}
+
+func (r *Remote) SetBriefCommon(ctx context.Context, text string) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPut, "/api/brief-common", nil, map[string]any{"brief": text}, nil)
+}
+
+func (r *Remote) SetProjectBrief(ctx context.Context, project, brief string) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/projects/brief", nil,
+		map[string]any{"project": project, "brief": brief}, nil)
+}
+
+func (r *Remote) SetProjectDir(ctx context.Context, project, dir string) (string, error) {
+	var out struct {
+		Dir string `json:"dir"`
 	}
-	return out.PtyKey, nil
+	err := r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/projects/dir", nil,
+		map[string]any{"project": project, "dir": dir}, &out)
+	return out.Dir, err
 }
 
 func (r *Remote) SendInput(ctx context.Context, ptyKey string, in Input) error {
@@ -457,4 +489,16 @@ func (r *Remote) ImportTasks(ctx context.Context, f tasks.LegacyFile, opt tasks.
 	err := r.doJSON(ctx, 30*time.Second, http.MethodPost, "/api/tasks/import", nil,
 		map[string]any{"file": f, "map": opt.Map, "unmapped": opt.Unmapped, "dry_run": dryRun}, &out)
 	return out, err
+}
+
+// clientFor returns c, or a copy with a longer overall timeout when this
+// call's own budget (an orchestrated start waiting on a setup command)
+// exceeds the client's.
+func clientFor(c *http.Client, timeout time.Duration) *http.Client {
+	if c.Timeout == 0 || timeout <= c.Timeout {
+		return c
+	}
+	cc := *c
+	cc.Timeout = timeout
+	return &cc
 }

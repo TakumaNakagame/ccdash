@@ -210,9 +210,10 @@ func (s *Server) startSession(ctx context.Context, request string) (any, error) 
 	for _, x := range before {
 		known[x.SessionID] = true
 	}
-	key, err := s.st.StartSession(ctx, store.StartRequest{
+	started, err := s.st.StartSession(ctx, store.StartRequest{
 		Cwd: s.cfg.Cwd, Prompt: prompt, Project: s.cfg.Project, PermissionMode: "auto", Origin: s.cfg.Origin,
 	})
+	key := started.PtyKey
 	if err != nil {
 		return nil, fmt.Errorf("could not start the session (is the ccdash collector running with sessions allowed?): %w", err)
 	}
