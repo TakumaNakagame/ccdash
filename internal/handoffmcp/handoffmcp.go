@@ -31,9 +31,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/plaintext"
 	"github.com/TakumaNakagame/ccdash/internal/store"
 	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
@@ -41,9 +41,6 @@ import (
 // DefaultOrigin marks the sessions it starts unless Config.Origin says otherwise.
 // Each instance sees only the sessions carrying its own origin.
 const DefaultOrigin = "handoff"
-
-// maxText caps a request / message (runes).
-const maxText = 8000
 
 // Config is what the operator fixes on the command line.
 type Config struct {
@@ -174,28 +171,9 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 	return string(b), err
 }
 
-// checkText refuses what Claude Code's prompt would not take as plain text:
-// a leading / (slash command), ! (shell), # (memory) or - (a flag when it
-// is claude's argument), and control characters (ESC sequences such as
-// shift+tab switch modes; only newline and tab pass).
-func checkText(t string) (string, error) {
-	t = strings.TrimSpace(t)
-	if t == "" {
-		return "", fmt.Errorf("text is empty")
-	}
-	if n := len([]rune(t)); n > maxText {
-		return "", fmt.Errorf("text is too long (%d characters, max %d)", n, maxText)
-	}
-	if strings.ContainsAny(t[:1], "/!#-") {
-		return "", fmt.Errorf("text must not start with %q (Claude Code would read it as a command); start with a word", t[:1])
-	}
-	for _, r := range t {
-		if r != '\n' && r != '\t' && (unicode.IsControl(r) || r == ' ' || r == ' ') {
-			return "", fmt.Errorf("text must not contain control characters")
-		}
-	}
-	return t, nil
-}
+// checkText is the plain-text rule every request and message goes through
+// (plaintext.Check, shared with the messages between sessions).
+func checkText(t string) (string, error) { return plaintext.Check(t) }
 
 func (s *Server) startSession(ctx context.Context, request string) (any, error) {
 	prompt, err := checkText(request)
