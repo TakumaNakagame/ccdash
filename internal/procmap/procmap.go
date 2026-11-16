@@ -77,6 +77,49 @@ func Snapshot(ctx context.Context, claudeDir string) (map[string]Entry, error) {
 	return out, nil
 }
 
+// Peers maps the session id of every running claude under claudeDir (""
+// = ~/.claude) to its `name` in <claudeDir>/sessions/<pid>.json: the
+// address Claude Code's SendMessage reaches it by. Only that field leaves
+// the file — the rest holds per-process secrets. Cheaper than Snapshot
+// (no tty or tmux lookups).
+func Peers(claudeDir string) map[string]string {
+	out := map[string]string{}
+	if claudeDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return out
+		}
+		claudeDir = filepath.Join(home, ".claude")
+	}
+	sessDir := filepath.Join(claudeDir, "sessions")
+	entries, err := os.ReadDir(sessDir)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(sessDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var raw struct {
+			PID       int    `json:"pid"`
+			SessionID string `json:"sessionId"`
+			Name      string `json:"name"`
+		}
+		if json.Unmarshal(b, &raw) != nil || raw.SessionID == "" || raw.Name == "" || raw.PID == 0 || !peerAlive(raw.PID) {
+			continue
+		}
+		out[raw.SessionID] = raw.Name
+	}
+	return out
+}
+
+// peerAlive is pidAlive, swapped out by the tests.
+var peerAlive = pidAlive
+
 func readEntry(path string) (Entry, bool) {
 	b, err := os.ReadFile(path)
 	if err != nil {

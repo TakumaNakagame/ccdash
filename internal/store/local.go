@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TakumaNakagame/ccdash/internal/accounts"
 	"github.com/TakumaNakagame/ccdash/internal/auth"
 	"github.com/TakumaNakagame/ccdash/internal/db"
 	"github.com/TakumaNakagame/ccdash/internal/hubcfg"
@@ -168,6 +169,29 @@ func (l *Local) WaitingSpawns(ctx context.Context) ([]WaitingSpawn, error) {
 		return nil, err
 	}
 	return waitingOf(rows), nil
+}
+
+func (l *Local) PTYs(ctx context.Context) ([]PTY, error) {
+	var rows []PTY
+	err := l.callCollector(ctx, http.MethodGet, "/pty/", nil, &rows)
+	return rows, err
+}
+
+func (l *Local) SetParent(ctx context.Context, sessionID, parent, parentHost string) error {
+	return l.db.AdoptParent(ctx, sessionID, parent, parentHost)
+}
+
+func (l *Local) SetChildrenSeen(ctx context.Context, sessionID string, at time.Time) error {
+	return l.db.SetChildrenSeen(ctx, sessionID, at)
+}
+
+func (l *Local) Briefs(ctx context.Context, sessionID string) ([]model.Brief, error) {
+	return l.db.SessionBriefs(ctx, sessionID)
+}
+
+// Peers reads the live ~/.claude/sessions files of this machine.
+func (l *Local) Peers(ctx context.Context) (map[string]string, error) {
+	return accounts.Peers(), nil
 }
 
 // HostedSessions reads the collector's GET /pty.

@@ -30,6 +30,11 @@ type fakeHub struct {
 	started []map[string]any
 	attach  bool
 	posts   map[string]string // B's task writes: path → body
+	// B's parents: session id → parent / parentHost (POST …/parent), and
+	// the PTY rows B's GET /pty serves.
+	parents     map[string]string
+	parentHosts map[string]string
+	ptys        []store.PTY
 }
 
 // serverTasks is B's to-do list: #11 worked on by this machine's lap-1,
@@ -69,13 +74,22 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		j([]model.Session{
-			{SessionID: "srv-1", Num: 1, HostLetter: "B", Cwd: "/srv/infra", Title: "k8s upgrade", CustomTitle: f.titles["srv-1"], Status: model.StatusIdle, LastSeen: time.Now()},
-			{SessionID: "srv-2", Num: 2, HostLetter: "B", Cwd: "/srv/x", Title: "old", Status: model.StatusStopped, LastSeen: time.Now().Add(-time.Hour)},
+			{SessionID: "srv-1", Num: 1, HostLetter: "B", Cwd: "/srv/infra", Title: "k8s upgrade", CustomTitle: f.titles["srv-1"], Status: model.StatusIdle, LastSeen: time.Now(), Parent: f.parents["srv-1"], ParentHost: f.parentHosts["srv-1"]},
+			{SessionID: "srv-2", Num: 2, HostLetter: "B", Cwd: "/srv/x", Title: "old", Status: model.StatusStopped, LastSeen: time.Now().Add(-time.Hour), Parent: f.parents["srv-2"], ParentHost: f.parentHosts["srv-2"]},
 		})
 	case strings.HasPrefix(p, "/api/d/B/api/sessions/") && strings.HasSuffix(p, "/title"):
 		var b struct{ Title string }
 		_ = json.NewDecoder(r.Body).Decode(&b)
 		f.titles[strings.Split(p, "/")[6]] = b.Title
+		j(map[string]any{})
+	case strings.HasPrefix(p, "/api/d/B/api/sessions/") && strings.HasSuffix(p, "/parent"):
+		var b struct{ Parent, ParentHost string }
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		if f.parents == nil {
+			f.parents, f.parentHosts = map[string]string{}, map[string]string{}
+		}
+		id := strings.Split(p, "/")[6]
+		f.parents[id], f.parentHosts[id] = b.Parent, b.ParentHost
 		j(map[string]any{})
 	case p == "/api/d/B/hub/info":
 		j(map[string]any{"attachEnabled": f.attach})
@@ -85,6 +99,10 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.started = append(f.started, b)
 		j(map[string]any{"ptyKey": "pid-42"})
 	case p == "/api/d/B/pty/":
+		if f.ptys != nil {
+			j(f.ptys)
+			return
+		}
 		j([]any{})
 	case p == "/api/d/B/api/projects", p == "/api/d/B/api/approvals":
 		j([]any{})

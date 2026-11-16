@@ -228,8 +228,8 @@ func (s *Server) tunnelHandler(local bool) http.Handler {
 }
 
 var (
-	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|projects|usage|usage/sessions|sessions/[^/]+/(transcript|usage|statusline)|tasks|tasks/[^/]+)$`)
-	hubSessionEdit = regexp.MustCompile(`^/api/(sessions/[^/]+/(archive|favorite|later|grid|color|title|group|project|seen)|projects/(color|rename|order))$`)
+	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|projects|usage|usage/sessions|sessions/[^/]+/(transcript|usage|statusline|brief)|tasks|tasks/[^/]+)$`)
+	hubSessionEdit = regexp.MustCompile(`^/api/(sessions/[^/]+/(archive|favorite|later|grid|color|title|group|project|parent|seen)|projects/(color|rename|order))$`)
 	// claude -p runs; summarize.KickoffTitles refuses them itself while
 	// summary_enabled is off.
 	hubTitles      = regexp.MustCompile(`^/api/titles$`)

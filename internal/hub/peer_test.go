@@ -49,7 +49,7 @@ func TestPeerAccess(t *testing.T) {
 		t.Error("the device token must not reach the device")
 	}
 	// Read access: no writes.
-	for _, p := range []string{d + "/pty/start", d + "/api/tasks/11"} {
+	for _, p := range []string{d + "/pty/start", d + "/api/tasks/11", d + "/api/sessions/abc/parent"} {
 		if w := serve(handler, "POST", p, `{}`, auth); w.Code != http.StatusForbidden {
 			t.Errorf("read peer POST %s = %d, want 403", p, w.Code)
 		}
@@ -58,7 +58,7 @@ func TestPeerAccess(t *testing.T) {
 	if err := h.st.setPeerAccess(ctx, caller.ID, PeerControl); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range [][2]string{{"POST", d + "/pty/start"}, {"DELETE", d + "/pty/abc"}, {"POST", d + "/api/sessions/abc/title"}, {"POST", d + "/api/restart"},
+	for _, c := range [][2]string{{"POST", d + "/pty/start"}, {"DELETE", d + "/pty/abc"}, {"POST", d + "/api/sessions/abc/title"}, {"POST", d + "/api/sessions/abc/parent"}, {"POST", d + "/api/restart"},
 		{"POST", d + "/api/tasks"}, {"POST", d + "/api/tasks/11"}, {"POST", d + "/api/tasks/11/notes"}, {"POST", d + "/api/tasks/order"}} {
 		if w := serve(handler, c[0], c[1], `{}`, auth); w.Code != 200 {
 			t.Errorf("control peer %s %s = %d, want 200", c[0], c[1], w.Code)
@@ -70,6 +70,7 @@ func TestPeerAccess(t *testing.T) {
 		{"POST", "/api/devices"}, {"POST", "/api/devices/" + caller.ID + "/peer"}, {"DELETE", "/api/devices/" + target.ID},
 		{"POST", d + "/approvals/1/decide"}, {"POST", d + "/pty/abc/input"}, {"GET", d + "/pty/abc/stream"},
 		{"GET", d + "/ws/pty/abc"}, {"POST", d + "/api/settings"}, {"GET", d + "/api/settings"}, {"POST", d + "/api/sessions/abc/wait"},
+		{"GET", d + "/api/sessions/abc/brief"}, {"POST", d + "/api/sessions/abc/children-seen"}, {"GET", d + "/api/peers"},
 		{"POST", d + "/api/tasks/sync"}, {"POST", d + "/api/tasks/import"}, {"POST", d + "/api/tasks/PROJ-1"},
 		{"GET", "/api/board"}, {"GET", "/api/prefs"}, {"POST", "/api/push/test"}, {"GET", d + "/hub/file"},
 	} {

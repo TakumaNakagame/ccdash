@@ -173,6 +173,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/group", wrap(s.handleAPIGroup))
 	s.mux.HandleFunc("POST /api/sessions/{id}/seen", wrap(s.handleAPISeen))
 	s.mux.HandleFunc("POST /api/sessions/{id}/project", wrap(s.handleAPIProject))
+	s.mux.HandleFunc("POST /api/sessions/{id}/parent", wrap(s.handleAPIParent))
+	s.mux.HandleFunc("POST /api/sessions/{id}/children-seen", wrap(s.handleAPIChildrenSeen))
+	s.mux.HandleFunc("GET /api/sessions/{id}/brief", wrap(s.handleAPIBrief))
+	s.mux.HandleFunc("GET /api/peers", wrap(s.handleAPIPeers))
 	s.mux.HandleFunc("GET /api/projects", wrap(s.handleAPIProjects))
 	s.mux.HandleFunc("POST /api/projects/color", wrap(s.handleAPIProjectColor))
 	s.mux.HandleFunc("POST /api/projects/rename", wrap(s.handleAPIProjectRename))
@@ -646,10 +650,19 @@ func (s *Server) ensureSessionAt(r *http.Request, p *hookPayload, status model.S
 		sess.Branch = g.Branch
 		sess.Commit = g.Commit
 	}
+	var err error
 	if !bump {
-		return s.db.UpsertSessionKeepLastSeen(r.Context(), sess)
+		err = s.db.UpsertSessionKeepLastSeen(r.Context(), sess)
+	} else {
+		err = s.db.UpsertSession(r.Context(), sess)
 	}
-	return s.db.UpsertSession(r.Context(), sess)
+	if err == nil && pid >= ptyTagBase {
+		// The row exists now: give it the project / parent / brief it was
+		// spawned with at once (a no-op after the first time), so whoever
+		// started it sees them without waiting for the discovery tick.
+		s.applyPTYProjects(r.Context())
+	}
+	return err
 }
 
 // hideHeadless is the hide_headless setting (its default when unreadable).

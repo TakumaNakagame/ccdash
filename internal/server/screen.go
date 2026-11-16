@@ -70,6 +70,12 @@ type ptyEntry struct {
 	project     string
 	origin      string
 	projectDone bool
+	// parent / parentHost: the session that started this spawn (set on its
+	// row with the project); briefID: the briefs row to tie to the session
+	// id (0 = none). Guarded by Server.ptyMu like the project.
+	parent     string
+	parentHost string
+	briefID    int64
 	// cwd is where the child started; prompt is the dialog a spawn not yet
 	// tied to a session waits on (attentionLoop), e.g. the folder-trust
 	// question. Both guarded by Server.ptyMu.
@@ -645,6 +651,9 @@ type ptyInfo struct {
 	// yet — the dialog it is stuck on ("" = none).
 	Cwd    string `json:"cwd,omitempty"`
 	Prompt string `json:"prompt,omitempty"`
+	// Parent: the session that started it (ptyStartReq.Parent), so that
+	// session can find its spawns before they have a row.
+	Parent string `json:"parent,omitempty"`
 }
 
 // handlePTYList reports every registered ptyKey (aliases included) so the
@@ -654,7 +663,7 @@ func (s *Server) handlePTYList(w http.ResponseWriter, _ *http.Request) {
 	out := make([]ptyInfo, 0, len(s.ptyMap))
 	for k, e := range s.ptyMap {
 		cols, rows := e.size()
-		out = append(out, ptyInfo{Key: k, Alive: e.sess.Alive(), PID: e.sess.PID(), Cols: cols, Rows: rows, Cwd: e.cwd, Prompt: e.prompt})
+		out = append(out, ptyInfo{Key: k, Alive: e.sess.Alive(), PID: e.sess.PID(), Cols: cols, Rows: rows, Cwd: e.cwd, Prompt: e.prompt, Parent: e.parent})
 	}
 	s.ptyMu.Unlock()
 	w.Header().Set("Content-Type", "application/json")

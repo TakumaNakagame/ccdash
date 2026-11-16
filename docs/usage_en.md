@@ -826,7 +826,8 @@ Tools:
 | `overview` | sessions that need you, finished-but-unseen ones, running sessions grouped by project, today's usage estimate |
 | `list_projects` | projects in list order with session / running / needs-you counts and latest activity |
 | `list_sessions` | sessions newest first; filters: `project`, `query`, `running_only`, `attention_only`, `grid_only` (sessions on the grid, in tile order), `include_archived`, `limit` |
-| `get_session` | one session (`#N` or id) with pending approvals and its recent prompts, replies and tool calls |
+| `get_session` | one session (`#N` or id) with pending approvals and its recent prompts, replies and tool calls; `brief` = what it was asked when ccdash started it (first 2,000 characters, `brief_truncated` when cut) |
+| `my_sessions` | the calling session's children (sessions it started with `start_session` or adopted), on every reachable host, grouped `needs_operator` / `working` / `reported` / `finished`; each row has ref, title, project, host, status, the declared status + note, `last_reply` (first 300 characters of the latest reply), `url`, `peer`, `age`. `since_last: true` = only rows changed since this session's previous call. Also offered with `--read-only` |
 | `set_project` | put sessions into a project (a new name creates it) or take them out (`""`) |
 | `rename_project` | rename a project; renaming onto an existing one merges them |
 | `order_projects` | set the project order (listed ones first) |
@@ -838,11 +839,21 @@ Tools:
 | `set_color` | a session's color: `#rrggbb`, `random` (apart from the running sessions' colors) or `""` (automatic) |
 | `mark_seen` | mark sessions seen (clears NEW and the finished-unseen mark; approvals, questions and 回答待ち / 作業待ち declarations stay) |
 | `set_archived` | archive / unarchive sessions |
-| `archive_finished` | archive the sessions whose claude has exited (running ones are skipped, never stopped); keeps pinned, watch-later and unread / needs-you ones (`include_unread` takes unread too); narrow with `sessions` / `project` / `idle_hours`, preview with `dry_run` |
-| `start_session` | start a new claude session in a directory (absolute path), like the TUI's `n`; optional `project`, first `prompt`, `permission_mode`, `model` (alias or model id) and `effort`; the result reports the model / effort it started with (the caller's, else the Default model / Default effort settings). Refused while the Attach setting is OFF |
+| `archive_finished` | archive the sessions whose claude has exited (running ones are skipped, never stopped); keeps pinned, watch-later and unread / needs-you ones (`include_unread` takes unread too); narrow with `sessions` / `project` / `idle_hours`, preview with `dry_run`; `children_only: true` = only the calling session's children (every reachable host) |
+| `start_session` | start a new claude session in a directory (absolute path), like the TUI's `n`; optional `project`, first `prompt`, `permission_mode`, `model` (alias or model id) and `effort`; the result reports the model / effort it started with (the caller's, else the Default model / Default effort settings). Refused while the Attach setting is OFF. The caller becomes the new session's parent and the prompt is kept as its brief; the result carries `ref`, `session_id`, `url` and `peer` once claude has registered (waits up to ~10 s), else `pending: true` with the PTY key (`started`), plus `waiting_on` when it stopped at a dialog |
+| `adopt_session` | make the calling session the parent of an existing session (`session`), or of every child of another session (`from`); replaces the parent it had |
+| `release_session` | stop being the parent of one of your children |
 | `stop_session` | stop one session's claude that ccdash hosts (SIGTERM, then a kill); work in progress is cut off, the transcript stays. Refuses a claude started in a terminal, an already stopped session and the caller's own; a working (active) one only with `force: true`. Refused while Attach is OFF |
 | `schedule_restart` | schedule a collector restart for when no hosted session is busy (see "Restart once the sessions are idle"); `cancel: true` cancels, `timeout_minutes` bounds the wait. The calling session counts as busy until its turn ends. `overview` shows a pending one as `restart_pending` |
 | `resume_session` | bring a stopped session back with `claude --resume` (in its own cwd, hosted by ccdash) so it runs in ccdash again; unarchives it. Refuses one that still runs (under ccdash or not); optional first `prompt`, `permission_mode`. Refused while Attach is OFF |
+
+A session that starts others is their **parent** (`parent` on the rows): that is
+what `my_sessions` lists. `peer` on a row is the name Claude Code's
+`SendMessage` reaches that session by — only for running sessions on the same
+machine; it is read live from `~/.claude/sessions/<pid>.json` and never stored
+(nothing else of that file is exposed). Every prompt a session was started
+with is kept in the collector's `briefs` table (secrets masked) and is never
+deleted by ccdash.
 
 With machines joined to a hub, `list_hosts` names the reachable machines
 and the other tools take `host` (see section 18). The to-do list has its own

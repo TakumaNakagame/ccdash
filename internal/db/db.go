@@ -96,6 +96,19 @@ func (d *DB) migrate() error {
 			value TEXT NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
+		// What each started session was asked to do (briefs.go). Never
+		// deleted by code.
+		`CREATE TABLE IF NOT EXISTS briefs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT,
+			pty_key TEXT,
+			parent TEXT,
+			project TEXT,
+			cwd TEXT,
+			text TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_briefs_session ON briefs(session_id)`,
 		// Automated runs ccdash must never list (ignore.go).
 		`CREATE TABLE IF NOT EXISTS ignored_sessions (
 			session_id TEXT PRIMARY KEY,
@@ -146,6 +159,9 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN wait_stopped INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE sessions ADD COLUMN entrypoint TEXT`,
 		`ALTER TABLE sessions ADD COLUMN origin TEXT`,
+		`ALTER TABLE sessions ADD COLUMN parent TEXT`,
+		`ALTER TABLE sessions ADD COLUMN parent_host TEXT`,
+		`ALTER TABLE sessions ADD COLUMN children_seen_at INTEGER`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -462,7 +478,8 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
 		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0),
-		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0), COALESCE(s.origin,'')
+		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0), COALESCE(s.origin,''),
+		       COALESCE(s.parent,''), COALESCE(s.parent_host,''), COALESCE(s.children_seen_at,0)
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE COALESCE(s.archived,0) = ?
 		ORDER BY COALESCE(s.favorite,0) DESC,
@@ -476,7 +493,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 	var out []model.Session
 	for rows.Next() {
 		var s model.Session
-		var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt, gridAt, waitAt int64
+		var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt, gridAt, waitAt, kidsAt int64
 		var status string
 		var arch, fav int
 		if err := rows.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -489,11 +506,15 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&first, &last, &status, &s.PendingCount, &s.Account,
 			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
 			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt,
-			&s.Wait, &s.WaitNote, &waitAt, &s.Origin); err != nil {
+			&s.Wait, &s.WaitNote, &waitAt, &s.Origin,
+			&s.Parent, &s.ParentHost, &kidsAt); err != nil {
 			return nil, err
 		}
 		finishAttention(&s, attAt)
 		finishWait(&s, waitAt)
+		if kidsAt > 0 {
+			s.ChildrenSeenAt = time.UnixMilli(kidsAt).UTC()
+		}
 		finishSeen(&s, model.SessionStatus(status), actAt, seenAt)
 		if laterAt > 0 {
 			s.Later, s.LaterAt = true, time.UnixMilli(laterAt).UTC()
@@ -585,12 +606,13 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       COALESCE(s.num,0), COALESCE(s.gen_title,''), COALESCE(s.gen_title_at,0), COALESCE(s.title_status,''),
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
 		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0),
-		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0), COALESCE(s.origin,'')
+		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0), COALESCE(s.origin,''),
+		       COALESCE(s.parent,''), COALESCE(s.parent_host,''), COALESCE(s.children_seen_at,0)
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE s.session_id = ?
 	`, sessionID)
 	var s model.Session
-	var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt, gridAt, waitAt int64
+	var first, last, genAt, attAt, pinAt, actAt, seenAt, laterAt, gridAt, waitAt, kidsAt int64
 	var status string
 	var arch, fav int
 	err := row.Scan(&s.SessionID, &s.Cwd, &s.Repo, &s.Branch, &s.Commit,
@@ -603,7 +625,8 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&first, &last, &status, &s.PendingCount, &s.Account,
 		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
 		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt,
-		&s.Wait, &s.WaitNote, &waitAt, &s.Origin)
+		&s.Wait, &s.WaitNote, &waitAt, &s.Origin,
+		&s.Parent, &s.ParentHost, &kidsAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Session{}, false, nil
 	}
@@ -620,6 +643,9 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 	}
 	finishAttention(&s, attAt)
 	finishWait(&s, waitAt)
+	if kidsAt > 0 {
+		s.ChildrenSeenAt = time.UnixMilli(kidsAt).UTC()
+	}
 	finishSeen(&s, model.SessionStatus(status), actAt, seenAt)
 	if laterAt > 0 {
 		s.Later, s.LaterAt = true, time.UnixMilli(laterAt).UTC()
