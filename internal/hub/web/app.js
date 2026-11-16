@@ -136,6 +136,7 @@ async function api(path, opts = {}) {
 const dev = (id) => ({
   get: (p) => api(`/api/d/${id}${p}`),
   post: (p, json) => api(`/api/d/${id}${p}`, { method: "POST", json: json ?? {} }),
+  put: (p, json) => api(`/api/d/${id}${p}`, { method: "PUT", json: json ?? {} }),
   del: (p) => api(`/api/d/${id}${p}`, { method: "DELETE" }),
 });
 
@@ -946,7 +947,7 @@ async function projectPicker(id, { current = "", count = 1 } = {}, pick) {
   });
 }
 
-function projectHeader(name, color, members, onNew, onMove) {
+function projectHeader(name, color, members, onNew, onMove, onMenu) {
   const running = members.filter((s) => s.status === "active" || s.status === "idle").length;
   const needs = members.filter((s) => s.attention === "needs_you").length;
   const fresh = members.filter((s) => s.unseen).length;
@@ -955,6 +956,7 @@ function projectHeader(name, color, members, onNew, onMove) {
     h("span", { class: "proj-dot" }), h("b", {}, name), h("span", { class: "proj-meta" }, meta),
     onMove ? h("button", { type: "button", class: "proj-new", title: T("プロジェクトを上へ"), "aria-label": T("プロジェクトを上へ"), onclick: (e) => { e.stopPropagation(); onMove(-1); } }, icon("up")) : null,
     onMove ? h("button", { type: "button", class: "proj-new", title: T("プロジェクトを下へ"), "aria-label": T("プロジェクトを下へ"), onclick: (e) => { e.stopPropagation(); onMove(1); } }, icon("down")) : null,
+    onMenu ? h("button", { type: "button", class: "proj-new", title: T("プロジェクトの設定（作業ディレクトリ・依頼文の注意）"), "aria-label": T("プロジェクトの設定（作業ディレクトリ・依頼文の注意）"), onclick: (e) => { e.stopPropagation(); onMenu(); } }, icon("more")) : null,
     onNew ? h("button", { type: "button", class: "proj-new", title: T("このプロジェクトで新規セッション"), "aria-label": T("このプロジェクトで新規セッション"), onclick: (e) => { e.stopPropagation(); onNew(); } }, icon("plus")) : null);
 }
 
@@ -1129,7 +1131,11 @@ async function devicePage(opts = {}) {
       try {
         const rows = await dev(one).get("/hub/settings");
         settingsBox.dataset.loaded = "1";
-        settingsBox.append(h("div", { class: "list" }, rows.map((r) => h("div", { class: "item", style: "cursor:default", title: r.help },
+        settingsBox.append(
+          h("div", { class: "row brief-entry" },
+            h("div", { class: "grow" }, h("div", {}, T("共通の注意")), h("div", { class: "sub" }, T("統括（MCP の start_session）が始めるセッションの依頼文の末尾に、毎回付ける文です。"))),
+            h("button", { type: "button", class: "btn small", onclick: () => commonBrief(one) }, T("編集"))),
+          h("div", { class: "list" }, rows.map((r) => h("div", { class: "item", style: "cursor:default", title: r.help },
           h("div", { class: "grow" }, h("div", {}, r.label), h("div", { class: "sub" }, r.help)),
           h("span", { class: "chip" + (r.value === true ? " idle" : "") }, r.value === true ? "ON" : r.value === false ? "OFF" : String(r.value ?? "")))),
           h("p", { class: "muted small" }, T("変更は端末の TUI（, キー）から。ハブからは変更できません。"))));
@@ -1303,7 +1309,10 @@ async function devicePage(opts = {}) {
               // Each host keeps its own order: move the project on all of them.
               const hosts = [...new Set(ordered.filter((x) => x.project === s.project).map((x) => x._dev))];
               try { await Promise.all(hosts.map((d) => dev(d).post("/api/projects/order", { project: s.project, delta }))); refreshNow(); } catch (e) { toast(e.message); }
-            })
+            },
+            // Its directory and note are per host: open on the host of
+            // its most recent session (the dialog can switch).
+            () => projectSettings(s.project, projectRecent(ordered, s.project)._dev))
           : h("div", { class: "bucket" }, b));
       }
       out.push(sessionRow(s._dev, s, live.has(s._dev + "\t" + s.session_id), infos[s._dev], !tab, sel, briefs[sessKey(s)], multi ? s._devName : "", flat));
@@ -1886,6 +1895,161 @@ function newSession(id, preset = {}) {
     paintAttach();
     load(path.value);
     if (preset.prompt) showSkills();
+  });
+}
+
+// hostPicker is the "which host" row of a dialog that edits per-host
+// values (newSession's rule: the host comes first). onChange gets the
+// picked device id; the row hides itself when there is only one host.
+function hostPicker(ds, id, onChange) {
+  const sel = h("select", { class: "grow mode", "aria-label": T("編集するホスト") },
+    ...ds.map((d) => h("option", { value: d.id, disabled: !d.online, selected: d.id === id }, d.name + (d.online ? (d.hostname && d.hostname !== d.name ? ` (${d.hostname})` : "") : T(" — オフライン")))));
+  sel.addEventListener("change", () => onChange(sel.value));
+  return h("label", { class: "row host-pick", hidden: ds.length < 2 }, h("span", { class: "muted small" }, T("ホスト")), sel);
+}
+
+// briefHost loads what a host has for the notes: its common note and
+// its projects. A collector from before the notes refuses
+// /api/brief-common through the hub (not on its allowlist) — old: true.
+async function briefHost(id) {
+  const out = { common: "", projects: [], old: false, attach: true };
+  try { out.attach = !!(await deviceInfo(id)).attachEnabled; } catch {}
+  try { out.common = (await dev(id).get("/api/brief-common"))?.brief || ""; } catch (e) { out.old = true; }
+  try { out.projects = (await dev(id).get("/api/projects")) || []; } catch {}
+  return out;
+}
+
+// briefState is the line under the host row: why this host can't be
+// edited, or (several hosts) that the values are this host's own.
+function briefState(st, hostName, multi) {
+  if (st.old) return h("p", { class: "attach-off small" }, T("このホストの ccdash は古いため、ここでは編集できません。ccdash を更新してください。"));
+  if (!st.attach) return h("p", { class: "attach-off small" }, T("このホストは attach が OFF のため、ここでは編集できません（そのホストで ccdash brief を使ってください）。"));
+  return multi ? h("p", { class: "muted small" }, T("ホストごとに保存します。いま編集しているのは「{0}」です。", hostName)) : null;
+}
+
+// projectSettings edits one project's working directory and its note for
+// start_session briefs — per host, so the dialog says which host it edits
+// and can switch. Only people write these (no MCP tool can): the note is
+// appended to every brief an orchestrating session sends for the project.
+function projectSettings(name, id) {
+  dialog(async (body, close) => {
+    let ds = [];
+    try { ds = await onlineDevices(); } catch {}
+    id = id || lastHost();
+    if (!ds.some((d) => d.id === id && d.online)) id = ds.find((d) => d.online)?.id || id;
+    if (!id) {
+      body.append(h("p", {}, T("接続中のホストがありません。")), h("div", { class: "actions" }, h("button", { class: "btn" }, T("閉じる"))));
+      return;
+    }
+    const box = h("div", { class: "col brief-form" });
+    const paint = async () => {
+      const host = id;
+      box.replaceChildren(h("p", { class: "muted small" }, T("読み込み中…")));
+      const st = await briefHost(host);
+      if (host !== id) return; // the host changed meanwhile
+      const p = st.projects.find((x) => x.name === name) || {};
+      const locked = st.old || !st.attach;
+      const hostName = deviceCache.get(host)?.name || host;
+      const path = h("input", { class: "grow mono", value: p.dir || "", disabled: locked, "aria-label": T("作業ディレクトリ"),
+        placeholder: p.recent_dir ? T("未設定（最近のセッション: {0}）", p.recent_dir) : T("未設定") });
+      const dirs = h("div", { class: "dirlist", hidden: true });
+      const load = async (at) => {
+        try {
+          const r = await dev(host).get(`/hub/dirs?path=${encodeURIComponent(at)}`);
+          path.value = r.path;
+          dirs.hidden = false;
+          dirs.replaceChildren(
+            h("div", { onclick: () => load(r.parent) }, "../"),
+            ...r.dirs.map((d) => h("div", { onclick: () => load(r.path.replace(/\/$/, "") + "/" + d) }, d + "/")));
+        } catch (e) { toast(e.message); }
+      };
+      path.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); load(path.value); } });
+      const clearBtn = h("button", { type: "button", class: "btn", disabled: locked || !p.dir, onclick: () => saveDir("") }, T("解除"));
+      const saveDir = async (dir) => {
+        try {
+          const r = await dev(host).post("/api/projects/dir", { project: name, dir });
+          path.value = r?.dir || "";
+          clearBtn.disabled = !r?.dir;
+          dirs.hidden = true;
+          toast(r?.dir ? T("作業ディレクトリを保存しました") : T("作業ディレクトリを解除しました"));
+        } catch (e) { toast(e.message); }
+      };
+      const note = h("textarea", { rows: 6, class: "grow", disabled: locked, "aria-label": T("依頼文の注意"),
+        placeholder: T("例: PR は main に向ける。デプロイの前に確認する。") });
+      note.value = p.brief || "";
+      const saveNote = async () => {
+        try {
+          await dev(host).post("/api/projects/brief", { project: name, brief: note.value });
+          toast(note.value.trim() ? T("依頼文の注意を保存しました") : T("依頼文の注意を消しました"));
+        } catch (e) { toast(e.message); }
+      };
+      box.replaceChildren(...[
+        briefState(st, hostName, ds.length > 1),
+        h("label", {}, T("作業ディレクトリ")),
+        h("div", { class: "row brief-dir" }, path,
+          h("button", { type: "button", class: "btn", disabled: locked, onclick: () => load(path.value || p.recent_dir || "") }, T("選ぶ")),
+          h("button", { type: "button", class: "btn", disabled: locked, onclick: () => saveDir(path.value.trim()) }, T("保存")),
+          clearBtn),
+        dirs,
+        h("p", { class: "muted small" }, T("統括がプロジェクト名だけで始めたセッションは、ここで起動します。")),
+        h("label", {}, T("依頼文の注意")),
+        note,
+        h("div", { class: "row" }, h("span", { class: "grow muted small" }, T("統括（MCP の start_session）が始めるセッションの依頼文の末尾に、「## このプロジェクトの注意」として付きます。")),
+          h("button", { type: "button", class: "btn", disabled: locked, onclick: saveNote }, T("注意を保存"))),
+      ].filter(Boolean));
+    };
+    body.append(h("h1", {}, T("プロジェクト「{0}」の設定", name)),
+      hostPicker(ds, id, (v) => { id = v; paint(); }),
+      box,
+      h("div", { class: "actions" },
+        h("button", { type: "button", class: "btn", onclick: () => { close(); commonBrief(id); } }, T("共通の注意…")),
+        h("span", { class: "grow" }),
+        h("button", { class: "btn primary" }, T("閉じる"))));
+    paint();
+  });
+}
+
+// commonBrief edits a host's common note: the text appended to every
+// brief an orchestrating session sends there, whatever the project.
+function commonBrief(id) {
+  dialog(async (body, close) => {
+    let ds = [];
+    try { ds = await onlineDevices(); } catch {}
+    id = id || lastHost();
+    if (!ds.some((d) => d.id === id && d.online)) id = ds.find((d) => d.online)?.id || id;
+    if (!id) {
+      body.append(h("p", {}, T("接続中のホストがありません。")), h("div", { class: "actions" }, h("button", { class: "btn" }, T("閉じる"))));
+      return;
+    }
+    const box = h("div", { class: "col brief-form" });
+    const paint = async () => {
+      const host = id;
+      box.replaceChildren(h("p", { class: "muted small" }, T("読み込み中…")));
+      const st = await briefHost(host);
+      if (host !== id) return;
+      const locked = st.old || !st.attach;
+      const note = h("textarea", { rows: 10, class: "grow", disabled: locked, "aria-label": T("共通の注意"),
+        placeholder: T("例: 応答は日本語。最初に git pull --ff-only。デプロイ・再起動・マージの前に確認する。秘密を表示しない。") });
+      note.value = st.common;
+      const save = async () => {
+        try {
+          const r = await dev(host).put("/api/brief-common", { brief: note.value });
+          note.value = r?.brief ?? note.value;
+          toast(note.value.trim() ? T("共通の注意を保存しました") : T("共通の注意を消しました"));
+        } catch (e) { toast(e.message); }
+      };
+      box.replaceChildren(...[
+        briefState(st, deviceCache.get(host)?.name || host, ds.length > 1),
+        note,
+        h("div", { class: "row" }, h("span", { class: "grow muted small" }, T("統括（MCP の start_session）が始めるすべてのセッションの依頼文の末尾に、「## 共通の注意」として付きます。変えられるのは、この画面と ccdash brief だけです。")),
+          h("button", { type: "button", class: "btn primary", disabled: locked, onclick: save }, T("保存"))),
+      ].filter(Boolean));
+    };
+    body.append(h("h1", {}, T("共通の注意")),
+      hostPicker(ds, id, (v) => { id = v; paint(); }),
+      box,
+      h("div", { class: "actions" }, h("button", { class: "btn" }, T("閉じる"))));
+    paint();
   });
 }
 
