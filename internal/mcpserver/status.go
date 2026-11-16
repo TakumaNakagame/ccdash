@@ -13,7 +13,7 @@ import (
 )
 
 // setStatus records what the calling session hands back to the operator
-// (the status rule in instructions). The collector turns answer / action
+// (statusRule, the first thing in the instructions). The collector turns answer / action
 // into "needs you" when the turn's Stop arrives.
 func (s *Server) setStatus(ctx context.Context, status, note, session string) (any, error) {
 	if model.WaitLabel(status) == "" {

@@ -114,7 +114,7 @@ var taskWriteTools = []map[string]any{
 	},
 	{
 		"name":        "add_task_note",
-		"description": "Append progress to a task's timeline (what was done, decided, found). Do this when work on a task moves. ref dedups (e.g. slack:<channel>:<ts>).",
+		"description": "Append progress to a task's timeline (what was done, decided, found). Do this when work on a task moves. ref dedups (e.g. slack:<channel>:<ts>). An edit from a session links that session to the task.",
 		"inputSchema": required(map[string]any{
 			"task":   taskRef,
 			"text":   map[string]any{"type": "string"},
@@ -127,7 +127,7 @@ var taskWriteTools = []map[string]any{
 	},
 	{
 		"name":        "link_task",
-		"description": "Link URLs / paths (a working directory, a doc) or sessions to a task, or unlink them with unlink=true.",
+		"description": "Link URLs / paths (a working directory, a doc) or sessions to a task, or unlink them with unlink=true. These tools never write to Jira, Slack or GitHub: use those services' own tools and keep the links on the task.",
 		"inputSchema": required(map[string]any{
 			"task":     taskRef,
 			"links":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
