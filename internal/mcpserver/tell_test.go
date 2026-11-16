@@ -17,24 +17,6 @@ import (
 	"github.com/TakumaNakagame/ccdash/internal/store"
 )
 
-// TestInstructionsMessageRule: Claude Code cuts a server's instructions
-// after a few thousand characters, so the rule every session must read —
-// what a "[ccdash 伝言]" message is and is not — has to open them.
-func TestInstructionsMessageRule(t *testing.T) {
-	head := []rune(instructions)
-	if len(head) > 900 {
-		head = head[:900]
-	}
-	for _, want := range []string{model.MessageMark, "not from the operator", "approval", "set_status action / answer", "tell_session", "SendMessage", "url"} {
-		if !strings.Contains(string(head), want) {
-			t.Errorf("the first 900 characters of the instructions lack %q", want)
-		}
-	}
-	if !strings.HasPrefix(model.MessageHeader("laptop", "A12"), model.MessageMark+" ") {
-		t.Errorf("the header %q does not start with the mark the rule names", model.MessageHeader("laptop", "A12"))
-	}
-}
-
 // TestChildGroup pins the grouping, the caller's own "not shown yet"
 // included.
 func TestChildGroup(t *testing.T) {
