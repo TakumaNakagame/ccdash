@@ -333,6 +333,7 @@ ccdash の介入度合いを「観察のみ」まで下げられます。
 - **Refresh interval (ms)**: TUI が DB を再クエリする間隔。デフォルト 1000
 - **Language**: `auto` (`$LC_ALL` / `$LC_MESSAGES` / `$LANG` が `ja*` なら日本語、それ以外は英語)・`en`・`ja`。TUI の ccdash 自身の文言 (タスクペイン・ヘッダーの件数・理由) と `ccdash tasks` の出力が対象。ポータルはユーザーごとに別の設定 (⚙ 表示 → 言語、既定はブラウザの言語) で、プッシュ通知もそれに従う
 - **Trusted folders**: 信頼するフォルダをカンマ区切りで指定 (`~/` 可。例: `~/src`)。ccdash がこの配下 (サブフォルダ含む) で claude を起動するとき (`n`・ポータル・MCP の `start_session`)、先に `~/.claude.json` でそのフォルダを信頼済みにするので、新しいフォルダでも Claude Code の「このフォルダを信頼しますか？」で止まらない。空なら無効。シェルからは `ccdash trust` (一覧)・`ccdash trust <dir>` (追加)・`ccdash trust --remove <dir>` (削除) でも編集できる。なお、セッション登録前にダイアログで止まった起動は、TUI では「waiting for you」の行、ポータルでは「起動中（未登録）」の 要対応 (プッシュ通知あり)、MCP では `start_session` / `overview` の `waiting_on` として出る
+- **Session setup command**: MCP の `start_session` がセッションを起動する前に、コレクタが実行するシェルのコマンド (MCP の章の「依頼文に付ける注意」)。空なら無効。変えられるのはその端末の上だけ
 - **Default model** / **Default effort**: ccdash が新しく起動するセッション (`n`・ポータル・MCP の `start_session`・クイック依頼) のモデル (`fable`・`opus`・`sonnet`・`haiku` か完全なモデル ID) と effort (`low` 〜 `max`)。`claude --model` / `--effort` として渡す。空 / `default` なら claude に任せる。claude は最後に選んだモデルを覚えているので、高いモデルを一度使うと以後の新規セッションもそれになる。ここに既定を入れておくと防げる。ポータルの新規セッション画面と MCP の `start_session` では、そのセッションだけ別のものを選べる。再開 (resume) するセッションには適用しない
 - **Ignored folders**: 無視するフォルダをカンマ区切りで指定 (`~/` 可)。この配下 (サブフォルダ含む) のヘッドレスな claude の実行 (`claude -p`。cron など) は ccdash に一切記録しない — 一覧・アーカイブ・ポータル・MCP・未読数のどこにも出ず、セッション番号 (`#N`) も使わない (自分のセッションの番号は飛ばない)。ccdash 自身がそこで起動したセッションと対話のセッションは出る。フォルダの代わりに、スクリプトが claude の環境に `CCDASH_IGNORE=1` を付けて 1 回分だけ外すこともできる (hooks が転送する。ccdash が起動する claude には引き継がない)。SessionEnd しか来ない実行 (`claude mcp list` などのサブコマンド) も記録しない。シェルからは `ccdash ignore` (一覧)・`ccdash ignore <dir>` (追加)・`ccdash ignore --remove <dir>` (削除)。`ccdash ignore prune [--dir <dir>]` は過去の自動実行が残した行を一覧し、`--yes` で消す (ピン・プロジェクト・名前変更・タスク紐付けのある行は触らない)
 - **Session list size (%)**: セッション一覧が使う割合 (横並びなら幅、上下なら高さ)。残りが作業ペイン。デフォルト 50、範囲 10〜90。ダッシュボードの `<` / `>` で 5% ずつ調整できる
@@ -540,7 +541,7 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | ツール | 返す内容 |
 |---|---|
 | `overview` | 要対応のセッション、終わったが未確認のもの、プロジェクト別の稼働中セッション、今日の利用額の目安 |
-| `list_projects` | プロジェクトとそのセッション数・稼働数・要対応数・最終活動 |
+| `list_projects` | プロジェクトとそのセッション数・稼働数・要対応数・最終活動。端末ごとに、`dir` (その端末での作業ディレクトリ。`dir_from: "recent"` が付くときは未設定で、いちばん新しいセッションが動いた場所を示すだけ) と `has_brief` (注意の文があるか) |
 | `list_sessions` | 新しい順のセッション。絞り込み: `project` / `query` / `running_only` / `attention_only` / `grid_only` (グリッドに載っているものをタイル順で) / `include_archived` / `limit` |
 | `get_session` | 1 セッション (`#N` か ID) の詳細、承認待ち、最近のプロンプト・返答・ツール呼び出し。`brief` は ccdash が起動したときの依頼文 (先頭 2,000 字。切ったときは `brief_truncated`) |
 | `my_sessions` | 呼んだセッションの子 (`start_session` で始めたものと `adopt_session` で引き取ったもの) を、届く全端末から集めて `needs_operator` (判断待ち) / `working` (作業中) / `reported` (報告あり) / `finished` (終わり) の順に返す。行には ref・タイトル・プロジェクト・端末・状態・申告と一言・`last_reply` (最後の返事の頭 300 字)・`url`・`peer`・`age`。`since_last: true` で前に呼んでから変わった行だけ。`--read-only` でも使える |
@@ -556,7 +557,7 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | `mark_seen` | 既読にする (NEW と未確認の完了印を消す。承認待ち・質問・回答待ち／作業待ちの申告は残る) |
 | `set_archived` | アーカイブ／解除 |
 | `archive_finished` | 終了したセッションをまとめてアーカイブ (動いているものは止めずに飛ばす)。ピン留め・あとで見る・未確認／要対応のものは残す (`include_unread` で未確認も対象)。`sessions` / `project` / `idle_hours` で絞り込み、`dry_run` で対象だけ確認。`children_only: true` で呼んだセッションの子だけ (届く全端末) |
-| `start_session` | 指定ディレクトリ (絶対パス) で新しい claude セッションを起動 (TUI の `n` と同じ)。`project` / 最初の `prompt` / `permission_mode` / `model` (別名かモデル ID) / `effort` を指定可。結果に、起動に使ったモデルと effort (指定したもの、なければ設定の Default model / Default effort) が入る。設定の Attach が OFF なら使えない。呼んだセッションが新しいセッションの親になり、プロンプトは依頼文として残る。claude が登録されるまで最長 10 秒ほど待ち、`ref`・`session_id`・`url`・`peer` を返す。間に合わなければ `pending: true` と起動キー (`started`)、ダイアログで止まっていれば `waiting_on` も |
+| `start_session` | 指定ディレクトリ (絶対パス。`project` にその端末の作業ディレクトリがあれば `cwd` は省ける) で新しい claude セッションを起動 (TUI の `n` と同じ)。プロンプトが空でなければ、後ろに共通の注意とプロジェクトの注意を付け (下の「依頼文に付ける注意」)、付けたものを `notes` で返す。`plain: true` なら付けない。`project` / 最初の `prompt` / `permission_mode` / `model` (別名かモデル ID) / `effort` を指定可。結果に、起動に使ったモデルと effort (指定したもの、なければ設定の Default model / Default effort) が入る。設定の Attach が OFF なら使えない。呼んだセッションが新しいセッションの親になり、プロンプトは依頼文として残る。claude が登録されるまで最長 10 秒ほど待ち、`ref`・`session_id`・`url`・`peer` を返す。間に合わなければ `pending: true` と起動キー (`started`)、ダイアログで止まっていれば `waiting_on` も |
 | `adopt_session` | すでにあるセッション (`session`)、または別のセッションの子の全部 (`from`) を、呼んだセッションの子にする。前の親は置き換わる |
 | `release_session` | 自分の子 1 件の親をやめる |
 | `stop_session` | ccdash がホストしているセッション 1 件の claude を止める (SIGTERM → 猶予後 kill)。処理中の作業は打ち切られるが、トランスクリプトは残る。ターミナルで起動した claude、停止済みのセッション、呼び出し元自身のセッションは拒否。処理中 (active) のものは `force: true` のときだけ止める。Attach が OFF なら使えない |
@@ -564,6 +565,47 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | `resume_session` | 停止中のセッションを `claude --resume` で再開し (cwd はそのセッションのもの、ccdash がホスト)、ccdash に再び動いている状態で出す。アーカイブ済みなら解除する。まだ動いているもの (ccdash 内外とも) は拒否。最初の `prompt` / `permission_mode` を指定可。Attach が OFF なら使えない |
 
 ほかのセッションを始めたセッションは、その**親**になります (行の `parent`)。`my_sessions` が返すのはこの子です。行の `peer` は Claude Code の `SendMessage` の宛先名で、同じ端末で動いているセッションにだけ付きます。`~/.claude/sessions/<pid>.json` から読むたびに取り、保存しません (このファイルのほかの項目は出しません)。セッションを起動したときのプロンプトは、コレクタの `briefs` の表に残ります (秘密は伏せ字)。ccdash はこれを消しません。
+
+#### 依頼文に付ける注意 (`ccdash brief`)
+
+`start_session` でほかのセッションに仕事を渡すセッション (統括) は、放っておくと毎回同じ注意を依頼文に書きます。注意は一度書いておけば、ccdash が依頼文の後ろに付けます。付けるのは、新しいセッションが動く端末です。
+
+- 端末の**共通の注意** — `## 共通の注意` の見出しで付く
+- **プロジェクトの注意** — プロジェクトに入るセッションに、`## このプロジェクトの注意` の見出しで付く
+
+プロジェクトには、端末ごとの**作業ディレクトリ**も決められます。決めておくと、`start_session` は `project` だけでそこに起動します (`cwd` を渡せばそちらが勝ちます)。
+
+編集はポータルで行います。プロジェクトの帯の **…** で「プロジェクトの設定」(作業ディレクトリと注意) が開きます。ホストが複数あるときは、どのホストの値を編集しているかが出て、切り替えられます。共通の注意は、その画面の「共通の注意…」か、端末のページの「端末の設定」の先頭から編集します。シェルからも編集できます。
+
+```sh
+ccdash brief                               # いまの設定
+ccdash brief common --edit                 # $EDITOR で編集。--set-file f (- は標準入力)、--clear
+ccdash brief project web --dir ~/src/web   # プロジェクトの作業ディレクトリ ("" で解除)
+ccdash brief project web --edit            # プロジェクトの注意
+```
+
+この文を書けるのは人だけです。MCP のツールからは書けず、hub の端末トークン (他の端末へのアクセス) でも書けません。ポータルから書くには、その端末の Attach が ON である必要があります。プロンプトが空のとき、`plain: true` のとき、`n`・ポータルの新規セッション・`handoff-mcp` で始めたセッションには何も付きません。セッションの依頼文 (`get_session` の `brief`) には、セッションが受け取った全文が残ります。
+
+**Session setup command** (設定画面。キーは `session_setup_command`、空なら無効) は、`start_session` が claude を起動する前にコレクタが実行するシェルのコマンドです (ログインシェル経由、最長 60 秒)。プロジェクトのディレクトリを作る、依頼文をタスクのファイルとして commit する、といった手順を入れられます。次の環境変数を受け取ります。
+
+| 変数 | 中身 |
+|---|---|
+| `CCDASH_BRIEF_FILE` | 依頼文の全文が入った一時ファイル (0600。終わると消える) |
+| `CCDASH_PROJECT` | プロジェクト名 (なければ空) |
+| `CCDASH_TITLE` | プロンプトの 1 行目 (80 字まで) |
+| `CCDASH_CWD` | 使う予定のディレクトリ (空のこともある) |
+| `CCDASH_PARENT` | 起動を頼んだセッションの ref (なければ id) |
+
+標準出力の最後の空でない行が、実在する絶対パスのディレクトリなら、そこでセッションを起動します。何も出さなければ `CCDASH_CWD` のままです。0 以外で終わるか時間切れになると起動せず、標準エラーの末尾を呼んだ側に返します。実行するのは新しいセッションが動く端末です。この設定を変えられるのはその端末の上 (TUI の設定画面) だけで、リモートモード (`-r`)・hub・MCP からは変えられません。
+
+```sh
+#!/bin/sh
+# ~/bin/ccdash-setup: 依頼文をプロジェクトのタスクとして残す
+d="${CCDASH_CWD:?no directory}"
+mkdir -p "$d/tasks" && f="$d/tasks/$(date +%Y-%m-%d-%H%M).md"
+cp "$CCDASH_BRIEF_FILE" "$f" && git -C "$d" add "$f" >&2 && git -C "$d" commit -qm "task: $CCDASH_TITLE" >&2
+echo "$d"
+```
 
 hub で複数台をつないでいる場合は、`list_hosts` で届く端末が分かり、他のツールは `host` を受け取ります (18 章)。やることリストには専用のツールがあります (`list_tasks`・`add_task` など、17 章)。
 
