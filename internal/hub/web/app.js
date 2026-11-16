@@ -1741,6 +1741,12 @@ async function releaseDialogHold(d, sid, tool) {
   return held.length > 0;
 }
 
+// START_MODELS / START_EFFORTS are what the new-session dialog offers
+// besides 既定: claude's model aliases (a full id goes in the host's
+// default_model setting) and the levels claude --effort takes.
+const START_MODELS = ["fable", "opus", "sonnet", "haiku"];
+const START_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
 // newSession picks a directory and starts claude there — optionally with a
 // first message, e.g. a skill / slash command like the TUI's skill picker
 // (S). A project skill only loads inside its project, so picking one moves
@@ -1777,6 +1783,31 @@ function newSession(id, preset = {}) {
       h("option", { value: "acceptEdits" }, T("acceptEdits（編集は自動許可）")),
       h("option", { value: "auto" }, T("auto（自動判断）")),
       h("option", { value: "plan" }, T("plan（計画だけ立てる）")));
+    // Model and effort always open on 既定 (nothing sent: the host's
+    // default_model / default_effort settings apply, else claude's own).
+    // The last pick is deliberately not remembered — a model picked once
+    // must not stick to every later session.
+    const modelDef = h("option", { value: "" }, T("モデル: 既定"));
+    const model = h("select", { class: "mode", "aria-label": T("モデル") }, modelDef,
+      ...START_MODELS.map((m) => h("option", { value: m }, T("モデル: {0}", m))));
+    const effortDef = h("option", { value: "" }, T("effort: 既定"));
+    const effort = h("select", { class: "mode", "aria-label": "effort" }, effortDef,
+      ...START_EFFORTS.map((x) => h("option", { value: x }, T("effort: {0}", x))));
+    const paintDefaults = async () => {
+      const host = id;
+      const rows = await dev(host).get("/hub/settings").catch(() => null);
+      if (host !== id) return; // the host changed meanwhile
+      const val = (k) => { const v = rows?.find?.((r) => r.key === k)?.value; return typeof v === "string" && v !== "default" ? v : ""; };
+      // A collector from before these settings ignores the two fields.
+      const old = Array.isArray(rows) && !rows.some((r) => r.key === "default_model");
+      model.disabled = effort.disabled = old;
+      model.title = effort.title = old ? T("このホストの ccdash は古いため、モデルを選べません") : "";
+      if (old) model.value = effort.value = "";
+      const dm = val("default_model"), de = val("default_effort");
+      modelDef.textContent = dm ? T("モデル: 既定（{0}）", dm) : T("モデル: 既定");
+      effortDef.textContent = de ? T("effort: 既定（{0}）", de) : T("effort: 既定");
+    };
+    paintDefaults();
     const skillBox = h("div", { class: "dirlist skills", hidden: true });
     let skillList = null;
     const loadSkills = async () => {
@@ -1820,6 +1851,7 @@ function newSession(id, preset = {}) {
       skillList = null;
       info = await deviceInfo(id).catch(() => null);
       paintAttach();
+      paintDefaults();
       path.value = id === presetHost && preset.cwd ? preset.cwd : info?.newSessionDir || "";
       load(path.value);
     });
@@ -1832,7 +1864,10 @@ function newSession(id, preset = {}) {
       if (first.startsWith("-")) first = " " + first;
       try {
         const project = preset.project || "";
-        const r = await dev(id).post("/pty/start", { cwd: path.value, cols: 120, rows: 36, prompt: first, permissionMode: mode.value, project });
+        const req = { cwd: path.value, cols: 120, rows: 36, prompt: first, permissionMode: mode.value, project };
+        if (model.value) req.model = model.value;
+        if (effort.value) req.effort = effort.value;
+        const r = await dev(id).post("/pty/start", req);
         try { localStorage.setItem("ccdash.newSessionHost", id); } catch {}
         close();
         location.hash = `#/d/${id}/p/${encodeURIComponent(r.ptyKey)}`;
@@ -1844,7 +1879,7 @@ function newSession(id, preset = {}) {
       projectNote,
       h("div", { class: "row" }, path, h("button", { type: "button", class: "btn", onclick: () => load(path.value) }, T("移動"))),
       dirs,
-      h("div", { class: "col" }, prompt, skillBox, mode),
+      h("div", { class: "col" }, prompt, skillBox, h("div", { class: "row start-opts" }, mode, model, effort)),
       h("div", { class: "actions" },
         h("button", { class: "btn", value: "cancel" }, T("キャンセル")),
         startBtn));

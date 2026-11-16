@@ -462,6 +462,9 @@ pre.bang-cmd { white-space: pre-wrap; word-break: break-all; background: var(--t
 .slash-box div { padding: 6px 10px; cursor: pointer; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slash-box div:hover, .slash-box div.sel { background: var(--chip); }
 select.mode { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 8px; font: inherit; color: var(--text); }
+.start-opts { flex-wrap: wrap; gap: 8px; }
+.start-opts select.mode { flex: 1 1 200px; min-width: 0; }
+select.mode:disabled { color: var(--muted); }
 
 /* usage */
 .usage-card { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); padding: 10px 14px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
