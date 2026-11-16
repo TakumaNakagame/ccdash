@@ -40,6 +40,20 @@ const (
 	HeaderDeviceName   = "X-Ccdash-Device-Name"
 )
 
+// HeaderPeerID, HeaderPeerName and HeaderPeerLetter say which joined device
+// a request forwarded through the hub comes from, when it is a peer (that
+// device's own token on /api/d/…, internal/hub/peer.go) rather than a
+// person in the portal. Only the hub writes them — it strips whatever the
+// client sent and sets them from the device the token belongs to — so the
+// receiving collector can name the sender of a message between sessions
+// without trusting the request body. The name is query-escaped (device
+// names may be any text).
+const (
+	HeaderPeerID     = "X-Ccdash-Peer-Id"
+	HeaderPeerName   = "X-Ccdash-Peer-Name"
+	HeaderPeerLetter = "X-Ccdash-Peer-Letter"
+)
+
 // maxMessage bounds one WebSocket message. yamux frames are at most its
 // receive window (256 KiB by default) plus a header, so 1 MiB is ample.
 const maxMessage = 1 << 20
