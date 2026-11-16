@@ -114,6 +114,58 @@ type ptyStartReq struct {
 	// like the origin (model.Session.Parent).
 	Parent     string `json:"parent"`
 	ParentHost string `json:"parentHost"`
+	// Model / Effort are passed as --model / --effort. Empty: a new
+	// session takes the default_model / default_effort settings, a resume
+	// passes nothing (modelArgs).
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
+}
+
+// modelArgs is the --model / --effort part of claude's command line: what
+// the request names wins; otherwise a NEW session takes the settings'
+// defaults, and a resume gets nothing — it keeps whatever claude gives a
+// resumed session rather than being moved to today's default. The values
+// become command-line arguments, so anything that isn't a plain model name
+// or a known effort level is refused.
+func modelArgs(req ptyStartReq, cfg settings.Settings) ([]string, error) {
+	if req.Model != "" && !settings.ValidModel(req.Model) {
+		return nil, fmt.Errorf("model must be an alias or a model id (letters, digits and . _ - : [ ], at most 64, starting with a letter or digit)")
+	}
+	if !settings.ValidEffort(req.Effort) {
+		return nil, fmt.Errorf("effort must be one of %s", strings.Join(settings.Efforts, ", "))
+	}
+	model, effort := req.Model, req.Effort
+	if req.ResumeID == "" {
+		if model == "" {
+			model = cfg.DefaultModel
+		}
+		if effort == "" {
+			effort = cfg.DefaultEffort
+		}
+	}
+	var args []string
+	// The settings are validated on the way in, but the table can be
+	// edited by hand: a bad default is dropped, never passed on.
+	if model != "" && settings.ValidModel(model) {
+		args = append(args, "--model", model)
+	}
+	if effort != "" && settings.ValidEffort(effort) {
+		args = append(args, "--effort", effort)
+	}
+	return args, nil
+}
+
+// startDefaults loads the settings modelArgs draws its defaults from; the
+// zero value (no defaults) when they can't be read.
+func (s *Server) startDefaults() settings.Settings {
+	if s.db == nil {
+		return settings.Settings{}
+	}
+	cfg, err := settings.Load(context.Background(), s.db)
+	if err != nil {
+		return settings.Settings{}
+	}
+	return cfg
 }
 
 // handlePTYStart creates a new PTY session or returns an existing alive one.
@@ -168,6 +220,10 @@ func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 	if !validParent(req.Parent) || !validParent(req.ParentHost) {
 		return "", 0, http.StatusBadRequest, fmt.Errorf("parent / parentHost must be at most 128 of a-z, A-Z, 0-9, - and _")
 	}
+	margs, err := modelArgs(req, s.startDefaults())
+	if err != nil {
+		return "", 0, http.StatusBadRequest, err
+	}
 
 	// If we already have an alive entry for this sessionID, reuse it.
 	if req.SessionID != "" {
@@ -187,6 +243,7 @@ func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 	if req.PermissionMode != "" {
 		args = append(args, "--permission-mode", req.PermissionMode)
 	}
+	args = append(args, margs...)
 	if strings.HasPrefix(req.Prompt, "-") {
 		// claude would parse it as a flag, not a message.
 		return "", 0, http.StatusBadRequest, fmt.Errorf("prompt must not start with '-'")

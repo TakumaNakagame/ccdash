@@ -514,6 +514,15 @@ portal's device-page restart button offers 作業が終わったら再起動 / �
   that does stop at a dialog before it has a session is flagged anyway:
   a "waiting for you" row in the TUI, 要対応 under 起動中 in the portal
   (plus a push), and `waiting_on` in MCP `start_session` / `overview`.
+- **Default model** / **Default effort**: the model (`fable`, `opus`,
+  `sonnet`, `haiku` or a full model id) and effort (`low` … `max`) of every
+  NEW session ccdash starts (`n`, the portal, MCP `start_session`, quick
+  requests), passed as `claude --model` / `--effort`. Empty / `default` =
+  leave it to claude — which keeps using the model you last picked in any
+  session, so one expensive pick sticks; set a default here to stop that.
+  The portal's new-session dialog and MCP `start_session` can choose
+  another one for a single session. Never applied when a session is
+  resumed.
 - **Ignored folders**: comma-separated folders (`~/` allowed) whose
   headless claude runs (`claude -p`, e.g. a cron job) ccdash never records —
   no row in the list, the archive, the portal, MCP or the unread counts, and no
@@ -734,7 +743,11 @@ machine never accepts inbound connections — its collector dials out.
   across browsers), 🎤 voice input, `/` completion (the **/** button left
   of the input opens the list at any time; with text already typed the
   command goes in front of it), and new sessions take a permission mode
-  (manual / acceptEdits / auto / plan).
+  (manual / acceptEdits / auto / plan), a model (default / fable / opus /
+  sonnet / haiku) and an effort (default / low … max). Model and effort
+  always open on "default" — the host's **Default model** / **Default
+  effort** settings, shown in brackets — and the last pick is not
+  remembered.
 - In a session ccdash hosts, tap the model name in the status line (or pick
   `/model` from the completion) for a model menu — default / Opus / Sonnet /
   Haiku / Fable / Opus Plan / any model id; it sends `/model <name>`.
@@ -827,7 +840,7 @@ Tools:
 | `mark_seen` | mark sessions seen (clears NEW and the finished-unseen mark; approvals, questions and 回答待ち / 作業待ち declarations stay) |
 | `set_archived` | archive / unarchive sessions |
 | `archive_finished` | archive the sessions whose claude has exited (running ones are skipped, never stopped); keeps pinned, watch-later and unread / needs-you ones (`include_unread` takes unread too); narrow with `sessions` / `project` / `idle_hours`, preview with `dry_run`; `children_only: true` = only the calling session's children (every reachable host) |
-| `start_session` | start a new claude session in a directory (absolute path), like the TUI's `n`; optional `project`, first `prompt`, `permission_mode`. Refused while the Attach setting is OFF. The caller becomes the new session's parent and the prompt is kept as its brief; the result carries `ref`, `session_id`, `url` and `peer` once claude has registered (waits up to ~10 s), else `pending: true` with the PTY key (`started`), plus `waiting_on` when it stopped at a dialog |
+| `start_session` | start a new claude session in a directory (absolute path), like the TUI's `n`; optional `project`, first `prompt`, `permission_mode`, `model` (alias or model id) and `effort`; the result reports the model / effort it started with (the caller's, else the Default model / Default effort settings). Refused while the Attach setting is OFF. The caller becomes the new session's parent and the prompt is kept as its brief; the result carries `ref`, `session_id`, `url` and `peer` once claude has registered (waits up to ~10 s), else `pending: true` with the PTY key (`started`), plus `waiting_on` when it stopped at a dialog |
 | `adopt_session` | make the calling session the parent of an existing session (`session`), or of every child of another session (`from`); replaces the parent it had |
 | `release_session` | stop being the parent of one of your children |
 | `stop_session` | stop one session's claude that ccdash hosts (SIGTERM, then a kill); work in progress is cut off, the transcript stays. Refuses a claude started in a terminal, an already stopped session and the caller's own; a working (active) one only with `force: true`. Refused while Attach is OFF |

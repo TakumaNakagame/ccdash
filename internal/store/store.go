@@ -11,8 +11,8 @@
 package store
 
 import (
-	"fmt"
 	"context"
+	"fmt"
 	"github.com/TakumaNakagame/ccdash/internal/usage"
 	"strings"
 	"time"
@@ -55,6 +55,12 @@ type StartRequest struct {
 	// the new session runs on another one.
 	Parent     string `json:"parent,omitempty"`
 	ParentHost string `json:"parentHost,omitempty"`
+	// Model / Effort become claude's --model / --effort (an alias such as
+	// "sonnet" or a model id; low, medium, high, xhigh or max). Empty = the
+	// collector's default_model / default_effort settings for a new
+	// session, nothing for a resume.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 // Input is what POST /pty/{key}/input types into a hosted claude: Keys

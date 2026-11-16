@@ -263,7 +263,7 @@ func required(props map[string]any, req ...string) map[string]any {
 var writeTools = []map[string]any{
 	{
 		"name": "start_session",
-		"description": "Start a new claude session in a directory, hosted by the ccdash collector (what `n` does in the TUI). The session shows up in ccdash, live in its right pane, where the operator drives it. Optionally put it into a project and give it a first prompt. " +
+		"description": "Start a new claude session in a directory, hosted by the ccdash collector (what `n` does in the TUI). The session shows up in ccdash, live in its right pane, where the operator drives it. Optionally put it into a project and give it a first prompt and choose its model and effort; the result reports the model / effort it was started with. " +
 			"The calling session becomes its parent (my_sessions lists it) and the prompt is kept as the session's brief. Waits up to ~10 s for claude to register and returns ref, session_id, url and peer (its name for Claude Code's SendMessage; this machine only); " +
 			"pending: true (with started = the PTY key) when it isn't up yet, plus waiting_on when it stopped at a dialog the operator must answer.",
 		"inputSchema": required(map[string]any{
@@ -271,6 +271,8 @@ var writeTools = []map[string]any{
 			"project":         map[string]any{"type": "string", "description": "put the new session into this project (created on first use)"},
 			"prompt":          map[string]any{"type": "string", "description": "first message to send claude; empty = just open it"},
 			"permission_mode": map[string]any{"type": "string", "enum": []string{"manual", "acceptEdits", "auto", "plan"}, "description": "claude --permission-mode; default = claude's own"},
+			"model":           map[string]any{"type": "string", "description": "claude --model: an alias (fable, opus, sonnet, haiku) or a full model id. Omit to use the operator's ccdash setting 'Default model' (and, with that empty, whatever claude picks). Pick a cheaper model for simple work when the operator asked for that"},
+			"effort":          map[string]any{"type": "string", "enum": settings.Efforts, "description": "claude --effort; omit to use the operator's ccdash setting 'Default effort' (or claude's own)"},
 		}, "cwd"),
 		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false},
 	},
@@ -571,6 +573,8 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		TimeoutMinutes  int      `json:"timeout_minutes"`
 		SinceLast       bool     `json:"since_last"`
 		ChildrenOnly    bool     `json:"children_only"`
+		Model           string   `json:"model"`
+		Effort          string   `json:"effort"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -590,7 +594,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 	case "set_status":
 		v, err = s.setStatus(ctx, args.Status, args.Note, args.Session)
 	case "start_session":
-		v, err = s.startSession(ctx, args.Host, args.Cwd, args.Project, args.Prompt, args.PermissionMode)
+		v, err = s.startSession(ctx, args.Host, args.Cwd, args.Project, args.Prompt, args.PermissionMode, args.Model, args.Effort)
 	case "stop_session":
 		v, err = s.stopSession(ctx, args.Session, args.Host, args.Force)
 	case "resume_session":
@@ -1366,7 +1370,14 @@ func (s *Server) archiveFinished(ctx context.Context, refs []string, hostArg, pr
 	return out, nil
 }
 
-func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt, mode string) (any, error) {
+func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt, mode, model, effort string) (any, error) {
+	model, effort = strings.TrimSpace(model), strings.TrimSpace(effort)
+	if !settings.ValidModel(model) {
+		return nil, fmt.Errorf("model must be an alias (fable, opus, sonnet, haiku) or a model id, got %q", model)
+	}
+	if !settings.ValidEffort(effort) {
+		return nil, fmt.Errorf("effort must be one of %s, got %q", strings.Join(settings.Efforts, ", "), effort)
+	}
 	cwd = strings.TrimSpace(cwd)
 	if !filepath.IsAbs(cwd) {
 		return nil, fmt.Errorf("cwd must be an absolute path, got %q", cwd)
@@ -1387,7 +1398,7 @@ func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt
 	if parent != "" {
 		parentHost = s.parentHostFor(ctx, h)
 	}
-	key, err := h.st.StartSession(ctx, store.StartRequest{Cwd: filepath.Clean(cwd), Prompt: prompt, Project: project, PermissionMode: mode, Parent: parent, ParentHost: parentHost})
+	key, err := h.st.StartSession(ctx, store.StartRequest{Cwd: filepath.Clean(cwd), Prompt: prompt, Project: project, PermissionMode: mode, Parent: parent, ParentHost: parentHost, Model: model, Effort: effort})
 	if err != nil {
 		return nil, fmt.Errorf("start session on %s (is its ccdash collector running?): %w", hostLabel(h), err)
 	}
@@ -1407,7 +1418,38 @@ func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt
 	if project != "" {
 		out["project"] = project
 	}
+	s.reportModel(ctx, h, out, model, effort)
 	return out, nil
+}
+
+// reportModel adds the model / effort a new session was started with to a
+// start_session result: the caller's own choice, else this machine's
+// default_model / default_effort settings (the collector applies them),
+// else a note that claude picked. Another host's settings can't be read
+// from here, so its default is only named as such.
+func (s *Server) reportModel(ctx context.Context, h host, out map[string]any, model, effort string) {
+	var cfg settings.Settings
+	known := false
+	if h.self {
+		if c, err := settings.Load(ctx, s.st); err == nil {
+			cfg, known = c, true
+		}
+	}
+	put := func(key, asked, def, label string) {
+		switch {
+		case asked != "":
+			out[key] = asked
+		case known && def != "":
+			out[key] = def
+			out[key+"_from"] = "ccdash setting '" + label + "'"
+		case known:
+			out[key+"_from"] = "claude's own default (ccdash setting '" + label + "' is empty)"
+		default:
+			out[key+"_from"] = "that host's ccdash setting '" + label + "', or claude's own default"
+		}
+	}
+	put("model", model, cfg.DefaultModel, "Default model")
+	put("effort", effort, cfg.DefaultEffort, "Default effort")
 }
 
 // attachOn is the switch that keeps the TUI from spawning claude: it gates

@@ -333,6 +333,7 @@ ccdash の介入度合いを「観察のみ」まで下げられます。
 - **Refresh interval (ms)**: TUI が DB を再クエリする間隔。デフォルト 1000
 - **Language**: `auto` (`$LC_ALL` / `$LC_MESSAGES` / `$LANG` が `ja*` なら日本語、それ以外は英語)・`en`・`ja`。TUI の ccdash 自身の文言 (タスクペイン・ヘッダーの件数・理由) と `ccdash tasks` の出力が対象。ポータルはユーザーごとに別の設定 (⚙ 表示 → 言語、既定はブラウザの言語) で、プッシュ通知もそれに従う
 - **Trusted folders**: 信頼するフォルダをカンマ区切りで指定 (`~/` 可。例: `~/src`)。ccdash がこの配下 (サブフォルダ含む) で claude を起動するとき (`n`・ポータル・MCP の `start_session`)、先に `~/.claude.json` でそのフォルダを信頼済みにするので、新しいフォルダでも Claude Code の「このフォルダを信頼しますか？」で止まらない。空なら無効。シェルからは `ccdash trust` (一覧)・`ccdash trust <dir>` (追加)・`ccdash trust --remove <dir>` (削除) でも編集できる。なお、セッション登録前にダイアログで止まった起動は、TUI では「waiting for you」の行、ポータルでは「起動中（未登録）」の 要対応 (プッシュ通知あり)、MCP では `start_session` / `overview` の `waiting_on` として出る
+- **Default model** / **Default effort**: ccdash が新しく起動するセッション (`n`・ポータル・MCP の `start_session`・クイック依頼) のモデル (`fable`・`opus`・`sonnet`・`haiku` か完全なモデル ID) と effort (`low` 〜 `max`)。`claude --model` / `--effort` として渡す。空 / `default` なら claude に任せる。claude は最後に選んだモデルを覚えているので、高いモデルを一度使うと以後の新規セッションもそれになる。ここに既定を入れておくと防げる。ポータルの新規セッション画面と MCP の `start_session` では、そのセッションだけ別のものを選べる。再開 (resume) するセッションには適用しない
 - **Ignored folders**: 無視するフォルダをカンマ区切りで指定 (`~/` 可)。この配下 (サブフォルダ含む) のヘッドレスな claude の実行 (`claude -p`。cron など) は ccdash に一切記録しない — 一覧・アーカイブ・ポータル・MCP・未読数のどこにも出ず、セッション番号 (`#N`) も使わない (自分のセッションの番号は飛ばない)。ccdash 自身がそこで起動したセッションと対話のセッションは出る。フォルダの代わりに、スクリプトが claude の環境に `CCDASH_IGNORE=1` を付けて 1 回分だけ外すこともできる (hooks が転送する。ccdash が起動する claude には引き継がない)。SessionEnd しか来ない実行 (`claude mcp list` などのサブコマンド) も記録しない。シェルからは `ccdash ignore` (一覧)・`ccdash ignore <dir>` (追加)・`ccdash ignore --remove <dir>` (削除)。`ccdash ignore prune [--dir <dir>]` は過去の自動実行が残した行を一覧し、`--yes` で消す (ピン・プロジェクト・名前変更・タスク紐付けのある行は触らない)
 - **Session list size (%)**: セッション一覧が使う割合 (横並びなら幅、上下なら高さ)。残りが作業ペイン。デフォルト 50、範囲 10〜90。ダッシュボードの `<` / `>` で 5% ずつ調整できる
 - **Invert list scroll**: セッション一覧上のマウスホイールの向きを逆にする (ホイール下で選択が上へ)。右ペインは対象外。デフォルト OFF
@@ -489,7 +490,7 @@ rm "$(command -v ccdash)"              # バイナリ削除
 - **トップのボード**: 全端末の「要対応（承認・質問・画面のメニュー）／作業中／未確認（作業が終わってまだ見ていない）」を一覧。開くと既読になる。アプリのアイコンに件数バッジ。TUI でも一覧に `?`／`✓`、ヘッダに件数、`!` で絞り込み
 - チャットの **差分** で作業ツリーの差分を表示。行をタップしてコメントを付け、**Claude に送る** でまとめて 1 つの指示として送る
 - **コスト**: チャットのヘッダの `$` でそのセッションのトークンと API 換算の概算（モデル別・サブエージェント込み）。端末ページに今日と 7 日間（日別グラフ）、TUI のヘッダに今日の合計。サブスクリプションでは定価換算の目安で、請求額ではない
-- 入力欄の上の **クイックコマンド**（タップで送信、✎ で編集、全ブラウザ共通）、🎤 音声入力、`/` 補完（入力欄の左の **/** ボタンでいつでも一覧を開ける。入力済みの文があればコマンドはその前に入る）。新規セッションは権限モード（manual / acceptEdits / auto / plan）を選べる
+- 入力欄の上の **クイックコマンド**（タップで送信、✎ で編集、全ブラウザ共通）、🎤 音声入力、`/` 補完（入力欄の左の **/** ボタンでいつでも一覧を開ける。入力済みの文があればコマンドはその前に入る）。新規セッションは権限モード（manual / acceptEdits / auto / plan）、モデル（既定 / fable / opus / sonnet / haiku）、effort（既定 / low 〜 max）を選べる。モデルと effort は毎回「既定」（ホストの設定 **Default model** / **Default effort**。カッコ内に表示）から始まり、前回の選択は覚えない
 - **サブエージェント**: セッションがサブエージェント（Agent ツール）を使っていると、チャット上部のバーに実行中の数が出る。開くと種類・説明・経過時間・直近のツール呼び出しが並び、タップでそのサブエージェントの記録と（完了後は）報告を見られる
 - ポータルは PWA。「アプリをインストール」/「ホーム画面に追加」で専用アイコン・専用ウィンドウで開ける（オフラインのキャッシュはせず、常にハブと通信）
 
@@ -555,7 +556,7 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | `mark_seen` | 既読にする (NEW と未確認の完了印を消す。承認待ち・質問・回答待ち／作業待ちの申告は残る) |
 | `set_archived` | アーカイブ／解除 |
 | `archive_finished` | 終了したセッションをまとめてアーカイブ (動いているものは止めずに飛ばす)。ピン留め・あとで見る・未確認／要対応のものは残す (`include_unread` で未確認も対象)。`sessions` / `project` / `idle_hours` で絞り込み、`dry_run` で対象だけ確認。`children_only: true` で呼んだセッションの子だけ (届く全端末) |
-| `start_session` | 指定ディレクトリ (絶対パス) で新しい claude セッションを起動 (TUI の `n` と同じ)。`project` / 最初の `prompt` / `permission_mode` を指定可。設定の Attach が OFF なら使えない。呼んだセッションが新しいセッションの親になり、プロンプトは依頼文として残る。claude が登録されるまで最長 10 秒ほど待ち、`ref`・`session_id`・`url`・`peer` を返す。間に合わなければ `pending: true` と起動キー (`started`)、ダイアログで止まっていれば `waiting_on` も |
+| `start_session` | 指定ディレクトリ (絶対パス) で新しい claude セッションを起動 (TUI の `n` と同じ)。`project` / 最初の `prompt` / `permission_mode` / `model` (別名かモデル ID) / `effort` を指定可。結果に、起動に使ったモデルと effort (指定したもの、なければ設定の Default model / Default effort) が入る。設定の Attach が OFF なら使えない。呼んだセッションが新しいセッションの親になり、プロンプトは依頼文として残る。claude が登録されるまで最長 10 秒ほど待ち、`ref`・`session_id`・`url`・`peer` を返す。間に合わなければ `pending: true` と起動キー (`started`)、ダイアログで止まっていれば `waiting_on` も |
 | `adopt_session` | すでにあるセッション (`session`)、または別のセッションの子の全部 (`from`) を、呼んだセッションの子にする。前の親は置き換わる |
 | `release_session` | 自分の子 1 件の親をやめる |
 | `stop_session` | ccdash がホストしているセッション 1 件の claude を止める (SIGTERM → 猶予後 kill)。処理中の作業は打ち切られるが、トランスクリプトは残る。ターミナルで起動した claude、停止済みのセッション、呼び出し元自身のセッションは拒否。処理中 (active) のものは `force: true` のときだけ止める。Attach が OFF なら使えない |
