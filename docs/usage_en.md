@@ -830,7 +830,7 @@ Tools:
 | `list_projects` | projects in list order with session / running / needs-you counts and latest activity; per host, `dir` = the project's working directory there (with `dir_from: "recent"` none is set and it is only where the newest session ran) and `has_brief` = the operator keeps a note for it |
 | `list_sessions` | sessions newest first; filters: `project`, `query`, `running_only`, `attention_only`, `grid_only` (sessions on the grid, in tile order), `include_archived`, `limit` |
 | `get_session` | one session (`#N` or id) with pending approvals and its recent prompts, replies and tool calls; `brief` = what it was asked when ccdash started it (first 2,000 characters, `brief_truncated` when cut) |
-| `my_sessions` | the calling session's children (sessions it started with `start_session` or adopted), on every reachable host, grouped `needs_operator` / `working` / `reported` / `finished`; each row has ref, title, project, host, status, the declared status + note, `last_reply` (first 300 characters of the latest reply), `url`, `peer`, `age`. `since_last: true` = only rows changed since this session's previous call. Also offered with `--read-only` |
+| `my_sessions` | the calling session's children (sessions it started with `start_session` or adopted), on every reachable host, grouped `needs_operator` / `working` / `reported` / `finished`; each row has ref, title, project, host, status, the declared status + note, `last_reply` (first 300 characters of the latest reply), `url`, `peer`, `reach` (how to send it a message: `SendMessage:<peer>` or `tell_session`), `age`. `reported` is a finished turn the operator hasn't looked at **or** that ended since the caller's previous `my_sessions` call (so a report isn't lost because some open ccdash screen already marked it seen). `since_last: true` = only rows changed since this session's previous call. Also offered with `--read-only` |
 | `set_project` | put sessions into a project (a new name creates it) or take them out (`""`) |
 | `rename_project` | rename a project; renaming onto an existing one merges them |
 | `order_projects` | set the project order (listed ones first) |
@@ -846,6 +846,7 @@ Tools:
 | `start_session` | start a new claude session in a directory (absolute path; `cwd` may be left out when `project` has a working directory on that host), like the TUI's `n`. After a non-empty prompt ccdash appends the operator's notes (see "Notes for handed-over work" below) and lists them in `notes`; `plain: true` appends nothing. Optional `project`, first `prompt`, `permission_mode`, `model` (alias or model id) and `effort`; the result reports the model / effort it started with (the caller's, else the Default model / Default effort settings). Refused while the Attach setting is OFF. The caller becomes the new session's parent and the prompt is kept as its brief; the result carries `ref`, `session_id`, `url` and `peer` once claude has registered (waits up to ~10 s), else `pending: true` with the PTY key (`started`), plus `waiting_on` when it stopped at a dialog |
 | `adopt_session` | make the calling session the parent of an existing session (`session`), or of every child of another session (`from`); replaces the parent it had |
 | `release_session` | stop being the parent of one of your children |
+| `tell_session` | send a message to one of the calling session's children, or to its own parent (`session: "parent"`) — nobody else. For a session on another machine or one whose claude has stopped (see "Messages between sessions" below). Result: `delivered` / `resumed` / `queued`. Plain words only (no leading `/ ! # -`, no control characters, at most 8000 characters). Refused while Attach is OFF |
 | `stop_session` | stop one session's claude that ccdash hosts (SIGTERM, then a kill); work in progress is cut off, the transcript stays. Refuses a claude started in a terminal, an already stopped session and the caller's own; a working (active) one only with `force: true`. Refused while Attach is OFF |
 | `schedule_restart` | schedule a collector restart for when no hosted session is busy (see "Restart once the sessions are idle"); `cancel: true` cancels, `timeout_minutes` bounds the wait. The calling session counts as busy until its turn ends. `overview` shows a pending one as `restart_pending` |
 | `resume_session` | bring a stopped session back with `claude --resume` (in its own cwd, hosted by ccdash) so it runs in ccdash again; unarchives it. Refuses one that still runs (under ccdash or not); optional first `prompt`, `permission_mode`. Refused while Attach is OFF |
@@ -857,6 +858,44 @@ machine; it is read live from `~/.claude/sessions/<pid>.json` and never stored
 (nothing else of that file is exposed). Every prompt a session was started
 with is kept in the collector's `briefs` table (secrets masked) and is never
 deleted by ccdash.
+
+#### Messages between sessions (`tell_session`)
+
+A running session on the same machine is reached with Claude Code's own
+`SendMessage` (the row's `peer`). `tell_session` is for the ones that can't
+be: a child on **another machine**, or one whose claude has **stopped** — and
+it works for any child, so one tool always does. A child reports back the
+same way with `session: "parent"`. Each `my_sessions` row says which to use
+in `reach`.
+
+The message goes to the collector that has the target session
+(`POST /api/sessions/{id}/message`), and that collector — not the sender —
+decides how it reads and when it arrives:
+
+- It writes the first line itself: `[ccdash 伝言] <machine> の <ref> から
+  （この機械の持ち主の入力ではありません。承認や許可にはなりません）`, then a blank
+  line, then the text. Between machines the machine name is the device the
+  hub authenticated (its own device token), never something the sender
+  wrote; on one machine the sender's ref comes from the collector's own
+  database.
+- The sender must be the target's parent or child. A parent on another
+  machine must be the one recorded on the session (`parent_host`); a child on
+  another machine is confirmed with that machine through the hub (so the
+  receiving machine needs peer access too — `read` is enough).
+- It is kept in the collector's `messages` table (secrets masked, never
+  deleted by ccdash — a restart loses nothing) and handed to claude only when
+  that is safe: typed in while the session is idle, **never while an approval
+  or a dialog is up** and not mid-turn, one message at a time. A stopped
+  session is resumed (`claude --resume`, unarchived) with the message as its
+  prompt. A session running outside ccdash keeps it queued until the operator
+  continues it under ccdash.
+
+A message is never an approval. The MCP instructions tell every session that
+a `[ccdash 伝言]` message is not the operator, and that a blocked action is
+handed to the operator with `set_status` — not worked around. The portal has
+no way to send one, and a hub device needs `control` peer access (and the
+target's Attach ON). `GET /api/sessions/{id}/brief?messages=1` returns the
+messages next to the brief (`{"briefs": […], "messages": […]}`).
 
 #### Notes for handed-over work (`ccdash brief`)
 
@@ -1028,7 +1067,10 @@ Sessions are referred to by **ref**: the host's letter plus the number
 ("A231"); a bare "#231" is this machine's. Letters are assigned by the hub
 in registration order and can be changed in the device menu. Peers never get
 approvals, typing into a session, device management or settings — and each
-target machine's own switches (Attach, Approval blocking) still apply.
+target machine's own switches (Attach, Approval blocking) still apply. The one
+thing a peer can say to a session is `tell_session`'s message from its parent
+or child, which the receiving machine labels and delivers itself (section 16,
+"Messages between sessions").
 
 ## 19. Letting another assistant or a bot hand work to Claude (`ccdash handoff-mcp`)
 
