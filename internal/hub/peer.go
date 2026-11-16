@@ -1,14 +1,18 @@
 package hub
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/TakumaNakagame/ccdash/internal/tunnel"
 )
 
 // Peer access lets one joined device reach the other devices through the
@@ -19,7 +23,9 @@ import (
 // reaches only the hub's device list, who it is (/api/peer/self) and a
 // narrow set of device routes (peerDeviceRoute) — never device
 // management, push, prefs, the raw terminal, typing into a session or
-// answering approvals. The target device's own allowlist (hubAllowed, with
+// answering approvals. The one thing a peer may say to a session is a
+// message from its parent or child (tell_session), which the target
+// collector labels and delivers itself. The target device's own allowlist (hubAllowed, with
 // its attach_enabled gate) still applies on top. See
 // docs/decisions/0007-multihost.md.
 
@@ -50,7 +56,7 @@ type peerRoute struct {
 // so adopt_session reaches a child on another host), starting / stopping a
 // hosted claude, the (scheduled) collector restart and the person-sized
 // task edits (add, patch, note, order — never sync or import, and only by
-// numeric id). /api/start-info is start_session's question before a start
+// numeric id), and a message between a parent and a child session. /api/start-info is start_session's question before a start
 // that names no directory (the project's, and whether a setup command
 // runs). Deliberately absent: the operator's notes for start_session
 // briefs and a project's directory (/api/brief-common,
@@ -63,6 +69,11 @@ var peerDeviceRoutes = []peerRoute{
 	{"GET", regexp.MustCompile(`^/hub/(info|dirs)$`), false},
 	{"GET", regexp.MustCompile(`^/api/tasks(/[^/]+)?$`), false},
 	{"POST", regexp.MustCompile(`^/api/sessions/[^/]+/(archive|favorite|later|grid|color|title|project|parent|seen)$`), true},
+	// A message from one of the peer's sessions to its child or parent
+	// here (tell_session). Not typing: the target collector writes the
+	// header naming the sender (setPeerHeaders), checks the two sessions
+	// are parent and child, and delivers only when no dialog is up.
+	{"POST", regexp.MustCompile(`^/api/sessions/[^/]+/message$`), true},
 	{"POST", regexp.MustCompile(`^/api/projects/(color|rename|order)$`), true},
 	{"POST", regexp.MustCompile(`^/api/tasks(/order|/[0-9]+(/notes)?)?$`), true},
 	{"POST", regexp.MustCompile(`^/pty/start$`), true},
@@ -118,7 +129,34 @@ func (h *Hub) servePeer(w http.ResponseWriter, r *http.Request, tok string, api 
 		log.Printf("hub: peer %q: %s %s", d.Name, r.Method, r.URL.Path)
 	}
 	r.Header.Del("Cookie")
-	api.ServeHTTP(w, r)
+	api.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), peerKey{}, &d)))
+}
+
+// peerKey carries the calling device of a peer request to the device
+// proxy, which names it to the target device (tunnel.HeaderPeerID …).
+type peerKey struct{}
+
+func peerOf(ctx context.Context) *Device {
+	d, _ := ctx.Value(peerKey{}).(*Device)
+	return d
+}
+
+// setPeerHeaders replaces the peer-identity headers of a request bound for
+// a device: dropped for a person's request (d == nil) whatever the client
+// sent, set from the authenticated device for a peer's. The target
+// collector trusts them for the sender of a message between sessions
+// (POST /api/sessions/{id}/message) and refuses that route without them,
+// which is also what keeps it from the portal.
+func setPeerHeaders(h http.Header, d *Device) {
+	h.Del(tunnel.HeaderPeerID)
+	h.Del(tunnel.HeaderPeerName)
+	h.Del(tunnel.HeaderPeerLetter)
+	if d == nil {
+		return
+	}
+	h.Set(tunnel.HeaderPeerID, d.ID)
+	h.Set(tunnel.HeaderPeerName, url.QueryEscape(d.Name))
+	h.Set(tunnel.HeaderPeerLetter, d.Letter)
 }
 
 // handlePeerAccess sets a device's peer access (a logged-in operator only:

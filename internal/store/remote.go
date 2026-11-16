@@ -314,6 +314,15 @@ func (r *Remote) Briefs(ctx context.Context, sessionID string) ([]model.Brief, e
 	return out, err
 }
 
+// TellSession: through a hub peer this is the one route that says
+// something to a session on another machine; the hub adds which device
+// asks, and the collector there takes the sender's machine from that.
+func (r *Remote) TellSession(ctx context.Context, sessionID string, t Tell) (Told, error) {
+	var out Told
+	err := r.doJSON(ctx, tellTimeout, http.MethodPost, sessionPath(sessionID, "message"), nil, t, &out)
+	return out, err
+}
+
 func (r *Remote) Peers(ctx context.Context) (map[string]string, error) {
 	out := map[string]string{}
 	err := r.doJSON(ctx, 5*time.Second, http.MethodGet, "/api/peers", nil, nil, &out)

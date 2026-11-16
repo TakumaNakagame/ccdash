@@ -54,6 +54,9 @@ const (
 type ptyEntry struct {
 	sess   *attach.Session
 	ptyKey string // always set — pid-<N> at creation, then also registered under sessionID
+	// started is when the entry was made: a claude this young is still
+	// coming up and isn't typed into by the message inbox (message.go).
+	started time.Time
 
 	// connected is true while a raw (fullscreen) stream is active. Only one
 	// raw client at a time; screen viewers are unlimited.
@@ -143,6 +146,7 @@ func newPTYEntry(sess *attach.Session, key string, cols, rows int) *ptyEntry {
 	e := &ptyEntry{
 		sess:       sess,
 		ptyKey:     key,
+		started:    time.Now(),
 		emu:        vt.NewEmulator(cols, rows),
 		curBlink:   true,
 		viewers:    map[*screenViewer]struct{}{},

@@ -972,6 +972,9 @@ func newDeviceProxy(tr http.RoundTripper) *httputil.ReverseProxy {
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Del("Authorization")
 			pr.Out.Header.Del("X-Ccdash-Token")
+			// Who asks, when it is another device (servePeer): ours to
+			// say, never the client's.
+			setPeerHeaders(pr.Out.Header, peerOf(pr.In.Context()))
 		},
 		Transport:     tr,
 		FlushInterval: -1,

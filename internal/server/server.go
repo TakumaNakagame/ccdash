@@ -80,6 +80,18 @@ type Server struct {
 	// the port would overwrite the record of the one that has it).
 	OnListening func()
 
+	// The message inbox (message.go). msgMu serializes deliveries (the
+	// loop and a just-arrived message) and guards the maps: msgLast is when
+	// a session last got a message, msgHold when it was resumed with one
+	// (nothing more until that turn is over), msgRetry when a failed resume
+	// may be tried again. childOnPeer asks another host, through the hub,
+	// whether a session there is a child of one here.
+	msgMu       sync.Mutex
+	msgLast     map[string]time.Time
+	msgHold     map[string]time.Time
+	msgRetry    map[string]time.Time
+	childOnPeer func(ctx context.Context, deviceID, child, parent string) (bool, error)
+
 	// statusLines: latest relayed statusLine JSON per session (statusline.go).
 	statusMu    sync.Mutex
 	statusLines map[string]statusSnap
@@ -112,7 +124,9 @@ func New(d *db.DB, addr string) *Server {
 		limiter: newTokenBucket(50, 100),
 		pending: map[int64]chan approvalDecision{},
 		ptyMap:  map[string]*ptyEntry{},
+		msgLast: map[string]time.Time{}, msgHold: map[string]time.Time{}, msgRetry: map[string]time.Time{},
 	}
+	s.childOnPeer = hubChildOf
 	if err := d.SweepRunningTitles(context.Background()); err != nil {
 		log.Printf("title sweep: %v", err)
 	}
@@ -176,6 +190,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/parent", wrap(s.handleAPIParent))
 	s.mux.HandleFunc("POST /api/sessions/{id}/children-seen", wrap(s.handleAPIChildrenSeen))
 	s.mux.HandleFunc("GET /api/sessions/{id}/brief", wrap(s.handleAPIBrief))
+	s.mux.HandleFunc("POST /api/sessions/{id}/message", wrap(s.handleAPIMessage))
 	s.mux.HandleFunc("GET /api/peers", wrap(s.handleAPIPeers))
 	s.mux.HandleFunc("GET /api/projects", wrap(s.handleAPIProjects))
 	s.mux.HandleFunc("POST /api/projects/color", wrap(s.handleAPIProjectColor))
@@ -293,6 +308,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	go s.discoveryLoop(ctx)
 	go s.hubLoop(ctx)
 	go s.attentionLoop(ctx)
+	go s.messageLoop(ctx)
 	errCh := make(chan error, len(lns))
 	for _, ln := range lns {
 		go func(l net.Listener) { errCh <- s.srv.Serve(l) }(ln)

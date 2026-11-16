@@ -106,6 +106,33 @@ type Input struct {
 	Paste  bool   `json:"paste,omitempty"`
 }
 
+// Tell is a message from one session to another — its parent or its child
+// (POST /api/sessions/{id}/message). FromSession is the sending session's
+// id and FromRef its ref on its own machine; the receiving collector
+// checks the two are parent and child and writes the header line that
+// names the sender itself (the sending machine is the one the hub
+// authenticated, never a field of this).
+type Tell struct {
+	Text        string `json:"text"`
+	FromSession string `json:"from_session"`
+	FromRef     string `json:"from_ref,omitempty"`
+}
+
+// Told is the receiving collector's answer: State is model.MessageTyped
+// ("delivered": typed into the running claude), model.MessageResumed (the
+// stopped session was resumed with it) or model.MessageQueued (kept in the
+// collector's inbox; Note says what it waits for).
+type Told struct {
+	ID    int64  `json:"id"`
+	State string `json:"state"`
+	Note  string `json:"note,omitempty"`
+}
+
+// tellTimeout bounds a tell: the collector may ask the sender's machine
+// through the hub who the sender is, and types or starts claude before it
+// answers.
+const tellTimeout = 20 * time.Second
+
 // Store is implemented by Local (internal/store/local.go) and Remote
 // (internal/store/remote.go). See the package doc for the split.
 type Store interface {
@@ -209,6 +236,12 @@ type Store interface {
 	// Briefs returns what the session was asked to do when ccdash started
 	// it (the kept /pty/start prompts), oldest first.
 	Briefs(ctx context.Context, sessionID string) ([]model.Brief, error)
+	// TellSession hands the collector a message for one of its sessions
+	// from that session's parent or child (ccdash mcp's tell_session). The
+	// collector delivers it when the session can take it — never onto an
+	// approval or a dialog — and keeps it queued until then. Over HTTP
+	// even for Local: the inbox and the PTYs live in the collector.
+	TellSession(ctx context.Context, sessionID string, t Tell) (Told, error)
 	// Peers maps the session id of each claude running on the collector's
 	// machine to the name Claude Code's SendMessage reaches it by. Read
 	// from the live ~/.claude/sessions files, never stored.

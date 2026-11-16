@@ -41,7 +41,11 @@ list / stop / resume / retitle a session on host Y).
   `/pty` list, `/hub/info`, `/hub/dirs`; with `control` also the session
   edits, `/pty/start`, `DELETE /pty/{key}` and the (scheduled) restart.
   Never device management, push, prefs, the raw terminal, typing into a
-  PTY, deciding approvals, settings. `read` is GET-only.
+  PTY, deciding approvals, settings. `read` is GET-only. With `control` a
+  peer may also hand a session a message from its parent or child
+  (`POST /api/sessions/{id}/message`, 0009 §13): the hub names the sending
+  device in `X-Ccdash-Peer-*` headers only it can set, and the receiving
+  collector labels, queues and delivers the text itself.
 - **Hosts are named by the hub device name** (case-insensitive; the id
   works too; `local` / `self` = this machine). Unknown → error listing the
   names; offline → error with last seen.

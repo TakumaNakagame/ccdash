@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/plaintext"
 	"github.com/TakumaNakagame/ccdash/internal/store"
 	"github.com/TakumaNakagame/ccdash/internal/transcript"
 )
@@ -169,9 +170,18 @@ const (
 
 // childGroup files a child for my_sessions: waits on the operator (an
 // approval, a question, a declared answer / action), is working (mid-turn,
-// or running and waiting on something in the background), has finished a
-// turn the operator hasn't looked at, or is done with.
-func childGroup(x model.Session) string {
+// or running and waiting on something in the background), has reported, or
+// is done with.
+//
+// "Reported" is a finished turn that is news to someone: the operator
+// hasn't looked at it (attention done / Unseen), or the caller hasn't been
+// shown it — it ended at or after shown, the caller's previous my_sessions
+// call (reportWindow ago when there was none). The second half matters
+// because the operator's mark is cleared by any ccdash screen the row sat
+// under for three seconds (the TUI cursor, an open chat): a child that
+// finished and was "seen" that way before its parent asked used to land in
+// finished, where a parent looking for reports never noticed it.
+func childGroup(x model.Session, shown time.Time) string {
 	switch {
 	case x.PendingCount > 0 || x.Attention == model.AttentionNeedsYou || model.WaitNeedsYou(x.Wait):
 		return groupNeeds
@@ -180,7 +190,38 @@ func childGroup(x model.Session) string {
 	case x.Attention == model.AttentionDone || x.Unseen:
 		return groupReported
 	}
+	if end := turnEnd(x); !end.IsZero() && !end.Before(shown) {
+		return groupReported
+	}
 	return groupFinished
+}
+
+// reportWindow is how far back a first my_sessions call (no earlier one on
+// record) looks for turns the caller hasn't been shown — the same span a
+// just-read reply stays marked in the lists.
+const reportWindow = model.RecentReplyWindow
+
+// turnEnd is when a child that isn't working last finished something: its
+// newest activity, the Stop that left the attention mark, or its declared
+// status.
+func turnEnd(x model.Session) time.Time {
+	t := x.LastActivity
+	for _, o := range []time.Time{x.AttentionAt, x.WaitAt} {
+		if o.After(t) {
+			t = o
+		}
+	}
+	return t
+}
+
+// reachOf is how the caller sends a child a message: Claude Code's
+// SendMessage when it runs on this machine and has a name there, else
+// ccdash's tell_session (another machine, or a claude that has stopped).
+func reachOf(peer string) string {
+	if peer != "" {
+		return "SendMessage:" + peer
+	}
+	return "tell_session"
 }
 
 // changedAt is when a child last changed in a way my_sessions shows.
@@ -210,9 +251,12 @@ type childRow struct {
 	LastReply  string `json:"last_reply,omitempty"`  // the start of its latest reply
 	URL        string `json:"url,omitempty"`
 	Peer       string `json:"peer,omitempty"` // the name for Claude Code's SendMessage
-	Age        string `json:"age,omitempty"`  // since it last did anything
-	Children   int    `json:"children,omitempty"`
-	SessionID  string `json:"session_id,omitempty"`
+	// Reach is how to send it a message: "SendMessage:<peer>" or
+	// "tell_session" (reachOf). Empty for a spawn with no session yet.
+	Reach     string `json:"reach,omitempty"`
+	Age       string `json:"age,omitempty"` // since it last did anything
+	Children  int    `json:"children,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 	// A spawn with no session yet.
 	Key       string `json:"pty,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`
@@ -275,6 +319,11 @@ func (s *Server) mySessions(ctx context.Context, sinceLast bool) (any, error) {
 	// LastSeen has whole seconds: a change in the second of the last call
 	// is reported again rather than lost.
 	cut := since.Truncate(time.Second)
+	// What the caller has been shown so far (childGroup).
+	shown := cut
+	if since.IsZero() {
+		shown = now.Add(-reportWindow)
+	}
 
 	grand := map[string]int{}
 	for _, l := range ls {
@@ -301,6 +350,7 @@ func (s *Server) mySessions(ctx context.Context, sinceLast bool) (any, error) {
 			Reason: x.AttentionReason, Pending: x.PendingCount, Wait: x.Wait, WaitNote: x.WaitNote,
 			Peer: peerOf(peers, l), Children: grand[x.SessionID], SessionID: x.SessionID, at: at, l: l,
 		}
+		r.Reach = reachOf(r.Peer)
 		if r.Title == "" {
 			r.Title = "(no prompt yet)"
 		}
@@ -310,7 +360,7 @@ func (s *Server) mySessions(ctx context.Context, sinceLast bool) (any, error) {
 		if !at.IsZero() {
 			r.Age = ago(now.Sub(at))
 		}
-		g := childGroup(x)
+		g := childGroup(x, shown)
 		if g == groupWorking {
 			r.Tool = x.Tool
 			if !x.TurnStartedAt.IsZero() {
@@ -500,6 +550,82 @@ func (s *Server) releaseSession(ctx context.Context, ref, hostArg string) (any, 
 		return nil, l.h.explain(err)
 	}
 	return map[string]any{"released": l.ref()}, nil
+}
+
+// tellSession is the tell_session tool: a message from the caller to one of
+// its children or to its own parent, handed to the collector that has the
+// target (store.TellSession). That collector checks the relation again,
+// writes the header line naming the sender and decides when the text
+// reaches claude — this side only refuses early what it would refuse.
+func (s *Server) tellSession(ctx context.Context, ref, hostArg, text string) (any, error) {
+	self, err := s.caller("tell_session")
+	if err != nil {
+		return nil, err
+	}
+	text, err = plaintext.Check(text)
+	if err != nil {
+		return nil, err
+	}
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, fmt.Errorf(`session is required: one of your children, or "parent"`)
+	}
+	me, meErr := s.findSession(ctx, self)
+	var l located
+	if strings.EqualFold(ref, "parent") {
+		if meErr != nil {
+			return nil, fmt.Errorf("can't look up your own session to find its parent: %w", meErr)
+		}
+		if me.Parent == "" {
+			return nil, fmt.Errorf("this session has no parent (it was not started by another session's start_session, nor adopted)")
+		}
+		if l, err = s.locate(ctx, me.Parent, ""); err != nil {
+			return nil, fmt.Errorf("your parent session can't be reached from here: %w", err)
+		}
+	} else if l, err = s.locate(ctx, ref, hostArg); err != nil {
+		return nil, err
+	}
+	x, name := l.x, l.ref()
+	switch {
+	case x.SessionID == self:
+		return nil, fmt.Errorf("%s is your own session", name)
+	case x.Parent == self: // a child
+	case meErr == nil && me.Parent == x.SessionID: // the parent
+	default:
+		return nil, fmt.Errorf("%s is neither your child nor your parent: tell_session only carries messages between a session and the sessions it started or adopted (my_sessions lists yours). The operator talks to any other session themselves", name)
+	}
+	if err := s.attachOn(ctx, l.h, "messaging sessions"); err != nil {
+		return nil, err
+	}
+	fromRef := ""
+	if meErr == nil {
+		fromRef = (located{x: me, h: s.selfHost(ctx)}).ref()
+	}
+	told, err := l.h.st.TellSession(ctx, x.SessionID, store.Tell{Text: text, FromSession: self, FromRef: fromRef})
+	if err != nil {
+		return nil, fmt.Errorf("tell %s: %w", name, l.h.explain(err))
+	}
+	out := map[string]any{"result": told.State, "to": name}
+	switch told.State {
+	case model.MessageTyped:
+		out["note"] = "typed into the running session, under a line that names you as the sender and says it is not the operator's input. Its answer, if any, shows in its conversation (my_sessions / get_session)"
+	case model.MessageResumed:
+		out["note"] = "the session had stopped: ccdash resumed it (claude --resume) with your message, under a line that names you as the sender, as its prompt"
+	default:
+		out["result"] = model.MessageQueued
+		out["note"] = "kept in the inbox of the session's ccdash, which delivers it by itself — don't send it again"
+		if told.Note != "" {
+			out["note"] = out["note"].(string) + ": " + told.Note
+		}
+	}
+	if p := peerOf(s.peers(ctx), l); p != "" {
+		out["peer"] = p
+		out["hint"] = "this session runs on your machine: Claude Code's SendMessage to peer is the preferred way to talk to it (this message was handed over all the same)"
+	}
+	if s.hubURL != "" {
+		out["url"] = s.hubURL + "/s/" + url.PathEscape(x.SessionID)
+	}
+	return out, nil
 }
 
 // briefInto adds what the session was asked to do at its start to a
