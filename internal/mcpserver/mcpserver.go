@@ -50,10 +50,22 @@ machines; a bare "#N" or N means this machine's session N; pass host for another
 start_session, schedule_restart and the project tools act on this machine unless host says
 otherwise — start a session on another machine with host + a directory that exists there.
 The organizing tools (set_project, rename_project, order_projects, set_project_color, set_title, set_later,
-set_grid, set_pinned, set_color, mark_seen, set_archived, archive_finished) change what the operator sees in ccdash;
+set_grid, set_pinned, set_color, mark_seen, set_archived, archive_finished, adopt_session, release_session) change what the operator sees in ccdash;
 projects are just names, created on first use.
 start_session opens a new claude session in a directory (optionally in a project, with a
 first prompt); the operator sees and drives it in ccdash.
+Handing work to other sessions: the session that calls start_session becomes the new
+session's parent. The result names the new session — ref, session_id, url and peer — once
+claude is up; if that takes longer than ~10 s it says pending: true with the PTY key, and
+my_sessions lists it as starting. my_sessions shows your children in one call, grouped
+needs_operator / working / reported / finished, each with the start of its latest reply;
+since_last: true returns only what changed since you last asked — use it instead of
+searching list_sessions. peer is the name Claude Code's SendMessage reaches a running
+session on this machine by (a ccdash ref is not a SendMessage address). adopt_session takes
+over a session that already exists (or, with from, every child of another session),
+release_session lets one go, and archive_finished with children_only tidies only your own.
+What a session was asked at its start is kept as its brief (get_session shows it). You can't
+answer a child's approval or question: tell the operator its url — they answer it there.
 stop_session ends the claude process of a session ccdash hosts (one at a time; whatever it is
 doing is cut off, the transcript stays) and resume_session brings a stopped session back with
 claude --resume. Stop a session only when the operator asked for it; never stop your own.
@@ -250,8 +262,10 @@ func required(props map[string]any, req ...string) map[string]any {
 
 var writeTools = []map[string]any{
 	{
-		"name":        "start_session",
-		"description": "Start a new claude session in a directory, hosted by the ccdash collector (what `n` does in the TUI). The session shows up in ccdash, live in its right pane, where the operator drives it. Optionally put it into a project and give it a first prompt.",
+		"name": "start_session",
+		"description": "Start a new claude session in a directory, hosted by the ccdash collector (what `n` does in the TUI). The session shows up in ccdash, live in its right pane, where the operator drives it. Optionally put it into a project and give it a first prompt. " +
+			"The calling session becomes its parent (my_sessions lists it) and the prompt is kept as the session's brief. Waits up to ~10 s for claude to register and returns ref, session_id, url and peer (its name for Claude Code's SendMessage; this machine only); " +
+			"pending: true (with started = the PTY key) when it isn't up yet, plus waiting_on when it stopped at a dialog the operator must answer.",
 		"inputSchema": required(map[string]any{
 			"cwd":             map[string]any{"type": "string", "description": "absolute path of an existing directory on the collector's machine"},
 			"project":         map[string]any{"type": "string", "description": "put the new session into this project (created on first use)"},
@@ -402,9 +416,28 @@ var writeTools = []map[string]any{
 			"project":        map[string]any{"type": "string", "description": "only sessions in this project"},
 			"idle_hours":     map[string]any{"type": "number", "description": "only sessions with no activity for this many hours (default 0 = any)"},
 			"include_unread": map[string]any{"type": "boolean", "description": "also archive finished sessions the operator hasn't looked at"},
+			"children_only":  map[string]any{"type": "boolean", "description": "only the calling session's own children (the sessions it started or adopted), on every reachable host unless host is given"},
 			"dry_run":        map[string]any{"type": "boolean", "description": "list the sessions, archive nothing"},
 		}),
 		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true},
+	},
+	{
+		"name": "adopt_session",
+		"description": "Make the calling session the parent of a session that already exists, so my_sessions lists it: session = one session, or from = every child of that session (taking over from another orchestrator). " +
+			"Replaces the parent it had. Changes nothing else about the session.",
+		"inputSchema": schema(map[string]any{
+			"session": map[string]any{"type": "string", "description": `the session to adopt: a ref ("A231"), "#N" / N for this machine, or a session id`},
+			"from":    map[string]any{"type": "string", "description": "instead of session: adopt every child of this session"},
+		}),
+		"annotations": writeHint,
+	},
+	{
+		"name":        "release_session",
+		"description": "Stop being the parent of one of your children: it leaves my_sessions and has no parent. The session itself is untouched.",
+		"inputSchema": required(map[string]any{
+			"session": map[string]any{"type": "string", "description": `one of your children: a ref ("A231"), "#N" / N for this machine, or a session id`},
+		}, "session"),
+		"annotations": writeHint,
 	},
 }
 
@@ -455,6 +488,20 @@ var readTools = []map[string]any{
 		},
 		"annotations": readOnlyHint,
 	},
+	{
+		"name": "my_sessions",
+		"description": "Your children — the sessions the calling session started with start_session or took over with adopt_session — on every reachable host, in one call. Grouped in this order: " +
+			"needs_operator (a pending approval, a question, a declared answer / action wait, or a new spawn stuck on a dialog), working (mid-turn, or waiting on something in the background; also spawns still starting), " +
+			"reported (finished a turn the operator hasn't looked at yet), finished (the rest; the 20 most recent). " +
+			"Each row: ref, title, project, host, status, declared_status + declared_note, last_reply (the first 300 characters of its latest reply), url, peer (the name to give Claude Code's SendMessage; only for running sessions on this machine), " +
+			"age (since it last did anything), children (how many sessions it started itself). since_last: true returns only the rows that changed since your previous my_sessions call (unchanged = how many were left out). " +
+			"Always the caller's own children: it takes no session argument. Archived children are not listed.",
+		"inputSchema": schema(map[string]any{
+			"since_last": map[string]any{"type": "boolean", "description": "only children that changed since this session's previous my_sessions call"},
+		}),
+		// It moves only the caller's own "last asked" bookmark.
+		"annotations": map[string]any{"readOnlyHint": true, "idempotentHint": false},
+	},
 }
 
 // Host arguments (see hosts.go). The tools that read lists cover every
@@ -479,7 +526,7 @@ func init() {
 	add(readTools, hostAll, "overview", "list_projects", "list_sessions")
 	add(readTools, hostSession, "get_session")
 	add(writeTools, hostHere, "start_session", "schedule_restart", "rename_project", "order_projects", "set_project_color", "archive_finished")
-	add(writeTools, hostSession, "stop_session", "resume_session", "set_project", "set_title", "set_later", "set_grid", "set_pinned", "set_color", "mark_seen", "set_archived")
+	add(writeTools, hostSession, "adopt_session", "release_session", "stop_session", "resume_session", "set_project", "set_title", "set_later", "set_grid", "set_pinned", "set_color", "mark_seen", "set_archived")
 }
 
 func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
@@ -522,6 +569,8 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		Cancel          bool     `json:"cancel"`
 		Host            string   `json:"host"`
 		TimeoutMinutes  int      `json:"timeout_minutes"`
+		SinceLast       bool     `json:"since_last"`
+		ChildrenOnly    bool     `json:"children_only"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -577,7 +626,17 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		}
 		v, err = s.setArchived(ctx, args.Sessions, args.Host, *args.Archived)
 	case "archive_finished":
-		v, err = s.archiveFinished(ctx, args.Sessions, args.Host, args.Project, args.IdleHours, args.IncludeUnread, args.DryRun)
+		v, err = s.archiveFinished(ctx, args.Sessions, args.Host, args.Project, args.IdleHours, args.IncludeUnread, args.DryRun, args.ChildrenOnly)
+	case "adopt_session":
+		v, err = s.adoptSession(ctx, args.Session, args.From, args.Host)
+	case "release_session":
+		v, err = s.releaseSession(ctx, args.Session, args.Host)
+	case "my_sessions":
+		// Never someone else's children: the caller is not an argument.
+		if args.Session != "" || args.Host != "" {
+			return "", fmt.Errorf("my_sessions takes no session or host: it always lists the calling session's own children, on every reachable host")
+		}
+		v, err = s.mySessions(ctx, args.SinceLast)
 	case "overview":
 		v, err = s.overview(ctx, args.Host)
 	case "list_hosts":
@@ -628,6 +687,11 @@ type sessionRow struct {
 	SessionID  string   `json:"session_id"`
 	URL        string   `json:"url,omitempty"`   // the session's chat in the hub portal
 	Tasks      []string `json:"tasks,omitempty"` // open tasks this session worked on, as refs ("B#11"), on any host
+	// Peer is the name Claude Code's SendMessage reaches the session by:
+	// running sessions on this machine only (read live, see peers).
+	Peer string `json:"peer,omitempty"`
+	// Parent is the session id of the session that started or adopted it.
+	Parent string `json:"parent,omitempty"`
 }
 
 func (s *Server) row(l located) sessionRow {
@@ -636,6 +700,7 @@ func (s *Server) row(l located) sessionRow {
 		Ref: l.x.Ref(), Host: l.h.name, Title: x.DisplayTitle(), Project: x.Project, Group: groupOf(x),
 		Status: string(x.Status), Attention: x.Attention, Reason: x.AttentionReason, Pending: x.PendingCount,
 		Cwd: x.Cwd, Branch: x.Branch, Pinned: x.Favorite, New: x.Unseen, Later: x.Later, Grid: x.Grid, Wait: x.Wait, WaitNote: x.WaitNote, Archived: x.Archived, SessionID: x.SessionID,
+		Parent: x.Parent,
 	}
 	if r.Ref != "" {
 		r.Ref = l.ref()
@@ -903,6 +968,7 @@ func (s *Server) listSessions(ctx context.Context, hostArg, project, query strin
 	var out []sessionRow
 	matched := 0
 	byTask := s.tasksBySession(ctx)
+	peers := s.peers(ctx)
 	for _, l := range ls {
 		x := l.x
 		if project != "" && x.Project != project ||
@@ -916,6 +982,7 @@ func (s *Server) listSessions(ctx context.Context, hostArg, project, query strin
 		if len(out) < limit {
 			r := s.row(l)
 			r.Tasks = byTask[x.SessionID]
+			r.Peer = peerOf(peers, l)
 			out = append(out, r)
 		}
 	}
@@ -981,7 +1048,11 @@ func (s *Server) getSession(ctx context.Context, ref, hostArg string, n int) (an
 	n = min(n, 200)
 	row := s.row(l)
 	row.Tasks = s.tasksBySession(ctx)[x.SessionID]
+	if l.h.self && running(x) {
+		row.Peer = peerOf(s.peers(ctx), l)
+	}
 	out := map[string]any{"session": row}
+	briefInto(ctx, st, x.SessionID, out)
 	if aps, err := st.ListPendingApprovals(ctx); err == nil {
 		var mine []map[string]any
 		for _, a := range aps {
@@ -1222,12 +1293,25 @@ func (s *Server) setArchived(ctx context.Context, refs []string, hostArg string,
 
 // archiveFinished archives exited sessions (see the tool description);
 // running ones are reported as skipped, never stopped. Without sessions it
-// covers one host: host, else this machine.
-func (s *Server) archiveFinished(ctx context.Context, refs []string, hostArg, project string, idleHours float64, unread, dryRun bool) (any, error) {
+// covers one host: host, else this machine — or, with childrenOnly, the
+// caller's children on every reachable host.
+func (s *Server) archiveFinished(ctx context.Context, refs []string, hostArg, project string, idleHours float64, unread, dryRun, childrenOnly bool) (any, error) {
 	var ls []located
 	var err error
+	self := ""
+	if childrenOnly {
+		if self, err = s.caller("archive_finished with children_only"); err != nil {
+			return nil, err
+		}
+	}
 	if len(refs) > 0 {
 		ls, err = s.locateAll(ctx, refs, hostArg)
+	} else if childrenOnly {
+		// Children live wherever they were started.
+		var hs []host
+		if hs, _, err = s.hostsFor(ctx, hostArg); err == nil {
+			ls, _, err = s.sessionsOn(ctx, hs, false)
+		}
 	} else {
 		var h host
 		if h, err = s.hostNamed(ctx, hostArg); err == nil {
@@ -1245,7 +1329,7 @@ func (s *Server) archiveFinished(ctx context.Context, refs []string, hostArg, pr
 	for _, l := range ls {
 		x := l.x
 		switch {
-		case x.Archived, project != "" && x.Project != project:
+		case x.Archived, project != "" && x.Project != project, childrenOnly && x.Parent != self:
 			continue
 		case running(x):
 			skip("running", l)
@@ -1282,32 +1366,6 @@ func (s *Server) archiveFinished(ctx context.Context, refs []string, hostArg, pr
 	return out, nil
 }
 
-// spawnWait is how long start_session watches a new spawn for a dialog.
-var spawnWait = 6 * time.Second
-
-// waitFor returns the dialog the spawn key waits on, watching it for up to
-// spawnWait; "" if none showed up.
-func (s *Server) waitFor(ctx context.Context, st store.Store, key string) string {
-	deadline := s.now().Add(spawnWait)
-	for {
-		if ws, err := st.WaitingSpawns(ctx); err == nil {
-			for _, w := range ws {
-				if w.Key == key {
-					return w.Prompt
-				}
-			}
-		}
-		if !s.now().Before(deadline) {
-			return ""
-		}
-		select {
-		case <-ctx.Done():
-			return ""
-		case <-time.After(time.Second):
-		}
-	}
-}
-
 func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt, mode string) (any, error) {
 	cwd = strings.TrimSpace(cwd)
 	if !filepath.IsAbs(cwd) {
@@ -1324,7 +1382,12 @@ func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt
 		return nil, err
 	}
 	project = strings.TrimSpace(project)
-	key, err := h.st.StartSession(ctx, store.StartRequest{Cwd: filepath.Clean(cwd), Prompt: prompt, Project: project, PermissionMode: mode})
+	// The caller becomes the new session's parent (my_sessions).
+	parent, parentHost := strings.TrimSpace(s.self()), ""
+	if parent != "" {
+		parentHost = s.parentHostFor(ctx, h)
+	}
+	key, err := h.st.StartSession(ctx, store.StartRequest{Cwd: filepath.Clean(cwd), Prompt: prompt, Project: project, PermissionMode: mode, Parent: parent, ParentHost: parentHost})
 	if err != nil {
 		return nil, fmt.Errorf("start session on %s (is its ccdash collector running?): %w", hostLabel(h), err)
 	}
@@ -1336,12 +1399,11 @@ func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt
 	if h.name != "" {
 		out["host"] = h.name
 	}
-	// A new folder can stop claude at the folder-trust question before it
-	// registers anything; say so instead of leaving the caller guessing.
-	if w := s.waitFor(ctx, h.st, key); w != "" {
-		out["waiting_on"] = w
-		out["note"] = "claude stopped at a dialog before starting the session; the operator must answer it in ccdash (TUI row / portal 起動中). Folders under ccdash's 'Trusted folders' setting skip the trust question."
-	}
+	// Name the new session for the caller (ref, url, peer) once claude has
+	// registered; a new folder can stop claude at the folder-trust question
+	// before it registers anything — say so instead of leaving the caller
+	// guessing.
+	s.spawnResult(ctx, h, s.awaitSpawn(ctx, h.st, key), out)
 	if project != "" {
 		out["project"] = project
 	}
