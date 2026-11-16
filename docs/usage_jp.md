@@ -541,7 +541,8 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | `overview` | 要対応のセッション、終わったが未確認のもの、プロジェクト別の稼働中セッション、今日の利用額の目安 |
 | `list_projects` | プロジェクトとそのセッション数・稼働数・要対応数・最終活動 |
 | `list_sessions` | 新しい順のセッション。絞り込み: `project` / `query` / `running_only` / `attention_only` / `grid_only` (グリッドに載っているものをタイル順で) / `include_archived` / `limit` |
-| `get_session` | 1 セッション (`#N` か ID) の詳細、承認待ち、最近のプロンプト・返答・ツール呼び出し |
+| `get_session` | 1 セッション (`#N` か ID) の詳細、承認待ち、最近のプロンプト・返答・ツール呼び出し。`brief` は ccdash が起動したときの依頼文 (先頭 2,000 字。切ったときは `brief_truncated`) |
+| `my_sessions` | 呼んだセッションの子 (`start_session` で始めたものと `adopt_session` で引き取ったもの) を、届く全端末から集めて `needs_operator` (判断待ち) / `working` (作業中) / `reported` (報告あり) / `finished` (終わり) の順に返す。行には ref・タイトル・プロジェクト・端末・状態・申告と一言・`last_reply` (最後の返事の頭 300 字)・`url`・`peer`・`age`。`since_last: true` で前に呼んでから変わった行だけ。`--read-only` でも使える |
 | `set_project` | セッションをプロジェクトに入れる (新しい名前なら作成)、`""` で外す |
 | `rename_project` | プロジェクト名の変更。既存のプロジェクト名にすると統合 |
 | `order_projects` | プロジェクトの並び順を指定 (指定したものが先頭) |
@@ -553,11 +554,15 @@ claude mcp add --scope user ccdash -- ccdash mcp -r     # `ccdash remote set` �
 | `set_color` | セッションの色。`#rrggbb`、`random` (動いている他のセッションと離れた色)、`""` で自動に戻す |
 | `mark_seen` | 既読にする (NEW と未確認の完了印を消す。承認待ち・質問・回答待ち／作業待ちの申告は残る) |
 | `set_archived` | アーカイブ／解除 |
-| `archive_finished` | 終了したセッションをまとめてアーカイブ (動いているものは止めずに飛ばす)。ピン留め・あとで見る・未確認／要対応のものは残す (`include_unread` で未確認も対象)。`sessions` / `project` / `idle_hours` で絞り込み、`dry_run` で対象だけ確認 |
-| `start_session` | 指定ディレクトリ (絶対パス) で新しい claude セッションを起動 (TUI の `n` と同じ)。`project` / 最初の `prompt` / `permission_mode` を指定可。設定の Attach が OFF なら使えない |
+| `archive_finished` | 終了したセッションをまとめてアーカイブ (動いているものは止めずに飛ばす)。ピン留め・あとで見る・未確認／要対応のものは残す (`include_unread` で未確認も対象)。`sessions` / `project` / `idle_hours` で絞り込み、`dry_run` で対象だけ確認。`children_only: true` で呼んだセッションの子だけ (届く全端末) |
+| `start_session` | 指定ディレクトリ (絶対パス) で新しい claude セッションを起動 (TUI の `n` と同じ)。`project` / 最初の `prompt` / `permission_mode` を指定可。設定の Attach が OFF なら使えない。呼んだセッションが新しいセッションの親になり、プロンプトは依頼文として残る。claude が登録されるまで最長 10 秒ほど待ち、`ref`・`session_id`・`url`・`peer` を返す。間に合わなければ `pending: true` と起動キー (`started`)、ダイアログで止まっていれば `waiting_on` も |
+| `adopt_session` | すでにあるセッション (`session`)、または別のセッションの子の全部 (`from`) を、呼んだセッションの子にする。前の親は置き換わる |
+| `release_session` | 自分の子 1 件の親をやめる |
 | `stop_session` | ccdash がホストしているセッション 1 件の claude を止める (SIGTERM → 猶予後 kill)。処理中の作業は打ち切られるが、トランスクリプトは残る。ターミナルで起動した claude、停止済みのセッション、呼び出し元自身のセッションは拒否。処理中 (active) のものは `force: true` のときだけ止める。Attach が OFF なら使えない |
 | `schedule_restart` | 作業中のセッションが無くなったらコレクタを再起動するよう予約する (上の「作業が終わってから再起動」)。`cancel: true` で取り消し、`timeout_minutes` で待つ上限。呼んだセッション自身も、ターンが終わるまでは「作業中」として待たれる。`overview` の `restart_pending` に予約の状態が出る |
 | `resume_session` | 停止中のセッションを `claude --resume` で再開し (cwd はそのセッションのもの、ccdash がホスト)、ccdash に再び動いている状態で出す。アーカイブ済みなら解除する。まだ動いているもの (ccdash 内外とも) は拒否。最初の `prompt` / `permission_mode` を指定可。Attach が OFF なら使えない |
+
+ほかのセッションを始めたセッションは、その**親**になります (行の `parent`)。`my_sessions` が返すのはこの子です。行の `peer` は Claude Code の `SendMessage` の宛先名で、同じ端末で動いているセッションにだけ付きます。`~/.claude/sessions/<pid>.json` から読むたびに取り、保存しません (このファイルのほかの項目は出しません)。セッションを起動したときのプロンプトは、コレクタの `briefs` の表に残ります (秘密は伏せ字)。ccdash はこれを消しません。
 
 hub で複数台をつないでいる場合は、`list_hosts` で届く端末が分かり、他のツールは `host` を受け取ります (18 章)。やることリストには専用のツールがあります (`list_tasks`・`add_task` など、17 章)。
 
