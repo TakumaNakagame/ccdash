@@ -142,3 +142,42 @@ func TestPaneRatio(t *testing.T) {
 		t.Errorf("MoveList stops at the floor: %v", r)
 	}
 }
+
+// TestDefaultModelEffort: the two start defaults refuse anything that
+// could not go on claude's command line, and "default" stores as "".
+func TestDefaultModelEffort(t *testing.T) {
+	ctx := context.Background()
+	st := mapStore{}
+	s := Defaults()
+	if s.DefaultModel != "" || s.DefaultEffort != "" {
+		t.Fatalf("defaults must leave the model to claude: %q %q", s.DefaultModel, s.DefaultEffort)
+	}
+	s, err := Set(ctx, st, s, "default_model", " sonnet ")
+	if err != nil || s.DefaultModel != "sonnet" || st["default_model"] != "sonnet" {
+		t.Errorf("set model: %q stored %q, %v", s.DefaultModel, st["default_model"], err)
+	}
+	for _, bad := range []string{"-p", "a b", "x;y"} {
+		if _, err := Set(ctx, st, s, "default_model", bad); err == nil {
+			t.Errorf("default_model %q: want an error", bad)
+		}
+	}
+	if st["default_model"] != "sonnet" {
+		t.Errorf("a refused value was stored: %q", st["default_model"])
+	}
+	s, err = Set(ctx, st, s, "default_effort", "high")
+	if err != nil || s.DefaultEffort != "high" || Get(s, "default_effort") != "high" {
+		t.Errorf("set effort: %q, %v", s.DefaultEffort, err)
+	}
+	s, err = Set(ctx, st, s, "default_effort", "default")
+	if err != nil || s.DefaultEffort != "" || st["default_effort"] != "" || Get(s, "default_effort") != "default" {
+		t.Errorf("effort default: %q stored %q, %v", s.DefaultEffort, st["default_effort"], err)
+	}
+	if _, err := Set(ctx, st, s, "default_effort", "ultra"); err == nil {
+		t.Error("default_effort ultra: want an error")
+	}
+	// Load drops a hand-written bad value.
+	l, err := Load(ctx, mapStore{"default_model": "--print", "default_effort": "max"})
+	if err != nil || l.DefaultModel != "" || l.DefaultEffort != "max" {
+		t.Errorf("load: %q %q, %v", l.DefaultModel, l.DefaultEffort, err)
+	}
+}

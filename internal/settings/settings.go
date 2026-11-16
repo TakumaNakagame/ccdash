@@ -7,6 +7,7 @@ package settings
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -113,6 +114,41 @@ type Settings struct {
 	// job) as archived the moment it appears; it comes back when someone
 	// resumes it interactively.
 	HideHeadless bool
+	// DefaultModel is passed as `claude --model` to every NEW session
+	// ccdash starts (n, the portal, MCP start_session) that names none
+	// itself: an alias (fable, opus, sonnet, haiku) or a full model id.
+	// Empty = leave it to claude, which remembers the last model picked.
+	// Never applied to a resume.
+	DefaultModel string
+	// DefaultEffort is the same for `claude --effort`: "" (claude's own),
+	// low, medium, high, xhigh or max.
+	DefaultEffort string
+}
+
+// Efforts are the levels `claude --effort` takes.
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+
+// effortDefault is how the settings page shows DefaultEffort "".
+const effortDefault = "default"
+
+var modelRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._\[\]:-]{0,63}$`)
+
+// ValidModel reports whether m may be passed as `claude --model <m>`: an
+// alias or a model id, never something that reads as a flag. "" is valid
+// (no --model).
+func ValidModel(m string) bool { return m == "" || modelRe.MatchString(m) }
+
+// ValidEffort reports whether e is "" or one of Efforts.
+func ValidEffort(e string) bool {
+	if e == "" {
+		return true
+	}
+	for _, x := range Efforts {
+		if x == e {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -167,6 +203,8 @@ const (
 	keyAutoArchiveDays  = "auto_archive_days"
 	keyAutoTitle        = "auto_title"
 	keyHideHeadless     = "hide_headless"
+	keyDefaultModel     = "default_model"
+	keyDefaultEffort    = "default_effort"
 	// KeyAutoArchiveLast is bookkeeping, not a preference: the local date
 	// (YYYY-MM-DD) the daily auto-archive last ran. Not in AllSpecs.
 	KeyAutoArchiveLast = "auto_archive_last"
@@ -251,6 +289,16 @@ func loadPairs(out *Settings) []loadPair {
 		{keyAutoArchiveDays, func(v string) { out.AutoArchiveDays = parseInt(v, out.AutoArchiveDays) }},
 		{keyAutoTitle, func(v string) { out.AutoTitle = parseBool(v, out.AutoTitle) }},
 		{keyHideHeadless, func(v string) { out.HideHeadless = parseBool(v, out.HideHeadless) }},
+		{keyDefaultModel, func(v string) {
+			if ValidModel(v) {
+				out.DefaultModel = v
+			}
+		}},
+		{keyDefaultEffort, func(v string) {
+			if ValidEffort(v) {
+				out.DefaultEffort = v
+			}
+		}},
 		{keyTimeFormat, func(v string) {
 			if v == "relative" || v == "absolute" {
 				out.TimeFormat = v
@@ -516,6 +564,8 @@ func AllSpecs() []Spec {
 		{Key: keyRefreshIntervalMs, Label: "Refresh interval (ms)", Help: "How often the TUI re-queries the DB for new state", Kind: KindInt, Min: 250, Max: 10000},
 		{Key: keyNewSessionDir, Label: "New session directory", Help: "Where the 'n' directory picker starts (~/ allowed). Empty = home directory.", Kind: KindString, Path: true},
 		{Key: keyTrustedDirs, Label: "Trusted folders", Help: "Folders (comma-separated, ~/ allowed) where claude started by ccdash (n, the portal, MCP start_session) skips Claude Code's folder-trust question: ccdash marks the folder trusted in ~/.claude.json first. Covers subfolders. Empty = off.", Kind: KindString},
+		{Key: keyDefaultModel, Label: "Default model", Help: "Model for every NEW session ccdash starts (n, the portal, MCP start_session) unless one is chosen at the start: an alias (fable, opus, sonnet, haiku) or a full model id, passed as claude --model. Empty = leave it to claude, which keeps using the last model picked in any session. Never applied when a session is resumed.", Kind: KindString},
+		{Key: keyDefaultEffort, Label: "Default effort", Help: "Reasoning effort for every NEW session ccdash starts unless one is chosen at the start, passed as claude --effort. default = leave it to claude. Never applied when a session is resumed.", Kind: KindEnum, Options: append([]string{effortDefault}, Efforts...)},
 		{Key: keyIgnoreDirs, Label: "Ignored folders", Help: "Folders (comma-separated, ~/ allowed) whose claude runs ccdash never lists — for cron jobs and other automation (claude -p). Covers subfolders. Sessions ccdash starts there (n, the portal, MCP start_session) still show. A run can also opt out with CCDASH_IGNORE=1 in its environment. Empty = off.", Kind: KindString},
 		// System section (rendered under its own heading with the version;
 		// keep it last).
@@ -611,6 +661,14 @@ func Get(s Settings, key string) any {
 		return s.AutoTitle
 	case keyHideHeadless:
 		return s.HideHeadless
+	case keyDefaultModel:
+		return s.DefaultModel
+	case keyDefaultEffort:
+		// "" is shown as "default"; Set translates it back.
+		if s.DefaultEffort == "" {
+			return effortDefault
+		}
+		return s.DefaultEffort
 	}
 	return nil
 }
@@ -692,6 +750,23 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.AutoTitle = value.(bool)
 	case keyHideHeadless:
 		s.HideHeadless = value.(bool)
+	case keyDefaultModel:
+		m := strings.TrimSpace(value.(string))
+		if !ValidModel(m) {
+			return s, fmt.Errorf("default_model: %q is not a model name (letters, digits and . _ - : [ ], at most 64, not starting with a symbol)", m)
+		}
+		value = m
+		s.DefaultModel = m
+	case keyDefaultEffort:
+		e := value.(string)
+		if e == effortDefault {
+			e = ""
+		}
+		if !ValidEffort(e) {
+			return s, fmt.Errorf("default_effort: %q is not one of %s", e, strings.Join(Efforts, ", "))
+		}
+		value = e
+		s.DefaultEffort = e
 	}
 	return s, persist(ctx, st, key, value)
 }
