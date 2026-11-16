@@ -181,6 +181,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/projects/color", wrap(s.handleAPIProjectColor))
 	s.mux.HandleFunc("POST /api/projects/rename", wrap(s.handleAPIProjectRename))
 	s.mux.HandleFunc("POST /api/projects/order", wrap(s.handleAPIProjectOrder))
+	s.mux.HandleFunc("POST /api/projects/brief", wrap(s.handleAPIProjectBrief))
+	s.mux.HandleFunc("POST /api/projects/dir", wrap(s.handleAPIProjectDir))
+	s.mux.HandleFunc("GET /api/brief-common", wrap(s.handleAPIBriefCommon))
+	s.mux.HandleFunc("PUT /api/brief-common", wrap(s.handleAPIBriefCommonSet))
+	s.mux.HandleFunc("GET /api/start-info", wrap(s.handleAPIStartInfo))
 	s.registerTaskRoutes(wrap)
 	s.mux.HandleFunc("POST /api/titles", wrap(s.handleAPITitles))
 	s.mux.HandleFunc("GET /api/sessions/{id}/transcript", wrap(s.handleAPITranscript))
@@ -1457,6 +1462,14 @@ func (s *Server) handleAPISettingSet(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSONBody(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	// This route is how a remote-mode client (ccdash -r: anyone holding
+	// the token, from another machine) writes settings. A key that runs a
+	// command here, or that feeds every child session, is changed on the
+	// machine itself only — the local TUI and CLI write the DB directly.
+	if settings.LocalOnly(key) {
+		writeErr(w, http.StatusForbidden, fmt.Errorf("%s can only be changed on the machine itself (its own TUI, or the ccdash CLI there)", key))
 		return
 	}
 	if err := s.db.SetSetting(r.Context(), key, body.Value); err != nil {

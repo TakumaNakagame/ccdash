@@ -50,9 +50,14 @@ type peerRoute struct {
 // so adopt_session reaches a child on another host), starting / stopping a
 // hosted claude, the (scheduled) collector restart and the person-sized
 // task edits (add, patch, note, order — never sync or import, and only by
-// numeric id).
+// numeric id). /api/start-info is start_session's question before a start
+// that names no directory (the project's, and whether a setup command
+// runs). Deliberately absent: the operator's notes for start_session
+// briefs and a project's directory (/api/brief-common,
+// /api/projects/brief|dir) — they are input to every child session, so
+// only a logged-in person edits them, never a device token.
 var peerDeviceRoutes = []peerRoute{
-	{"GET", regexp.MustCompile(`^/api/(sessions|approvals|projects|usage|restart)$`), false},
+	{"GET", regexp.MustCompile(`^/api/(sessions|approvals|projects|usage|restart|start-info)$`), false},
 	{"GET", regexp.MustCompile(`^/api/sessions/[^/]+/transcript$`), false},
 	{"GET", regexp.MustCompile(`^/pty/?$`), false},
 	{"GET", regexp.MustCompile(`^/hub/(info|dirs)$`), false},

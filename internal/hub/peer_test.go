@@ -40,7 +40,7 @@ func TestPeerAccess(t *testing.T) {
 	if w.Code != 200 || self.ID != caller.ID || self.Name != "laptop" || self.Peer_access != PeerRead {
 		t.Fatalf("self = %d %s", w.Code, w.Body)
 	}
-	for _, p := range []string{"/api/devices", d + "/api/sessions", d + "/pty/", d + "/hub/info", d + "/api/sessions/abc/transcript", d + "/api/tasks", d + "/api/tasks/11"} {
+	for _, p := range []string{"/api/devices", d + "/api/sessions", d + "/pty/", d + "/hub/info", d + "/api/sessions/abc/transcript", d + "/api/tasks", d + "/api/tasks/11", d + "/api/start-info?project=web"} {
 		if w := serve(handler, "GET", p, "", auth); w.Code != 200 {
 			t.Errorf("read peer GET %s = %d, want 200", p, w.Code)
 		}
@@ -73,6 +73,12 @@ func TestPeerAccess(t *testing.T) {
 		{"GET", d + "/api/sessions/abc/brief"}, {"POST", d + "/api/sessions/abc/children-seen"}, {"GET", d + "/api/peers"},
 		{"POST", d + "/api/tasks/sync"}, {"POST", d + "/api/tasks/import"}, {"POST", d + "/api/tasks/PROJ-1"},
 		{"GET", "/api/board"}, {"GET", "/api/prefs"}, {"POST", "/api/push/test"}, {"GET", d + "/hub/file"},
+		// The operator's notes for start_session briefs and a project's
+		// directory are a person's to edit: a device token changes none of
+		// them (nor reads the common note), not even with control access.
+		{"PUT", d + "/api/brief-common"}, {"POST", d + "/api/brief-common"}, {"GET", d + "/api/brief-common"},
+		{"POST", d + "/api/projects/brief"}, {"POST", d + "/api/projects/dir"},
+		{"PUT", d + "/api/settings/session_setup_command"}, {"PUT", d + "/api/settings/brief_common"},
 	} {
 		if w := serve(handler, c[0], c[1], `{}`, auth); w.Code != http.StatusForbidden {
 			t.Errorf("control peer %s %s = %d, want 403", c[0], c[1], w.Code)
