@@ -260,6 +260,34 @@ func (r *Remote) WaitingSpawns(ctx context.Context) ([]WaitingSpawn, error) {
 	return waitingOf(rows), nil
 }
 
+func (r *Remote) PTYs(ctx context.Context) ([]PTY, error) {
+	var rows []PTY
+	err := r.doJSON(ctx, 10*time.Second, http.MethodGet, "/pty/", nil, nil, &rows)
+	return rows, err
+}
+
+func (r *Remote) SetParent(ctx context.Context, sessionID, parent, parentHost string) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "parent"), nil,
+		map[string]string{"parent": parent, "parentHost": parentHost}, nil)
+}
+
+func (r *Remote) SetChildrenSeen(ctx context.Context, sessionID string, at time.Time) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "children-seen"), nil,
+		map[string]int64{"at": at.UnixMilli()}, nil)
+}
+
+func (r *Remote) Briefs(ctx context.Context, sessionID string) ([]model.Brief, error) {
+	var out []model.Brief
+	err := r.doJSON(ctx, 5*time.Second, http.MethodGet, sessionPath(sessionID, "brief"), nil, nil, &out)
+	return out, err
+}
+
+func (r *Remote) Peers(ctx context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	err := r.doJSON(ctx, 5*time.Second, http.MethodGet, "/api/peers", nil, nil, &out)
+	return out, err
+}
+
 // HostedSessions reads the collector's GET /pty.
 func (r *Remote) HostedSessions(ctx context.Context) ([]string, error) {
 	var rows []ptyRow

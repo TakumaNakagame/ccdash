@@ -46,7 +46,8 @@ type peerRoute struct {
 // /api/d/{id}). Reads: sessions, a transcript tail, approvals (to show
 // what is pending — never to decide), projects, usage, the restart state,
 // the hosted PTYs, the device's info, its directory listing and its task
-// list. Writes: the session edits the portal makes, starting / stopping a
+// list. Writes: the session edits the portal makes (and a session's parent,
+// so adopt_session reaches a child on another host), starting / stopping a
 // hosted claude, the (scheduled) collector restart and the person-sized
 // task edits (add, patch, note, order — never sync or import, and only by
 // numeric id).
@@ -56,7 +57,7 @@ var peerDeviceRoutes = []peerRoute{
 	{"GET", regexp.MustCompile(`^/pty/?$`), false},
 	{"GET", regexp.MustCompile(`^/hub/(info|dirs)$`), false},
 	{"GET", regexp.MustCompile(`^/api/tasks(/[^/]+)?$`), false},
-	{"POST", regexp.MustCompile(`^/api/sessions/[^/]+/(archive|favorite|later|grid|color|title|project|seen)$`), true},
+	{"POST", regexp.MustCompile(`^/api/sessions/[^/]+/(archive|favorite|later|grid|color|title|project|parent|seen)$`), true},
 	{"POST", regexp.MustCompile(`^/api/projects/(color|rename|order)$`), true},
 	{"POST", regexp.MustCompile(`^/api/tasks(/order|/[0-9]+(/notes)?)?$`), true},
 	{"POST", regexp.MustCompile(`^/pty/start$`), true},

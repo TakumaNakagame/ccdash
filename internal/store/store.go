@@ -49,6 +49,12 @@ type StartRequest struct {
 	// one; Cwd must then be the session's own directory.
 	SessionID string `json:"sessionId,omitempty"`
 	ResumeID  string `json:"resumeId,omitempty"`
+	// Parent is the session that starts this one (ccdash mcp's
+	// start_session: its caller), kept on the new session's row
+	// (model.Session.Parent). ParentHost names the parent's machine when
+	// the new session runs on another one.
+	Parent     string `json:"parent,omitempty"`
+	ParentHost string `json:"parentHost,omitempty"`
 }
 
 // Input is what POST /pty/{key}/input types into a hosted claude: Keys
@@ -121,6 +127,10 @@ type Store interface {
 	// on a dialog (the folder-trust question in a new folder) — from the
 	// collector's GET /pty, so also over HTTP.
 	WaitingSpawns(ctx context.Context) ([]WaitingSpawn, error)
+	// PTYs lists the collector's hosted PTYs (GET /pty), one row per key:
+	// a spawn is "pid-<N>" until its session id is known, then also listed
+	// under that id (same PID).
+	PTYs(ctx context.Context) ([]PTY, error)
 	// HostedSessions lists the session IDs whose claude runs in a live PTY
 	// of the collector (GET /pty) — the ones StopSession can stop.
 	HostedSessions(ctx context.Context) ([]string, error)
@@ -135,6 +145,21 @@ type Store interface {
 	RestartStatus(ctx context.Context) (model.RestartState, error)
 	ScheduleRestart(ctx context.Context, by string, timeout time.Duration) (model.RestartState, error)
 	CancelRestart(ctx context.Context) (model.RestartState, error)
+
+	// SetParent makes parent the session's parent, overwriting the one it
+	// had (adopt_session); "" clears it (release_session). parentHost
+	// names the parent's machine when it isn't the session's own.
+	SetParent(ctx context.Context, sessionID, parent, parentHost string) error
+	// SetChildrenSeen stamps when a session last listed its children
+	// (my_sessions; model.Session.ChildrenSeenAt).
+	SetChildrenSeen(ctx context.Context, sessionID string, at time.Time) error
+	// Briefs returns what the session was asked to do when ccdash started
+	// it (the kept /pty/start prompts), oldest first.
+	Briefs(ctx context.Context, sessionID string) ([]model.Brief, error)
+	// Peers maps the session id of each claude running on the collector's
+	// machine to the name Claude Code's SendMessage reaches it by. Read
+	// from the live ~/.claude/sessions files, never stored.
+	Peers(ctx context.Context) (map[string]string, error)
 
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
@@ -188,14 +213,18 @@ type WaitingSpawn struct {
 	Prompt string `json:"waiting_on"`
 }
 
-// ptyRow is one row of the collector's GET /pty.
-type ptyRow struct {
+// PTY is one row of the collector's GET /pty. Prompt is the dialog a spawn
+// with no session yet is stuck on; Parent the session that started it.
+type PTY struct {
 	Key    string `json:"key"`
 	Alive  bool   `json:"alive"`
 	PID    int    `json:"pid"`
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt"`
+	Parent string `json:"parent,omitempty"`
 }
+
+type ptyRow = PTY
 
 // restartBody is POST /api/restart's body for a scheduled restart.
 func restartBody(by string, timeout time.Duration) map[string]any {

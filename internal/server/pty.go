@@ -19,7 +19,9 @@ import (
 
 	"github.com/TakumaNakagame/ccdash/internal/attach"
 	"github.com/TakumaNakagame/ccdash/internal/claudecfg"
+	"github.com/TakumaNakagame/ccdash/internal/model"
 	"github.com/TakumaNakagame/ccdash/internal/procmap"
+	"github.com/TakumaNakagame/ccdash/internal/redact"
 	"github.com/TakumaNakagame/ccdash/internal/settings"
 	"github.com/TakumaNakagame/ccdash/internal/tracing"
 )
@@ -106,6 +108,12 @@ type ptyStartReq struct {
 	// Origin marks who started it for whom (e.g. "grok" = ccdash handoff-mcp for Grok),
 	// stored with the session the same way (model.Session.Origin).
 	Origin string `json:"origin"`
+	// Parent is the session that asked for this one (ccdash mcp's
+	// start_session passes its caller); ParentHost says where that session
+	// lives when it is another machine. Both land on the new session's row
+	// like the origin (model.Session.Parent).
+	Parent     string `json:"parent"`
+	ParentHost string `json:"parentHost"`
 }
 
 // handlePTYStart creates a new PTY session or returns an existing alive one.
@@ -157,6 +165,9 @@ func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 	if !validOrigin(req.Origin) {
 		return "", 0, http.StatusBadRequest, fmt.Errorf("origin must be 1-32 of a-z, 0-9 and -")
 	}
+	if !validParent(req.Parent) || !validParent(req.ParentHost) {
+		return "", 0, http.StatusBadRequest, fmt.Errorf("parent / parentHost must be at most 128 of a-z, A-Z, 0-9, - and _")
+	}
 
 	// If we already have an alive entry for this sessionID, reuse it.
 	if req.SessionID != "" {
@@ -204,6 +215,10 @@ func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 	entry.tag = tag
 	entry.project = strings.TrimSpace(req.Project)
 	entry.origin = req.Origin
+	entry.parent, entry.parentHost = req.Parent, req.ParentHost
+	if req.Parent == "" {
+		entry.parentHost = ""
+	}
 	entry.cwd = req.Cwd
 	if err := sess.Start(); err != nil {
 		return "", 0, http.StatusInternalServerError, fmt.Errorf("pty start: %v", err)
@@ -216,6 +231,20 @@ func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 		ptyKey = req.SessionID
 	}
 	entry.ptyKey = ptyKey
+	// Keep what the new session was asked to do (not a resume's message:
+	// that session already has its brief). The session id comes later
+	// (applyPTYProjects), except when the caller already named it.
+	if req.Prompt != "" && req.ResumeID == "" && s.db != nil {
+		id, err := s.db.InsertBrief(context.Background(), model.Brief{
+			SessionID: req.SessionID, PtyKey: ptyKey, Parent: req.Parent, Project: entry.project,
+			Cwd: req.Cwd, Text: redact.String(req.Prompt),
+		})
+		if err != nil {
+			log.Printf("pty brief %s: %v", ptyKey, err)
+		} else if req.SessionID == "" {
+			entry.briefID = id
+		}
+	}
 
 	s.ptyMu.Lock()
 	s.ptyMap[ptyKey] = entry
@@ -490,22 +519,26 @@ func (s *Server) aliasPTYsByParent(ctx context.Context, procs map[string]procmap
 }
 
 // applyPTYProjects puts a spawned session into the project it was started
-// for (ptyStartReq.Project) and records its origin (ptyStartReq.Origin) once
-// the PTY has a session-ID alias and the session has a row. Runs on the
-// discovery tick; each PTY is handled once, and a session that already has
-// a project keeps it.
+// for (ptyStartReq.Project), records its origin (ptyStartReq.Origin) and its
+// parent (ptyStartReq.Parent), and ties its brief to it, once the PTY has a
+// session-ID alias and the session has a row. Runs on the discovery tick
+// and right after a spawn's hook made its row; each PTY is handled once,
+// and a session that already has a project / origin / parent keeps it.
 func (s *Server) applyPTYProjects(ctx context.Context) {
 	type job struct {
-		e       *ptyEntry
-		sid     string
-		project string
-		origin  string
+		e          *ptyEntry
+		sid        string
+		project    string
+		origin     string
+		parent     string
+		parentHost string
+		briefID    int64
 	}
 	var jobs []job
 	s.ptyMu.Lock()
 	for k, e := range s.ptyMap {
-		if (e.project != "" || e.origin != "") && !e.projectDone && !strings.HasPrefix(k, "pid-") {
-			jobs = append(jobs, job{e, k, e.project, e.origin})
+		if (e.project != "" || e.origin != "" || e.parent != "" || e.briefID != 0) && !e.projectDone && !strings.HasPrefix(k, "pid-") {
+			jobs = append(jobs, job{e, k, e.project, e.origin, e.parent, e.parentHost, e.briefID})
 		}
 	}
 	s.ptyMu.Unlock()
@@ -520,6 +553,18 @@ func (s *Server) applyPTYProjects(ctx context.Context) {
 				continue
 			}
 		}
+		if j.parent != "" && j.parent != j.sid {
+			if err := s.db.SetParent(ctx, j.sid, j.parent, j.parentHost); err != nil {
+				log.Printf("pty parent %s: %v", j.sid, err)
+				continue
+			}
+		}
+		if j.briefID != 0 {
+			if err := s.db.LinkBrief(ctx, j.briefID, j.sid); err != nil {
+				log.Printf("pty brief %s: %v", j.sid, err)
+				continue
+			}
+		}
 		if j.project != "" && sess.Project == "" {
 			if err := s.db.SetProject(ctx, j.sid, j.project); err != nil {
 				log.Printf("pty project %s: %v", j.sid, err)
@@ -530,6 +575,20 @@ func (s *Server) applyPTYProjects(ctx context.Context) {
 		j.e.projectDone = true
 		s.ptyMu.Unlock()
 	}
+}
+
+// validParent: "" or something shaped like a session / device id (also a
+// host letter).
+func validParent(p string) bool {
+	if len(p) > 128 {
+		return false
+	}
+	for _, c := range p {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // validOrigin: "" or a short lowercase name.

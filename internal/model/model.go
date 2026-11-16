@@ -102,6 +102,32 @@ type Session struct {
 	Tool          string    `json:"tool,omitempty"`
 	ToolSummary   string    `json:"tool_summary,omitempty"`
 	ToolAt        time.Time `json:"tool_at,omitzero"`
+	// Parent is the session that started this one through ccdash mcp's
+	// start_session (or adopted it): the orchestrator it reports to. ""
+	// for a session nobody started that way. ParentHost says where the
+	// parent lives when that is another machine (its hub device id, else
+	// its letter); "" = this machine. Session ids are unique across
+	// machines, so Parent alone identifies the parent — ParentHost only
+	// tells a reader not to look for it among this machine's rows.
+	Parent     string `json:"parent,omitempty"`
+	ParentHost string `json:"parent_host,omitempty"`
+	// ChildrenSeenAt is when this session last listed its children with
+	// ccdash mcp's my_sessions (what since_last compares against).
+	ChildrenSeenAt time.Time `json:"children_seen_at,omitzero"`
+}
+
+// Brief is what a session was asked to do when ccdash started it: the
+// prompt of POST /pty/start, kept (redacted) so the request outlives the
+// transcript. SessionID is empty until the spawn's session id is known.
+type Brief struct {
+	ID        int64     `json:"id"`
+	SessionID string    `json:"session_id,omitempty"`
+	PtyKey    string    `json:"pty_key,omitempty"`
+	Parent    string    `json:"parent,omitempty"`
+	Project   string    `json:"project,omitempty"`
+	Cwd       string    `json:"cwd,omitempty"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Project is an operator-named set of sessions (projects table).
