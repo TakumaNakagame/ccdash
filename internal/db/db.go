@@ -109,6 +109,21 @@ func (d *DB) migrate() error {
 			created_at INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_briefs_session ON briefs(session_id)`,
+		// Messages one session sent another (messages.go): the inbox the
+		// collector delivers from. Never deleted by code.
+		`CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			from_session TEXT,
+			from_ref TEXT,
+			from_host TEXT,
+			text TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			delivered_at INTEGER,
+			how TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_pending ON messages(delivered_at) WHERE delivered_at IS NULL`,
 		// Automated runs ccdash must never list (ignore.go).
 		`CREATE TABLE IF NOT EXISTS ignored_sessions (
 			session_id TEXT PRIMARY KEY,
