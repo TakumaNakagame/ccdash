@@ -1009,6 +1009,14 @@ body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #res
 .host-pick { align-items: center; gap: 8px; margin-bottom: 8px; }
 .host-pick select { min-width: 0; }
 .attach-off { color: var(--bad); }
+/* Project settings / common note (projectSettings, commonBrief). */
+.brief-form { gap: 10px; }
+.brief-form textarea { line-height: 1.6; min-height: 96px; }
+.brief-form textarea:disabled, .brief-form input:disabled { opacity: .6; }
+.brief-form .row { align-items: center; gap: 8px; }
+.brief-dir { flex-wrap: wrap; }
+.brief-dir input { min-width: 12em; flex: 1 1 100%; }
+.brief-entry { align-items: center; gap: 8px; padding: 8px 0 12px; }
 .home-actions { margin: 4px 0 16px; }
 
 /* Unread (NEW): a session that moved since you last looked must stand out

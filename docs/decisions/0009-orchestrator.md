@@ -285,6 +285,9 @@ ccdash はもともと、`new-project` でディレクトリを作り、そこ�
 | 5 | Android と TUI の同じ表示 | スマホで同じことができる | 中 |
 | 6 | 終わりの知らせ、`resume_session` の `message` | 要るかを 1〜4 のあとで決める | 小 |
 
+進み具合: 段 1 は済み。段 2 も済み（共通の注意の初期値は空。「統括への指示」`orchestrator_prompt` は
+役割と一緒に段 3 で作る）。Android 側の編集画面は ccdash-android で追って作る。
+
 段 3 は段 1・2 のあとにする。先に道具を絞ると、いまの統括は cwd を探せず、ref も探せなくなる。
 段 4 の木の表示は一覧の並びの決まり（`projectsFirst`・ピン・あとで見る）に手を入れるので、
 Web・TUI・Android の 3 つをそろえて変える。

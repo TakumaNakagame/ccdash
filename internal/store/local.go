@@ -148,14 +148,34 @@ func (l *Local) DecideApproval(ctx context.Context, id int64, behavior, reason s
 }
 
 // StartSession POSTs to the collector's own /pty/start, like the TUI's `n`.
-func (l *Local) StartSession(ctx context.Context, req StartRequest) (string, error) {
-	var out struct {
-		PtyKey string `json:"ptyKey"`
+func (l *Local) StartSession(ctx context.Context, req StartRequest) (Started, error) {
+	var out Started
+	timeout := collectorTimeout
+	if req.Orchestrated {
+		timeout = orchestratedTimeout
 	}
-	if err := l.postCollector(ctx, "/pty/start", req, &out); err != nil {
-		return "", err
-	}
-	return out.PtyKey, nil
+	err := l.callCollectorIn(ctx, timeout, http.MethodPost, "/pty/start", req, &out)
+	return out, err
+}
+
+func (l *Local) StartInfo(ctx context.Context, project string) (StartInfo, error) {
+	var out StartInfo
+	err := l.callCollector(ctx, http.MethodGet, "/api/start-info?"+url.Values{"project": {project}}.Encode(), nil, &out)
+	return out, err
+}
+
+func (l *Local) BriefCommon(ctx context.Context) (string, error) { return l.db.BriefCommon(ctx) }
+
+func (l *Local) SetBriefCommon(ctx context.Context, text string) error {
+	return l.db.SetBriefCommon(ctx, text)
+}
+
+func (l *Local) SetProjectBrief(ctx context.Context, project, brief string) error {
+	return l.db.SetProjectBrief(ctx, project, brief)
+}
+
+func (l *Local) SetProjectDir(ctx context.Context, project, dir string) (string, error) {
+	return l.db.SetProjectDir(ctx, project, dir)
 }
 
 func (l *Local) SendInput(ctx context.Context, ptyKey string, in Input) error {
@@ -239,6 +259,13 @@ func (l *Local) postCollector(ctx context.Context, path string, body, out any) e
 // callCollector sends method to the loopback collector, body as JSON when
 // non-nil, and decodes a 2xx reply into out when out is non-nil.
 func (l *Local) callCollector(ctx context.Context, method, path string, body, out any) error {
+	return l.callCollectorIn(ctx, collectorTimeout, method, path, body, out)
+}
+
+// collectorTimeout bounds an ordinary call to the loopback collector.
+const collectorTimeout = 5 * time.Second
+
+func (l *Local) callCollectorIn(ctx context.Context, timeout time.Duration, method, path string, body, out any) error {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -248,7 +275,7 @@ func (l *Local) callCollector(ctx context.Context, method, path string, body, ou
 		rd = bytes.NewReader(b)
 	}
 	u := fmt.Sprintf("http://%s:%d%s", paths.DefaultHost, paths.DefaultPort, path)
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, u, rd)
 	if err != nil {
@@ -260,7 +287,7 @@ func (l *Local) callCollector(ctx context.Context, method, path string, body, ou
 	if tok, err := auth.Load(); err == nil {
 		req.Header.Set(auth.HeaderName, tok)
 	}
-	resp, err := l.client.Do(req)
+	resp, err := clientFor(l.client, timeout).Do(req)
 	if err != nil {
 		return err
 	}

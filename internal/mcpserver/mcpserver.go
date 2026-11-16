@@ -64,7 +64,13 @@ searching list_sessions. peer is the name Claude Code's SendMessage reaches a ru
 session on this machine by (a ccdash ref is not a SendMessage address). adopt_session takes
 over a session that already exists (or, with from, every child of another session),
 release_session lets one go, and archive_finished with children_only tidies only your own.
-What a session was asked at its start is kept as its brief (get_session shows it). You can't
+What a session was asked at its start is kept as its brief (get_session shows it).
+The operator keeps notes that ccdash appends to every start_session prompt by itself — a
+common one per machine and one per project (answer language, git rules, what needs a
+confirmation…) — so don't repeat such cautions in your prompt; the result's notes says which
+were appended (plain: true sends the prompt as it is). Only the operator can write them. A
+project can also have a working directory (list_projects: dir), and then project alone is
+enough: cwd may be left out. You can't
 answer a child's approval or question: tell the operator its url — they answer it there.
 stop_session ends the claude process of a session ccdash hosts (one at a time; whatever it is
 doing is cut off, the transcript stays) and resume_session brings a stopped session back with
@@ -267,13 +273,14 @@ var writeTools = []map[string]any{
 			"The calling session becomes its parent (my_sessions lists it) and the prompt is kept as the session's brief. Waits up to ~10 s for claude to register and returns ref, session_id, url and peer (its name for Claude Code's SendMessage; this machine only); " +
 			"pending: true (with started = the PTY key) when it isn't up yet, plus waiting_on when it stopped at a dialog the operator must answer.",
 		"inputSchema": required(map[string]any{
-			"cwd":             map[string]any{"type": "string", "description": "absolute path of an existing directory on the collector's machine"},
-			"project":         map[string]any{"type": "string", "description": "put the new session into this project (created on first use)"},
-			"prompt":          map[string]any{"type": "string", "description": "first message to send claude; empty = just open it"},
+			"cwd":             map[string]any{"type": "string", "description": "absolute path of an existing directory on the collector's machine. Optional when project has a working directory there; an explicit cwd wins over it"},
+			"project":         map[string]any{"type": "string", "description": "put the new session into this project (created on first use); its working directory and note apply"},
+			"prompt":          map[string]any{"type": "string", "description": "first message to send claude; empty = just open it (nothing is appended)"},
+			"plain":           map[string]any{"type": "boolean", "description": "send the prompt exactly as given: don't append the operator's common / project notes (default false)"},
 			"permission_mode": map[string]any{"type": "string", "enum": []string{"manual", "acceptEdits", "auto", "plan"}, "description": "claude --permission-mode; default = claude's own"},
 			"model":           map[string]any{"type": "string", "description": "claude --model: an alias (fable, opus, sonnet, haiku) or a full model id. Omit to use the operator's ccdash setting 'Default model' (and, with that empty, whatever claude picks). Pick a cheaper model for simple work when the operator asked for that"},
 			"effort":          map[string]any{"type": "string", "enum": settings.Efforts, "description": "claude --effort; omit to use the operator's ccdash setting 'Default effort' (or claude's own)"},
-		}, "cwd"),
+		}),
 		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false},
 	},
 	{
@@ -457,8 +464,10 @@ var readTools = []map[string]any{
 		"annotations": readOnlyHint,
 	},
 	{
-		"name":        "list_projects",
-		"description": "The operator's projects (named sets of sessions) in their list order, with session counts, running / needs-you counts and latest activity.",
+		"name": "list_projects",
+		"description": "The operator's projects (named sets of sessions) in their list order, with session counts, running / needs-you counts and latest activity. " +
+			"Each row is one host's copy: dir is the working directory the operator set for the project on that host (start_session with just project starts there); with dir_from: \"recent\" none is set and dir is only where its most recent session ran — pass it as cwd yourself if it fits. " +
+			"has_brief says the operator keeps a note that start_session appends for this project.",
 		"inputSchema": schema(map[string]any{}),
 		"annotations": readOnlyHint,
 	},
@@ -575,6 +584,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		ChildrenOnly    bool     `json:"children_only"`
 		Model           string   `json:"model"`
 		Effort          string   `json:"effort"`
+		Plain           bool     `json:"plain"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -594,7 +604,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 	case "set_status":
 		v, err = s.setStatus(ctx, args.Status, args.Note, args.Session)
 	case "start_session":
-		v, err = s.startSession(ctx, args.Host, args.Cwd, args.Project, args.Prompt, args.PermissionMode, args.Model, args.Effort)
+		v, err = s.startSession(ctx, args.Host, args.Cwd, args.Project, args.Prompt, args.PermissionMode, args.Model, args.Effort, args.Plain)
 	case "stop_session":
 		v, err = s.stopSession(ctx, args.Session, args.Host, args.Force)
 	case "resume_session":
@@ -875,7 +885,16 @@ type projectRow struct {
 	Running  int    `json:"running"`
 	NeedsYou int    `json:"needs_you"`
 	Latest   string `json:"latest_activity,omitempty"`
+	// Dir is the project's working directory on that host: the one the
+	// operator set (start_session then needs no cwd), else — DirFrom
+	// "recent" — where its most recent session ran, as a hint only.
+	Dir     string `json:"dir,omitempty"`
+	DirFrom string `json:"dir_from,omitempty"`
+	// HasBrief: the operator keeps a note start_session appends for it.
+	HasBrief bool `json:"has_brief"`
 	latest   time.Time
+	recent   string // the collector's recent_dir (archived sessions count)
+	sessCwd  string // the newest listed session's cwd, for an older collector
 }
 
 func (s *Server) listProjects(ctx context.Context, hostArg string) (any, error) {
@@ -916,7 +935,8 @@ func (s *Server) projectsOn(ctx context.Context, h host) ([]projectRow, error) {
 	rows := map[string]*projectRow{}
 	var order []string
 	for _, p := range ps {
-		rows[p.Name] = &projectRow{Name: p.Name, Host: h.name, Color: model.ProjectColorOf(p.Name, p.Color)}
+		rows[p.Name] = &projectRow{Name: p.Name, Host: h.name, Color: model.ProjectColorOf(p.Name, p.Color),
+			Dir: p.Dir, HasBrief: strings.TrimSpace(p.Brief) != "", recent: p.RecentDir}
 		order = append(order, p.Name)
 	}
 	for _, x := range ss {
@@ -938,6 +958,7 @@ func (s *Server) projectsOn(ctx context.Context, h host) ([]projectRow, error) {
 		}
 		if x.LastSeen.After(r.latest) {
 			r.latest = x.LastSeen
+			r.sessCwd = x.Cwd
 		}
 	}
 	out := make([]projectRow, 0, len(order))
@@ -945,6 +966,14 @@ func (s *Server) projectsOn(ctx context.Context, h host) ([]projectRow, error) {
 		r := rows[n]
 		if !r.latest.IsZero() {
 			r.Latest = r.latest.Local().Format(time.RFC3339) + " (" + ago(s.now().Sub(r.latest)) + ")"
+		}
+		if r.Dir == "" {
+			if r.recent == "" {
+				r.recent = r.sessCwd
+			}
+			if r.recent != "" {
+				r.Dir, r.DirFrom = r.recent, "recent"
+			}
 		}
 		out = append(out, *r)
 	}
@@ -1370,7 +1399,7 @@ func (s *Server) archiveFinished(ctx context.Context, refs []string, hostArg, pr
 	return out, nil
 }
 
-func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt, mode, model, effort string) (any, error) {
+func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt, mode, model, effort string, plain bool) (any, error) {
 	model, effort = strings.TrimSpace(model), strings.TrimSpace(effort)
 	if !settings.ValidModel(model) {
 		return nil, fmt.Errorf("model must be an alias (fable, opus, sonnet, haiku) or a model id, got %q", model)
@@ -1378,9 +1407,12 @@ func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt
 	if !settings.ValidEffort(effort) {
 		return nil, fmt.Errorf("effort must be one of %s, got %q", strings.Join(settings.Efforts, ", "), effort)
 	}
-	cwd = strings.TrimSpace(cwd)
-	if !filepath.IsAbs(cwd) {
-		return nil, fmt.Errorf("cwd must be an absolute path, got %q", cwd)
+	cwd, project = strings.TrimSpace(cwd), strings.TrimSpace(project)
+	if cwd != "" {
+		if !filepath.IsAbs(cwd) {
+			return nil, fmt.Errorf("cwd must be an absolute path, got %q", cwd)
+		}
+		cwd = filepath.Clean(cwd)
 	}
 	if strings.HasPrefix(strings.TrimSpace(prompt), "-") {
 		return nil, fmt.Errorf("prompt must not start with '-'")
@@ -1392,23 +1424,53 @@ func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt
 	if err := s.attachOn(ctx, h, "starting sessions"); err != nil {
 		return nil, err
 	}
-	project = strings.TrimSpace(project)
+	if cwd == "" {
+		// The collector fills the directory in (the project's, or what the
+		// operator's setup command names). Ask first: one that can't — an
+		// older collector included, which would start claude in its own
+		// directory — must not get a start with no cwd.
+		info, err := h.st.StartInfo(ctx, project)
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("cwd is required: the ccdash collector on %s can't pick a directory by itself (is it running, and are it and the hub up to date? %v)", hostLabel(h), err)
+		case info.Dir == "" && !info.Setup && project == "":
+			return nil, fmt.Errorf("cwd is required (an absolute path), unless project names a project that has a working directory — list_projects shows dir")
+		case info.Dir == "" && !info.Setup:
+			return nil, fmt.Errorf("project %q has no working directory on %s, so cwd is required. list_projects shows where its sessions ran (dir with dir_from: recent); the operator sets the directory in ccdash (the portal's project menu, or `ccdash brief project`)", project, hostLabel(h))
+		}
+	}
 	// The caller becomes the new session's parent (my_sessions).
 	parent, parentHost := strings.TrimSpace(s.self()), ""
 	if parent != "" {
 		parentHost = s.parentHostFor(ctx, h)
 	}
-	key, err := h.st.StartSession(ctx, store.StartRequest{Cwd: filepath.Clean(cwd), Prompt: prompt, Project: project, PermissionMode: mode, Parent: parent, ParentHost: parentHost, Model: model, Effort: effort})
+	started, err := h.st.StartSession(ctx, store.StartRequest{
+		Cwd: cwd, Prompt: prompt, Project: project, PermissionMode: mode, Parent: parent, ParentHost: parentHost,
+		Model: model, Effort: effort, Orchestrated: true, Plain: plain,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("start session on %s (is its ccdash collector running?): %w", hostLabel(h), err)
 	}
+	key := started.PtyKey
+	if started.Cwd != "" {
+		cwd = started.Cwd // the project's directory, or what the setup command chose
+	}
 	out := map[string]any{
 		"started": key,
-		"cwd":     filepath.Clean(cwd),
+		"cwd":     cwd,
 		"note":    "the session appears in ccdash once claude starts (a few seconds); open it there to drive it",
 	}
 	if h.name != "" {
 		out["host"] = h.name
+	}
+	// Which of the operator's notes went after the prompt.
+	notes := started.Notes
+	if notes == nil {
+		notes = []string{}
+	}
+	out["notes"] = notes
+	if !started.Orchestrated {
+		out["notes_note"] = "the ccdash collector on " + hostLabel(h) + " is an older version: it appended no notes and ran no setup command"
 	}
 	// Name the new session for the caller (ref, url, peer) once claude has
 	// registered; a new folder can stop claude at the folder-trust question
@@ -1568,12 +1630,13 @@ func (s *Server) resumeSession(ctx context.Context, ref, hostArg, prompt, mode s
 			return nil, err
 		}
 	}
-	key, err := l.h.st.StartSession(ctx, store.StartRequest{
+	started, err := l.h.st.StartSession(ctx, store.StartRequest{
 		SessionID: x.SessionID, ResumeID: x.SessionID, Cwd: x.Cwd, Prompt: prompt, PermissionMode: mode,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("resume %s (is the ccdash collector running?): %w", name, err)
 	}
+	key := started.PtyKey
 	out := map[string]any{
 		"resumed": name,
 		"pty":     key,

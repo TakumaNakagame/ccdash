@@ -72,6 +72,13 @@ type Settings struct {
 	// whose automated claude runs ccdash never records (internal/server
 	// ignore.go). Sessions ccdash itself starts there still show. Empty = off.
 	IgnoreDirs string
+	// SessionSetupCommand, when set, is run by the collector (login shell)
+	// before every MCP start_session spawns claude: it gets the brief and
+	// the wanted cwd in CCDASH_* variables and may print the directory to
+	// start in (internal/server/setup.go). It runs an arbitrary command,
+	// so it is changed on the machine itself only: PUT /api/settings
+	// refuses it (LocalOnly) and settings writes are off the hub allowlist.
+	SessionSetupCommand string
 
 	// PaneRatio is "list:work:tasks" — how the dashboard's three columns
 	// share the width (ParsePaneRatio normalizes it). Without the task
@@ -184,6 +191,7 @@ const (
 	keyNewSessionDir     = "new_session_dir"
 	keyTrustedDirs       = "trusted_dirs"
 	keyIgnoreDirs        = "ignore_dirs"
+	keySessionSetupCmd   = "session_setup_command"
 	keyPaneRatio         = "pane_ratio"
 	keyTasksPane         = "tasks_pane"
 	keyListCollapsed     = "list_collapsed"
@@ -276,6 +284,7 @@ func loadPairs(out *Settings) []loadPair {
 		{keyNewSessionDir, func(v string) { out.NewSessionDir = v }},
 		{keyTrustedDirs, func(v string) { out.TrustedDirs = v }},
 		{keyIgnoreDirs, func(v string) { out.IgnoreDirs = v }},
+		{keySessionSetupCmd, func(v string) { out.SessionSetupCommand = v }},
 		{keyPaneRatio, func(v string) {
 			if r, err := ParsePaneRatio(v); err == nil {
 				out.PaneRatio = r.String()
@@ -567,6 +576,7 @@ func AllSpecs() []Spec {
 		{Key: keyDefaultModel, Label: "Default model", Help: "Model for every NEW session ccdash starts (n, the portal, MCP start_session) unless one is chosen at the start: an alias (fable, opus, sonnet, haiku) or a full model id, passed as claude --model. Empty = leave it to claude, which keeps using the last model picked in any session. Never applied when a session is resumed.", Kind: KindString},
 		{Key: keyDefaultEffort, Label: "Default effort", Help: "Reasoning effort for every NEW session ccdash starts unless one is chosen at the start, passed as claude --effort. default = leave it to claude. Never applied when a session is resumed.", Kind: KindEnum, Options: append([]string{effortDefault}, Efforts...)},
 		{Key: keyIgnoreDirs, Label: "Ignored folders", Help: "Folders (comma-separated, ~/ allowed) whose claude runs ccdash never lists — for cron jobs and other automation (claude -p). Covers subfolders. Sessions ccdash starts there (n, the portal, MCP start_session) still show. A run can also opt out with CCDASH_IGNORE=1 in its environment. Empty = off.", Kind: KindString},
+		{Key: keySessionSetupCmd, Label: "Session setup command", Help: "A shell command the collector runs before every session an MCP start_session starts (not n, the portal or handoff-mcp). It gets CCDASH_BRIEF_FILE (the full brief, a temp file), CCDASH_PROJECT, CCDASH_TITLE, CCDASH_CWD and CCDASH_PARENT; the last line it prints, if an existing absolute directory, becomes the session's directory. A non-zero exit or 60 s without finishing fails the start. Can only be changed on this machine (not in remote mode, not from the hub). Empty = off.", Kind: KindString},
 		// System section (rendered under its own heading with the version;
 		// keep it last).
 		{Key: KeyUpdate, Label: "Update ccdash", Help: "Check for a new release, show its notes, install it (y), then offer to restart into it.", Kind: KindAction},
@@ -645,6 +655,8 @@ func Get(s Settings, key string) any {
 		return s.TrustedDirs
 	case keyIgnoreDirs:
 		return s.IgnoreDirs
+	case keySessionSetupCmd:
+		return s.SessionSetupCommand
 	case keyPaneRatio:
 		return s.PaneRatio
 	case keyTimeFormat:
@@ -729,6 +741,9 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.TrustedDirs = value.(string)
 	case keyIgnoreDirs:
 		s.IgnoreDirs = value.(string)
+	case keySessionSetupCmd:
+		s.SessionSetupCommand = strings.TrimSpace(value.(string))
+		value = s.SessionSetupCommand
 	case keyPaneRatio:
 		r, err := ParsePaneRatio(value.(string))
 		if err != nil {
@@ -820,4 +835,14 @@ func parseInt(s string, fallback int) int {
 		return v
 	}
 	return fallback
+}
+
+// LocalOnly reports whether a settings-table key may only be written on
+// the machine itself (the local TUI, the CLI) — never through
+// PUT /api/settings/{key}, which a remote-mode client reaches with just
+// the token. session_setup_command runs a command on the collector's
+// machine; brief_common (not a Spec: it has its own routes,
+// internal/server/brief.go) is input to every child session.
+func LocalOnly(key string) bool {
+	return key == keySessionSetupCmd || key == "brief_common"
 }

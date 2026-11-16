@@ -514,6 +514,9 @@ portal's device-page restart button offers 作業が終わったら再起動 / �
   that does stop at a dialog before it has a session is flagged anyway:
   a "waiting for you" row in the TUI, 要対応 under 起動中 in the portal
   (plus a push), and `waiting_on` in MCP `start_session` / `overview`.
+- **Session setup command**: a shell command the collector runs before
+  every session an MCP `start_session` starts (see "Notes for handed-over
+  work" under MCP). Empty = off. Can only be changed on the machine itself.
 - **Default model** / **Default effort**: the model (`fable`, `opus`,
   `sonnet`, `haiku` or a full model id) and effort (`low` … `max`) of every
   NEW session ccdash starts (`n`, the portal, MCP `start_session`, quick
@@ -824,7 +827,7 @@ Tools:
 | Tool | What it returns |
 |---|---|
 | `overview` | sessions that need you, finished-but-unseen ones, running sessions grouped by project, today's usage estimate |
-| `list_projects` | projects in list order with session / running / needs-you counts and latest activity |
+| `list_projects` | projects in list order with session / running / needs-you counts and latest activity; per host, `dir` = the project's working directory there (with `dir_from: "recent"` none is set and it is only where the newest session ran) and `has_brief` = the operator keeps a note for it |
 | `list_sessions` | sessions newest first; filters: `project`, `query`, `running_only`, `attention_only`, `grid_only` (sessions on the grid, in tile order), `include_archived`, `limit` |
 | `get_session` | one session (`#N` or id) with pending approvals and its recent prompts, replies and tool calls; `brief` = what it was asked when ccdash started it (first 2,000 characters, `brief_truncated` when cut) |
 | `my_sessions` | the calling session's children (sessions it started with `start_session` or adopted), on every reachable host, grouped `needs_operator` / `working` / `reported` / `finished`; each row has ref, title, project, host, status, the declared status + note, `last_reply` (first 300 characters of the latest reply), `url`, `peer`, `age`. `since_last: true` = only rows changed since this session's previous call. Also offered with `--read-only` |
@@ -840,7 +843,7 @@ Tools:
 | `mark_seen` | mark sessions seen (clears NEW and the finished-unseen mark; approvals, questions and 回答待ち / 作業待ち declarations stay) |
 | `set_archived` | archive / unarchive sessions |
 | `archive_finished` | archive the sessions whose claude has exited (running ones are skipped, never stopped); keeps pinned, watch-later and unread / needs-you ones (`include_unread` takes unread too); narrow with `sessions` / `project` / `idle_hours`, preview with `dry_run`; `children_only: true` = only the calling session's children (every reachable host) |
-| `start_session` | start a new claude session in a directory (absolute path), like the TUI's `n`; optional `project`, first `prompt`, `permission_mode`, `model` (alias or model id) and `effort`; the result reports the model / effort it started with (the caller's, else the Default model / Default effort settings). Refused while the Attach setting is OFF. The caller becomes the new session's parent and the prompt is kept as its brief; the result carries `ref`, `session_id`, `url` and `peer` once claude has registered (waits up to ~10 s), else `pending: true` with the PTY key (`started`), plus `waiting_on` when it stopped at a dialog |
+| `start_session` | start a new claude session in a directory (absolute path; `cwd` may be left out when `project` has a working directory on that host), like the TUI's `n`. After a non-empty prompt ccdash appends the operator's notes (see "Notes for handed-over work" below) and lists them in `notes`; `plain: true` appends nothing. Optional `project`, first `prompt`, `permission_mode`, `model` (alias or model id) and `effort`; the result reports the model / effort it started with (the caller's, else the Default model / Default effort settings). Refused while the Attach setting is OFF. The caller becomes the new session's parent and the prompt is kept as its brief; the result carries `ref`, `session_id`, `url` and `peer` once claude has registered (waits up to ~10 s), else `pending: true` with the PTY key (`started`), plus `waiting_on` when it stopped at a dialog |
 | `adopt_session` | make the calling session the parent of an existing session (`session`), or of every child of another session (`from`); replaces the parent it had |
 | `release_session` | stop being the parent of one of your children |
 | `stop_session` | stop one session's claude that ccdash hosts (SIGTERM, then a kill); work in progress is cut off, the transcript stays. Refuses a claude started in a terminal, an already stopped session and the caller's own; a working (active) one only with `force: true`. Refused while Attach is OFF |
@@ -854,6 +857,67 @@ machine; it is read live from `~/.claude/sessions/<pid>.json` and never stored
 (nothing else of that file is exposed). Every prompt a session was started
 with is kept in the collector's `briefs` table (secrets masked) and is never
 deleted by ccdash.
+
+#### Notes for handed-over work (`ccdash brief`)
+
+A session that hands work to others with `start_session` would otherwise
+retype the same cautions in every prompt. You write them once and ccdash
+appends them to each of those prompts, on the machine that runs the new
+session:
+
+- the **common note** of the machine, under `## 共通の注意`;
+- the **project's note**, under `## このプロジェクトの注意`, when the session
+  is started in a project.
+
+A project can also have a **working directory** per machine: `start_session`
+with just `project` then starts there (an explicit `cwd` still wins).
+
+Edit them in the portal — a project band's **…** opens "プロジェクトの設定"
+(working directory, note; with several hosts the dialog says which host it
+edits and can switch), and "共通の注意…" there, or the same entry in a
+device page's settings box, edits the common note — or from a shell:
+
+```sh
+ccdash brief                               # what is set
+ccdash brief common --edit                 # $EDITOR; --set-file f (- = stdin), --clear
+ccdash brief project web --dir ~/src/web   # the project's working directory ("" clears)
+ccdash brief project web --edit            # the project's note
+```
+
+Only people can write them: no MCP tool does, a hub device token (peer
+access) can't, and the portal needs the host's Attach setting ON. Nothing is
+appended to an empty prompt, with `plain: true`, or to sessions started with
+`n`, the portal's New session or `handoff-mcp`. The brief kept for the
+session (`get_session`: `brief`) is the full text it received.
+
+**Session setup command** (settings page, `session_setup_command`; empty =
+off) is a shell command the collector runs — through your login shell, at
+most 60 s — before every `start_session` spawns claude, e.g. to create the
+project directory and commit the brief as a task file. It gets:
+
+| Variable | |
+|---|---|
+| `CCDASH_BRIEF_FILE` | a temporary file (0600, removed afterwards) holding the full brief |
+| `CCDASH_PROJECT` | the project, or empty |
+| `CCDASH_TITLE` | the first line of the prompt (80 characters at most) |
+| `CCDASH_CWD` | the directory that would be used (may be empty) |
+| `CCDASH_PARENT` | the starting session's ref (or id) |
+
+The last non-empty line it prints, if an existing absolute directory, becomes
+the session's directory; printing nothing keeps `CCDASH_CWD`. A non-zero exit
+or the timeout stops the start, and the caller gets the end of its stderr.
+It runs on the machine that hosts the new session and can only be set on
+that machine itself (the TUI settings page): not in remote mode (`-r`), not
+from the hub, not by MCP.
+
+```sh
+#!/bin/sh
+# ~/bin/ccdash-setup: keep each brief as a task file in the project
+d="${CCDASH_CWD:?no directory}"
+mkdir -p "$d/tasks" && f="$d/tasks/$(date +%Y-%m-%d-%H%M).md"
+cp "$CCDASH_BRIEF_FILE" "$f" && git -C "$d" add "$f" >&2 && git -C "$d" commit -qm "task: $CCDASH_TITLE" >&2
+echo "$d"
+```
 
 With machines joined to a hub, `list_hosts` names the reachable machines
 and the other tools take `host` (see section 18). The to-do list has its own

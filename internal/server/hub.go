@@ -228,7 +228,7 @@ func (s *Server) tunnelHandler(local bool) http.Handler {
 }
 
 var (
-	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|projects|usage|usage/sessions|sessions/[^/]+/(transcript|usage|statusline|brief)|tasks|tasks/[^/]+)$`)
+	hubReadRoute   = regexp.MustCompile(`^/api/(sessions|approvals|projects|usage|usage/sessions|sessions/[^/]+/(transcript|usage|statusline|brief)|tasks|tasks/[^/]+|brief-common|start-info)$`)
 	hubSessionEdit = regexp.MustCompile(`^/api/(sessions/[^/]+/(archive|favorite|later|grid|color|title|group|project|parent|seen)|projects/(color|rename|order))$`)
 	// claude -p runs; summarize.KickoffTitles refuses them itself while
 	// summary_enabled is off.
@@ -238,6 +238,10 @@ var (
 	// note, reorder. Not sync / import: those replace the list wholesale
 	// and belong to the machine's own automation.
 	hubTaskEdit = regexp.MustCompile(`^/api/tasks(/[^/]+(/notes)?)?$`)
+	// The operator's notes for start_session briefs and a project's
+	// working directory (brief.go): narrow routes of their own, never the
+	// generic settings write.
+	hubProjectNote = regexp.MustCompile(`^/api/projects/(brief|dir)$`)
 )
 
 // hubAllowed reports whether a tunnel request may reach the mux.
@@ -253,6 +257,15 @@ func hubAllowed(r *http.Request, cfg settings.Settings) (bool, string) {
 	case r.Method == http.MethodPost && hubTaskEdit.MatchString(p) && p != "/api/tasks/sync" && p != "/api/tasks/import":
 		return true, ""
 	case r.Method == http.MethodGet && (p == "/pty/" || p == "/pty" || p == "/api/restart"):
+		return true, ""
+	case r.Method == http.MethodPut && p == "/api/brief-common", r.Method == http.MethodPost && hubProjectNote.MatchString(p):
+		// A person's edit in the portal. Same gate as starting a session:
+		// with attach on, the hub can already start claude with any prompt
+		// in any directory (/pty/start), so a note that later starts carry
+		// is no new power — and with attach off it gets neither.
+		if !cfg.AttachEnabled {
+			return false, "attach is OFF on this device"
+		}
 		return true, ""
 	case strings.HasPrefix(p, "/pty/"), (r.Method == http.MethodPost || r.Method == http.MethodDelete) && p == "/api/restart":
 		// /api/restart only re-execs the collector and resumes the claudes it

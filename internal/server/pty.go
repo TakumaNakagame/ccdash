@@ -119,6 +119,17 @@ type ptyStartReq struct {
 	// passes nothing (modelArgs).
 	Model  string `json:"model"`
 	Effort string `json:"effort"`
+	// Orchestrated marks a start by ccdash mcp's start_session (setup.go):
+	// cwd may come from the project's directory, the operator's notes are
+	// appended to the prompt (unless Plain) and the session_setup_command
+	// setting runs first. Nothing else sets it; a resume ignores it.
+	Orchestrated bool `json:"orchestrated"`
+	Plain        bool `json:"plain"`
+
+	// notes / own: what prepareStart appended to the prompt and the
+	// caller's own part of it, for the kept brief.
+	notes []string
+	own   string
 }
 
 // modelArgs is the --model / --effort part of claude's command line: what
@@ -182,6 +193,15 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
+	orchestrated := req.Orchestrated && req.ResumeID == ""
+	if orchestrated {
+		var code int
+		var err error
+		if req, code, err = s.prepareStart(r.Context(), req); err != nil {
+			http.Error(w, err.Error(), code)
+			return
+		}
+	}
 	key, tag, code, err := s.startPTY(r.Context(), req)
 	if err != nil {
 		http.Error(w, err.Error(), code)
@@ -192,7 +212,18 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"ptyKey": key})
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"ptyKey": key, "tag": tag})
+	out := map[string]any{"ptyKey": key, "tag": tag}
+	if orchestrated {
+		// "orchestrated" tells the caller this collector knows the notes
+		// (an older one answers without it and appended nothing); notes
+		// is what went after the prompt, cwd where claude started.
+		notes := req.notes
+		if notes == nil {
+			notes = []string{}
+		}
+		out["orchestrated"], out["notes"], out["cwd"] = true, notes, req.Cwd
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 // startPTY spawns claude in a new PTY (see handlePTYStart). It returns the
@@ -292,10 +323,17 @@ func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 	// that session already has its brief). The session id comes later
 	// (applyPTYProjects), except when the caller already named it.
 	if req.Prompt != "" && req.ResumeID == "" && s.db != nil {
-		id, err := s.db.InsertBrief(context.Background(), model.Brief{
+		// With notes appended the two parts are redacted apart, so OwnLen
+		// still marks where the caller's text ends.
+		b := model.Brief{
 			SessionID: req.SessionID, PtyKey: ptyKey, Parent: req.Parent, Project: entry.project,
 			Cwd: req.Cwd, Text: redact.String(req.Prompt),
-		})
+		}
+		if len(req.notes) > 0 && strings.HasPrefix(req.Prompt, req.own) {
+			own := redact.String(req.own)
+			b.Text, b.OwnLen, b.Notes = own+redact.String(req.Prompt[len(req.own):]), len(own), req.notes
+		}
+		id, err := s.db.InsertBrief(context.Background(), b)
 		if err != nil {
 			log.Printf("pty brief %s: %v", ptyKey, err)
 		} else if req.SessionID == "" {

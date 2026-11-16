@@ -162,6 +162,10 @@ func (d *DB) migrate() error {
 		`ALTER TABLE sessions ADD COLUMN parent TEXT`,
 		`ALTER TABLE sessions ADD COLUMN parent_host TEXT`,
 		`ALTER TABLE sessions ADD COLUMN children_seen_at INTEGER`,
+		`ALTER TABLE projects ADD COLUMN brief TEXT`,
+		`ALTER TABLE projects ADD COLUMN dir TEXT`,
+		`ALTER TABLE briefs ADD COLUMN notes TEXT`,
+		`ALTER TABLE briefs ADD COLUMN own_len INTEGER`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -1010,7 +1014,10 @@ func (d *DB) ListProjects(ctx context.Context) ([]model.Project, error) {
 	rows, err := d.sql.QueryContext(ctx, `
 		SELECT p.name, COALESCE(p.color,''),
 		       (SELECT COUNT(*) FROM sessions s WHERE s.project = p.name AND COALESCE(s.archived,0) = 0),
-		       (SELECT COUNT(*) FROM tasks t WHERE t.project = p.name AND t.archived_at IS NULL AND t.status NOT IN ('done','cancelled'))
+		       (SELECT COUNT(*) FROM tasks t WHERE t.project = p.name AND t.archived_at IS NULL AND t.status NOT IN ('done','cancelled')),
+		       COALESCE(p.dir,''), COALESCE(p.brief,''),
+		       COALESCE((SELECT s.cwd FROM sessions s WHERE s.project = p.name AND COALESCE(s.cwd,'') <> ''
+		                 ORDER BY s.last_seen DESC, s.num DESC LIMIT 1), '')
 		FROM projects p
 		ORDER BY COALESCE(p.ord,0), p.name`)
 	if err != nil {
@@ -1020,7 +1027,7 @@ func (d *DB) ListProjects(ctx context.Context) ([]model.Project, error) {
 	out := []model.Project{}
 	for rows.Next() {
 		var p model.Project
-		if err := rows.Scan(&p.Name, &p.Color, &p.Sessions, &p.Tasks); err != nil {
+		if err := rows.Scan(&p.Name, &p.Color, &p.Sessions, &p.Tasks, &p.Dir, &p.Brief, &p.RecentDir); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -1115,6 +1122,14 @@ func (d *DB) RenameProject(ctx context.Context, from, to string) error {
 		return err
 	}
 	if n > 0 {
+		// to keeps its own dir and brief; what it lacks comes from from, so
+		// a merge never silently drops the operator's notes.
+		if _, err := tx.ExecContext(ctx, `UPDATE projects SET
+			dir = CASE WHEN COALESCE(dir,'') = '' THEN (SELECT f.dir FROM projects f WHERE f.name = ?2) ELSE dir END,
+			brief = CASE WHEN COALESCE(brief,'') = '' THEN (SELECT f.brief FROM projects f WHERE f.name = ?2) ELSE brief END
+			WHERE name = ?1`, to, from); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE name = ?`, from); err != nil {
 			return err
 		}
