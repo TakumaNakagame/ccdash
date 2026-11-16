@@ -3875,8 +3875,10 @@ func (m *model) renderSettingsBody(height int) string {
 			switch {
 			case m.settingsEdit && i == m.settingsSel:
 				valStr = pendingStyle.Render(m.settingsBuffer + "▏")
-			case cur == "":
+			case cur == "" && s.Path:
 				valStr = subtitleStyle.Render("(home)")
+			case cur == "":
+				valStr = subtitleStyle.Render("(not set)")
 			default:
 				valStr = cur
 			}

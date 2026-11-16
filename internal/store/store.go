@@ -49,6 +49,12 @@ type StartRequest struct {
 	// one; Cwd must then be the session's own directory.
 	SessionID string `json:"sessionId,omitempty"`
 	ResumeID  string `json:"resumeId,omitempty"`
+	// Model / Effort become claude's --model / --effort (an alias such as
+	// "sonnet" or a model id; low, medium, high, xhigh or max). Empty = the
+	// collector's default_model / default_effort settings for a new
+	// session, nothing for a resume.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 // Input is what POST /pty/{key}/input types into a hosted claude: Keys
