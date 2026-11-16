@@ -18,7 +18,7 @@ const (
 )
 
 type Session struct {
-	SessionID      string `json:"session_id"`
+	SessionID string `json:"session_id"`
 	// HostLetter is the hub's letter for the machine this session runs on
 	// ("A", "B" …; hubcfg.Letter), filled in when the rows are read — not
 	// stored. It makes Ref unique across machines.
@@ -120,14 +120,57 @@ type Session struct {
 // prompt of POST /pty/start, kept (redacted) so the request outlives the
 // transcript. SessionID is empty until the spawn's session id is known.
 type Brief struct {
-	ID        int64     `json:"id"`
-	SessionID string    `json:"session_id,omitempty"`
-	PtyKey    string    `json:"pty_key,omitempty"`
-	Parent    string    `json:"parent,omitempty"`
-	Project   string    `json:"project,omitempty"`
-	Cwd       string    `json:"cwd,omitempty"`
-	Text      string    `json:"text"`
+	ID        int64  `json:"id"`
+	SessionID string `json:"session_id,omitempty"`
+	PtyKey    string `json:"pty_key,omitempty"`
+	Parent    string `json:"parent,omitempty"`
+	Project   string `json:"project,omitempty"`
+	Cwd       string `json:"cwd,omitempty"`
+	Text      string `json:"text"`
+	// Notes names the operator's notes ccdash appended after the caller's
+	// own text ("common", "project"; start_session only), and OwnLen is how
+	// many bytes of Text are the caller's — the rest is those notes. 0 with
+	// no Notes: all of Text is the caller's.
+	Notes     []string  `json:"notes,omitempty"`
+	OwnLen    int       `json:"own_len,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// The notes ccdash appends to a start_session brief (Brief.Notes), and the
+// headings they go under. The headings are part of what the child session
+// reads, so they stay Japanese like the rest of the wire text.
+const (
+	NoteCommon  = "common"
+	NoteProject = "project"
+
+	NoteCommonHeading  = "## 共通の注意"
+	NoteProjectHeading = "## このプロジェクトの注意"
+)
+
+// BriefMax caps the common brief and a project's brief (bytes).
+const BriefMax = 16 * 1024
+
+// ComposeBrief appends the operator's notes to a caller's prompt under
+// their fixed headings and names what it appended. An empty prompt gets
+// nothing (it just opens claude), and so does a blank note.
+func ComposeBrief(prompt, common, project string) (string, []string) {
+	if strings.TrimSpace(prompt) == "" {
+		return prompt, nil
+	}
+	var notes []string
+	out := strings.TrimRight(prompt, "\n\t ")
+	if c := strings.TrimSpace(common); c != "" {
+		out += "\n\n" + NoteCommonHeading + "\n\n" + c
+		notes = append(notes, NoteCommon)
+	}
+	if p := strings.TrimSpace(project); p != "" {
+		out += "\n\n" + NoteProjectHeading + "\n\n" + p
+		notes = append(notes, NoteProject)
+	}
+	if notes == nil {
+		return prompt, nil
+	}
+	return out, notes
 }
 
 // Project is an operator-named set of sessions (projects table).
@@ -139,6 +182,15 @@ type Project struct {
 	Sessions int `json:"sessions"`
 	// Tasks counts the project's open tasks (not finished, not archived).
 	Tasks int `json:"tasks"`
+	// Dir is where this machine works on the project (absolute; the cwd of
+	// a start_session that names only the project) and Brief the operator's
+	// note appended to every start_session brief for it. Both are written
+	// by people only (POST /api/projects/dir|brief), per machine.
+	Dir   string `json:"dir,omitempty"`
+	Brief string `json:"brief,omitempty"`
+	// RecentDir is the cwd of the project's most recently seen session —
+	// a hint for where it lives while Dir is unset.
+	RecentDir string `json:"recent_dir,omitempty"`
 }
 
 const (
