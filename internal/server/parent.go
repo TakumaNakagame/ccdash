@@ -64,14 +64,32 @@ func (s *Server) handleAPIChildrenSeen(w http.ResponseWriter, r *http.Request) {
 
 // handleAPIBrief returns what the session was asked to do when ccdash
 // started it (oldest first; empty for a session started any other way).
-// GET /api/sessions/{id}/brief
+// With ?messages=1 the answer is an object instead of the bare list —
+// {"briefs": […], "messages": […]} — adding what other sessions told this
+// one afterwards (message.go; text clipped), so a screen can show the
+// whole story of what the session was asked. The bare list stays the
+// default because older clients decode exactly that.
+// GET /api/sessions/{id}/brief[?messages=1]
 func (s *Server) handleAPIBrief(w http.ResponseWriter, r *http.Request) {
-	bs, err := s.db.SessionBriefs(r.Context(), r.PathValue("id"))
+	id := r.PathValue("id")
+	bs, err := s.db.SessionBriefs(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeOK(w, bs)
+	if r.URL.Query().Get("messages") == "" {
+		writeOK(w, bs)
+		return
+	}
+	ms, err := s.db.SessionMessages(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	for i := range ms {
+		ms[i].Text = truncate(ms[i].Text, messageClip)
+	}
+	writeOK(w, map[string]any{"briefs": bs, "messages": ms})
 }
 
 // handleAPIPeers maps the running claudes' session ids to the name Claude

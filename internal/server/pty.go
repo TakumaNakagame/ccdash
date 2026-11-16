@@ -460,30 +460,41 @@ func (s *Server) handlePTYInput(w http.ResponseWriter, r *http.Request, id strin
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	f := entry.sess.Pty()
-	if f == nil || !entry.sess.Alive() {
+	if !entry.typeInto(req.Keys, req.Text, req.Paste, req.Submit) {
 		http.Error(w, "pty session exited", http.StatusGone)
 		return
 	}
-	if req.Keys != "" {
-		_, _ = f.Write([]byte(req.Keys))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// typeInto writes to the child the way a person at the keyboard would:
+// keys raw, then text (a bracketed paste when it spans lines or paste is
+// set), then Enter when submit. False when the child is gone. The one
+// input path: POST /pty/{key}/input and the message inbox (message.go).
+func (e *ptyEntry) typeInto(keys, text string, paste, submit bool) bool {
+	f := e.sess.Pty()
+	if f == nil || !e.sess.Alive() {
+		return false
 	}
-	if req.Text != "" {
-		text := strings.ReplaceAll(req.Text, "\r\n", "\n")
-		if req.Paste || strings.Contains(text, "\n") {
+	if keys != "" {
+		_, _ = f.Write([]byte(keys))
+	}
+	if text != "" {
+		text = strings.ReplaceAll(text, "\r\n", "\n")
+		if paste || strings.Contains(text, "\n") {
 			text = "\x1b[200~" + text + "\x1b[201~"
 		}
 		_, _ = f.Write([]byte(text))
 	}
-	if req.Submit {
-		if req.Text != "" {
+	if submit {
+		if text != "" {
 			// Let the TUI finish ingesting the text first; an Enter that
 			// lands mid-paste is swallowed as a literal newline.
 			time.Sleep(120 * time.Millisecond)
 		}
 		_, _ = f.Write([]byte("\r"))
 	}
-	w.WriteHeader(http.StatusNoContent)
+	return true
 }
 
 // handlePTYText returns the emulated screen as plain text rows (styles

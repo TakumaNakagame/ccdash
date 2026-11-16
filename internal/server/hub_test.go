@@ -45,6 +45,10 @@ func TestHubAllowed(t *testing.T) {
 		{"GET", "/api/sessions/abc/brief", on, true},
 		{"POST", "/api/sessions/abc/brief", on, false},
 		{"POST", "/api/sessions/abc/children-seen", on, false},
+		// A message between sessions is for peers only: a request the hub
+		// didn't mark as one (the portal) is refused (TestHubAllowedMessage).
+		{"POST", "/api/sessions/abc/message", on, false},
+		{"GET", "/api/sessions/abc/brief?messages=1", on, true},
 		{"GET", "/api/peers", on, false},
 		{"POST", "/api/projects/color", on, true},
 		{"GET", "/api/projects", on, true},
