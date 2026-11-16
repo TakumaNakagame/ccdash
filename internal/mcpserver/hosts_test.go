@@ -39,6 +39,9 @@ type fakeHub struct {
 	// (nil = an older collector without the route).
 	projects  []model.Project
 	startInfo *store.StartInfo
+	// told: the messages B's collector was handed (POST …/message), with
+	// the session id they were for under "to".
+	told []map[string]any
 }
 
 // serverTasks is B's to-do list: #11 worked on by this machine's lap-1,
@@ -95,6 +98,12 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id := strings.Split(p, "/")[6]
 		f.parents[id], f.parentHosts[id] = b.Parent, b.ParentHost
 		j(map[string]any{})
+	case strings.HasPrefix(p, "/api/d/B/api/sessions/") && strings.HasSuffix(p, "/message") && r.Method == "POST":
+		var b map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		b["to"] = strings.Split(p, "/")[6]
+		f.told = append(f.told, b)
+		j(map[string]any{"id": len(f.told), "state": "queued", "note": "the session is mid-turn; the message is delivered when the turn ends"})
 	case p == "/api/d/B/hub/info":
 		j(map[string]any{"attachEnabled": f.attach})
 	case p == "/api/d/B/pty/start":
