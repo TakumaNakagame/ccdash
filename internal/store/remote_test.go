@@ -354,3 +354,35 @@ func TestRemoteSettingsLoadIsOneRoundTrip(t *testing.T) {
 		t.Fatalf("settings.Load made %d requests, want exactly 1", n)
 	}
 }
+
+// TestRemoteTellSession: the message goes to the session's own route with
+// the sender's id and ref — and no machine name, which is the receiving
+// side's to establish — and the collector's answer comes back.
+func TestRemoteTellSession(t *testing.T) {
+	var got map[string]any
+	var path, method string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, method = r.URL.Path, r.Method
+		if r.Header.Get("Authorization") != "Bearer ccdh_x" {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"id":7,"state":"queued","note":"the session is mid-turn"}`))
+	}))
+	defer ts.Close()
+	r := NewHubPeer(ts.URL+"/api/d/dev-B", "ccdh_x")
+	told, err := r.TellSession(context.Background(), "kid 1", Tell{Text: "進めてください", FromSession: "boss", FromRef: "A1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method != "POST" || path != "/api/d/dev-B/api/sessions/kid 1/message" {
+		t.Errorf("request = %s %s", method, path)
+	}
+	if len(got) != 3 || got["text"] != "進めてください" || got["from_session"] != "boss" || got["from_ref"] != "A1" {
+		t.Errorf("body = %v", got)
+	}
+	if told.ID != 7 || told.State != model.MessageQueued || told.Note != "the session is mid-turn" {
+		t.Errorf("answer = %+v", told)
+	}
+}

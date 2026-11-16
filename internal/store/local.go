@@ -209,6 +209,12 @@ func (l *Local) Briefs(ctx context.Context, sessionID string) ([]model.Brief, er
 	return l.db.SessionBriefs(ctx, sessionID)
 }
 
+func (l *Local) TellSession(ctx context.Context, sessionID string, t Tell) (Told, error) {
+	var out Told
+	err := l.callCollectorIn(ctx, tellTimeout, http.MethodPost, sessionPath(sessionID, "message"), t, &out)
+	return out, err
+}
+
 // Peers reads the live ~/.claude/sessions files of this machine.
 func (l *Local) Peers(ctx context.Context) (map[string]string, error) {
 	return accounts.Peers(), nil
