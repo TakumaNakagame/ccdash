@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/TakumaNakagame/ccdash/internal/db"
+	"github.com/TakumaNakagame/ccdash/internal/mcpschema"
 	"github.com/TakumaNakagame/ccdash/internal/model"
 	"github.com/TakumaNakagame/ccdash/internal/store"
 )
@@ -253,6 +254,17 @@ func TestHTTP(t *testing.T) {
 	w := post(token, "127.0.0.1:5", list)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "send_message") {
 		t.Errorf("tools/list: %d %s", w.Code, w.Body.String())
+	}
+	// What goes over the wire must pass a strict client's schema check, or
+	// the caller loses every tool (see internal/mcpschema).
+	var reply struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("tools/list: %v: %s", err, w.Body.String())
+	}
+	for _, bad := range mcpschema.Check(reply.Result) {
+		t.Errorf("tools/list: %s", bad)
 	}
 	if w := post(token, "127.0.0.1:5", `{"jsonrpc":"2.0","method":"notifications/initialized"}`); w.Code != http.StatusAccepted {
 		t.Errorf("notification: %d", w.Code)

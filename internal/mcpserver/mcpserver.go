@@ -192,9 +192,15 @@ var writeHint = map[string]any{"readOnlyHint": false, "destructiveHint": false, 
 
 var sessionList = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": `sessions as refs ("A231"), "#N" / N for this machine, or session ids`}
 
+// required is schema plus the arguments a call must carry. With none it
+// leaves "required" out: a nil slice would be written as null, and Claude
+// Code refuses the whole tools/list for one "required": null — every ccdash
+// tool gone from the session (v1.5.0-rc.2; TestToolSchemas).
 func required(props map[string]any, req ...string) map[string]any {
 	m := schema(props)
-	m["required"] = req
+	if len(req) > 0 {
+		m["required"] = req
+	}
 	return m
 }
 
