@@ -136,6 +136,16 @@ Sessions are bucketed by `last_seen`:
 
 `O` switches the list to **recent order**: every session in one run, the one that moved last first, ignoring projects, pins and watch later (only date groups; each row names its project in its color). `O` again goes back to project blocks. The portal has the same as the **更新順 / Recent** button next to the search box.
 
+**Orchestrators and their children** (see the orchestrator section below) are laid out as in the portal: global orchestrators stay at the top under a **統括** heading, a project's orchestrator leads its project block, and a session started by another one is indented under it with `` `- `` (two levels at most; `↳A12` in front of a title names the parent when it is not the row above). A row with children shows `子 N · 判断待ち k` — how many sessions are below it and how many of those wait on you — and so does the project heading.
+
+| Key | What it does |
+|-----|--------------|
+| `z` | Fold / unfold a global orchestrator's own children (on the orchestrator or any row under it; `[+]` marks a folded one). Remembered until you quit. |
+| `Z` | Show only the selected session and everything below it. A line over the list says so; `Z` or `esc` shows everything again. |
+| `m` | The selected session's children in a window, grouped 判断待ち (anywhere below it) / 作業中 / 報告あり / 終わり. `enter` jumps to that session in the list — answer its approval there with `a` / `A` / `d` as usual; the window itself answers nothing. |
+
+With `newest_at_bottom` the 統括 block is at the bottom with the other "newest end" blocks; a parent still comes before its children.
+
 Sessions in a **project** (`p`, see §7) are pulled out of these date
 buckets and shown as project blocks at the newest end of the list.
 
