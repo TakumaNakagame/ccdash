@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/TakumaNakagame/ccdash/internal/settings"
 	"github.com/TakumaNakagame/ccdash/internal/store"
 )
 
@@ -40,6 +41,8 @@ then starts there.
   ccdash brief project web                       # print the project's directory and note
   ccdash brief project web --dir ~/src/web       # set its working directory ("" clears)
   ccdash brief project web --edit | --set-file f | --clear
+  ccdash brief orchestrator                      # print your own rules for orchestrators
+  ccdash brief orchestrator --edit | --set-file f | --clear
 
 Only people write these: no MCP tool can, because the notes become input to every
 session an orchestrator starts. Sessions started with 'n', the portal or
@@ -71,7 +74,7 @@ handoff-mcp get nothing appended.`,
 			return nil
 		},
 	}
-	c.AddCommand(briefCommonCmd(rf), briefProjectCmd(rf))
+	c.AddCommand(briefCommonCmd(rf), briefProjectCmd(rf), briefOrchestratorCmd(rf))
 	return c
 }
 
@@ -175,6 +178,58 @@ func briefCommonCmd(rf *remoteFlags) *cobra.Command {
 				return nil
 			}
 			printNote(cur)
+			return nil
+		},
+	}
+	nf.add(c)
+	return c
+}
+
+// briefOrchestratorCmd edits the orchestrator_prompt setting: the
+// operator's own rules, appended to the role rules in the instructions
+// every orchestrator session gets from ccdash mcp at each start and resume
+// (docs/decisions/0009-orchestrator.md §11). Several lines don't fit the
+// settings page, so it lives here.
+func briefOrchestratorCmd(rf *remoteFlags) *cobra.Command {
+	var nf noteFlags
+	c := &cobra.Command{
+		Use:   "orchestrator",
+		Short: "Print or replace your own rules for orchestrator sessions (the orchestrator_prompt setting)",
+		Long: fmt.Sprintf(`A session you made an orchestrator (the portal's session menu, or 'ccdash role')
+gets ccdash's rules for that role in its MCP instructions every time it starts or
+resumes. This text is added after them — your own way of working, e.g.
+
+  新しい仕事は既存のプロジェクトに入れる。無ければプロジェクトを作ってよい。
+  依頼文には受け入れの条件を必ず書く。
+
+At most %d characters: Claude Code shows a session only the first 4,096
+characters of the instructions, and ccdash's own rules come first. A running
+orchestrator reads a change at its next restart. Can only be changed on this
+machine.`, settings.OrchestratorPromptMax),
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			st, closeFn, err := openStore(rf)
+			if err != nil {
+				return err
+			}
+			defer closeFn()
+			ctx := cmd.Context()
+			cfg, err := settings.Load(ctx, st)
+			if err != nil {
+				return err
+			}
+			if !nf.writes() {
+				printNote(cfg.OrchestratorPrompt)
+				return nil
+			}
+			text, err := nf.next(cfg.OrchestratorPrompt)
+			if err != nil {
+				return err
+			}
+			if cfg, err = settings.Set(ctx, st, cfg, settings.KeyOrchestratorPrompt, text); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "orchestrator rules: %s (%d of %d characters)\n", noteSize(cfg.OrchestratorPrompt), len([]rune(cfg.OrchestratorPrompt)), settings.OrchestratorPromptMax)
 			return nil
 		},
 	}
