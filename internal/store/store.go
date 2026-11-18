@@ -69,6 +69,11 @@ type StartRequest struct {
 	// (internal/server/setup.go).
 	Orchestrated bool `json:"orchestrated,omitempty"`
 	Plain        bool `json:"plain,omitempty"`
+	// Role starts the new session as an orchestrator
+	// (model.RoleOrchestrator, or RoleProjectOrchestrator for Project).
+	// For people's starts only (the TUI, the CLI, the portal): the
+	// collector refuses it together with Orchestrated and from a peer.
+	Role string `json:"role,omitempty"`
 }
 
 // Started is what the collector answers to a start.
@@ -200,6 +205,14 @@ type Store interface {
 	SetBriefCommon(ctx context.Context, text string) error
 	SetProjectBrief(ctx context.Context, project, brief string) error
 	SetProjectDir(ctx context.Context, project, dir string) (string, error)
+	// SetRole gives a session an orchestrator role, takes it away (""),
+	// or — with from — hands the role and the children of that session
+	// over to it. SetProjectOrchestrator sets the model / effort a
+	// project's orchestrator runs with. For people's tools only (`ccdash
+	// role`; the portal has its own routes): nothing in ccdash mcp may
+	// call them — a session must not be able to make an orchestrator.
+	SetRole(ctx context.Context, sessionID, role, from string) (model.RoleChange, error)
+	SetProjectOrchestrator(ctx context.Context, project, model, effort string) error
 	// SendInput types into the hosted PTY ptyKey (POST /pty/{key}/input),
 	// over HTTP for the same reason as StartSession.
 	SendInput(ctx context.Context, ptyKey string, in Input) error
