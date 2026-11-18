@@ -130,6 +130,71 @@ type Settings struct {
 	// DefaultEffort is the same for `claude --effort`: "" (claude's own),
 	// low, medium, high, xhigh or max.
 	DefaultEffort string
+	// The orchestrator role (docs/decisions/0009-orchestrator.md §7, §12):
+	// what ccdash adds whenever it starts or resumes a session whose role
+	// is orchestrator / project-orchestrator.
+	//
+	// OrchestratorDeny is the tools taken away from it (claude
+	// --disallowedTools), space-separated; OrchestratorModel / -Effort its
+	// --model / --effort ("" = claude's own; a project can override them
+	// for its orchestrator). OrchestratorPrompt is the operator's own text
+	// appended to the role rules in the MCP instructions — local-only
+	// (LocalOnly) and capped at OrchestratorPromptMax characters.
+	OrchestratorDeny   string
+	OrchestratorModel  string
+	OrchestratorEffort string
+	OrchestratorPrompt string
+}
+
+// OrchestratorDenyDefault is the tools an orchestrator starts without: the
+// ones it would do the work itself with.
+const OrchestratorDenyDefault = "Bash Edit Write NotebookEdit Agent WebSearch WebFetch"
+
+// OrchestratorPromptMax caps the orchestrator_prompt setting, in
+// characters. Claude Code shows a session only the first 4,096 characters
+// of an MCP server's instructions, and this text comes last in them — after
+// the status rule, the message rule and the role rules — so what doesn't
+// fit would silently never be read. internal/mcpserver's
+// TestOrchestratorInstructionsFit checks that every orchestrator variant
+// plus a prompt this long stays under the cut.
+const OrchestratorPromptMax = 700
+
+// denyNone is how an emptied orchestrator_deny is stored (Load reads an
+// empty value as "use the default").
+const denyNone = "none"
+
+var denyToolRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_:()*.-]{0,127}$`)
+
+// ParseDeny splits an orchestrator_deny value into tool names (spaces or
+// commas between them). Each becomes part of a command-line argument, so
+// each must be a plain tool-name token — letters, digits and _ - : ( ) * .
+// — never something that starts with "-".
+func ParseDeny(v string) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, t := range strings.FieldsFunc(v, func(r rune) bool { return r == ' ' || r == ',' || r == '\t' || r == '\n' }) {
+		if !denyToolRe.MatchString(t) {
+			return nil, fmt.Errorf("%q is not a tool name (letters, digits and _ - : ( ) * . only, not starting with a symbol; separate names with spaces)", t)
+		}
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// CleanOrchestratorPrompt normalizes the operator's text for the
+// orchestrator's instructions and refuses one that is too long.
+func CleanOrchestratorPrompt(v string) (string, error) {
+	v = strings.TrimSpace(strings.ReplaceAll(v, "\r\n", "\n"))
+	if strings.ContainsRune(v, 0) {
+		return "", fmt.Errorf("orchestrator_prompt must be plain text")
+	}
+	if n := len([]rune(v)); n > OrchestratorPromptMax {
+		return "", fmt.Errorf("orchestrator_prompt is %d characters; at most %d fit (Claude Code cuts an MCP server's instructions at 4,096 characters, and ccdash's own rules take the rest) — shorten it by %d", n, OrchestratorPromptMax, n-OrchestratorPromptMax)
+	}
+	return v, nil
 }
 
 // Efforts are the levels `claude --effort` takes.
@@ -213,6 +278,11 @@ const (
 	keyHideHeadless     = "hide_headless"
 	keyDefaultModel     = "default_model"
 	keyDefaultEffort    = "default_effort"
+	keyOrchDeny         = "orchestrator_deny"
+	keyOrchModel        = "orchestrator_model"
+	keyOrchEffort       = "orchestrator_effort"
+	// KeyOrchestratorPrompt is written by `ccdash brief orchestrator`.
+	KeyOrchestratorPrompt = "orchestrator_prompt"
 	// KeyAutoArchiveLast is bookkeeping, not a preference: the local date
 	// (YYYY-MM-DD) the daily auto-archive last ran. Not in AllSpecs.
 	KeyAutoArchiveLast = "auto_archive_last"
@@ -243,9 +313,11 @@ func Defaults() Settings {
 		UpdateChannel: "stable",
 		Language:      "auto",
 
-		AutoArchiveDays: 7,
-		AutoTitle:       true,
-		HideHeadless:    true,
+		AutoArchiveDays:    7,
+		AutoTitle:          true,
+		HideHeadless:       true,
+		OrchestratorDeny:   OrchestratorDenyDefault,
+		OrchestratorEffort: "low",
 	}
 }
 
@@ -306,6 +378,36 @@ func loadPairs(out *Settings) []loadPair {
 		{keyDefaultEffort, func(v string) {
 			if ValidEffort(v) {
 				out.DefaultEffort = v
+			}
+		}},
+		{keyOrchDeny, func(v string) {
+			// Load takes a missing or empty value as "the default", and
+			// this default is not empty: an emptied list is stored as
+			// denyNone.
+			if v == denyNone {
+				out.OrchestratorDeny = ""
+			} else if ts, err := ParseDeny(v); err == nil {
+				out.OrchestratorDeny = strings.Join(ts, " ")
+			}
+		}},
+		{keyOrchModel, func(v string) {
+			if ValidModel(v) {
+				out.OrchestratorModel = v
+			}
+		}},
+		{keyOrchEffort, func(v string) {
+			// Stored as "default" when left to claude, for the same reason.
+			if v == effortDefault {
+				out.OrchestratorEffort = ""
+			} else if ValidEffort(v) {
+				out.OrchestratorEffort = v
+			}
+		}},
+		{KeyOrchestratorPrompt, func(v string) {
+			// A value edited into the table by hand that is too long is
+			// dropped, not cut: half a rule is worse than none.
+			if t, err := CleanOrchestratorPrompt(v); err == nil {
+				out.OrchestratorPrompt = t
 			}
 		}},
 		{keyTimeFormat, func(v string) {
@@ -577,6 +679,10 @@ func AllSpecs() []Spec {
 		{Key: keyDefaultEffort, Label: "Default effort", Help: "Reasoning effort for every NEW session ccdash starts unless one is chosen at the start, passed as claude --effort. default = leave it to claude. Never applied when a session is resumed.", Kind: KindEnum, Options: append([]string{effortDefault}, Efforts...)},
 		{Key: keyIgnoreDirs, Label: "Ignored folders", Help: "Folders (comma-separated, ~/ allowed) whose claude runs ccdash never lists — for cron jobs and other automation (claude -p). Covers subfolders. Sessions ccdash starts there (n, the portal, MCP start_session) still show. A run can also opt out with CCDASH_IGNORE=1 in its environment. Empty = off.", Kind: KindString},
 		{Key: keySessionSetupCmd, Label: "Session setup command", Help: "A shell command the collector runs before every session an MCP start_session starts (not n, the portal or handoff-mcp). It gets CCDASH_BRIEF_FILE (the full brief, a temp file), CCDASH_PROJECT, CCDASH_TITLE, CCDASH_CWD and CCDASH_PARENT; the last line it prints, if an existing absolute directory, becomes the session's directory. A non-zero exit or 60 s without finishing fails the start. Can only be changed on this machine (not in remote mode, not from the hub). Empty = off.", Kind: KindString},
+		{Key: keyOrchDeny, Label: "Orchestrator: tools taken away", Help: "Tools a session with an orchestrator role starts without (claude --disallowedTools), separated by spaces — so it hands work to other sessions instead of doing it. Applied whenever ccdash starts or resumes such a session; a running one picks a change up at its next restart. Empty = take nothing away.", Kind: KindString},
+		{Key: keyOrchModel, Label: "Orchestrator: model", Help: "Model for sessions with an orchestrator role, on every start AND resume by ccdash: an alias (fable, opus, sonnet, haiku) or a full model id. Empty = leave it to claude. A project can override it for its own orchestrator.", Kind: KindString},
+		{Key: keyOrchEffort, Label: "Orchestrator: effort", Help: "Reasoning effort for sessions with an orchestrator role, on every start and resume by ccdash. default = leave it to claude. A project can override it for its own orchestrator.", Kind: KindEnum, Options: append([]string{effortDefault}, Efforts...)},
+		{Key: KeyOrchestratorPrompt, Label: "Orchestrator: your instructions", Help: "Your own rules for orchestrators, added after ccdash's role rules in the instructions every orchestrator gets at each start and resume (at most 700 characters: Claude Code cuts longer instructions). Several lines: `ccdash brief orchestrator --edit`. Can only be changed on this machine (not in remote mode, not from the hub). Empty = none.", Kind: KindString},
 		// System section (rendered under its own heading with the version;
 		// keep it last).
 		{Key: KeyUpdate, Label: "Update ccdash", Help: "Check for a new release, show its notes, install it (y), then offer to restart into it.", Kind: KindAction},
@@ -681,6 +787,17 @@ func Get(s Settings, key string) any {
 			return effortDefault
 		}
 		return s.DefaultEffort
+	case keyOrchDeny:
+		return s.OrchestratorDeny
+	case keyOrchModel:
+		return s.OrchestratorModel
+	case keyOrchEffort:
+		if s.OrchestratorEffort == "" {
+			return effortDefault
+		}
+		return s.OrchestratorEffort
+	case KeyOrchestratorPrompt:
+		return s.OrchestratorPrompt
 	}
 	return nil
 }
@@ -782,6 +899,43 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		}
 		value = e
 		s.DefaultEffort = e
+	case keyOrchDeny:
+		ts, err := ParseDeny(value.(string))
+		if err != nil {
+			return s, fmt.Errorf("orchestrator_deny: %w", err)
+		}
+		s.OrchestratorDeny = strings.Join(ts, " ")
+		value = s.OrchestratorDeny
+		if s.OrchestratorDeny == "" {
+			value = denyNone
+		}
+	case keyOrchModel:
+		m := strings.TrimSpace(value.(string))
+		if !ValidModel(m) {
+			return s, fmt.Errorf("orchestrator_model: %q is not a model name (letters, digits and . _ - : [ ], at most 64, not starting with a symbol)", m)
+		}
+		value = m
+		s.OrchestratorModel = m
+	case keyOrchEffort:
+		e := value.(string)
+		if e == effortDefault {
+			e = ""
+		}
+		if !ValidEffort(e) {
+			return s, fmt.Errorf("orchestrator_effort: %q is not one of %s", e, strings.Join(Efforts, ", "))
+		}
+		s.OrchestratorEffort = e
+		value = e
+		if e == "" {
+			value = effortDefault
+		}
+	case KeyOrchestratorPrompt:
+		t, err := CleanOrchestratorPrompt(value.(string))
+		if err != nil {
+			return s, err
+		}
+		value = t
+		s.OrchestratorPrompt = t
 	}
 	return s, persist(ctx, st, key, value)
 }
@@ -842,7 +996,8 @@ func parseInt(s string, fallback int) int {
 // PUT /api/settings/{key}, which a remote-mode client reaches with just
 // the token. session_setup_command runs a command on the collector's
 // machine; brief_common (not a Spec: it has its own routes,
-// internal/server/brief.go) is input to every child session.
+// internal/server/brief.go) is input to every child session;
+// orchestrator_prompt becomes part of every orchestrator's instructions.
 func LocalOnly(key string) bool {
-	return key == keySessionSetupCmd || key == "brief_common"
+	return key == keySessionSetupCmd || key == "brief_common" || key == KeyOrchestratorPrompt
 }

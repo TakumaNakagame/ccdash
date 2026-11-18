@@ -897,6 +897,78 @@ no way to send one, and a hub device needs `control` peer access (and the
 target's Attach ON). `GET /api/sessions/{id}/brief?messages=1` returns the
 messages next to the brief (`{"briefs": […], "messages": […]}`).
 
+#### Orchestrator sessions (roles)
+
+An **orchestrator** is a session you talk to instead of doing the routing
+yourself: it takes a request, hands the work to a new session
+(`start_session`), watches it (`my_sessions`) and reports. It must not do the
+work — and since instructions alone don't hold, ccdash knows the role and
+enforces it. There are two roles:
+
+- **orchestrator** — the global one (several are allowed);
+- **project-orchestrator** — one per project per machine; it watches the
+  project it is in. Giving the role to another session of the project
+  replaces the old one; taking the session out of the project ends the role.
+
+Whenever ccdash starts **or resumes** such a session (a new session with the
+role, the per-session restart, the resume after a collector restart,
+`resume_session`, a `tell_session` that wakes it), it
+
+- puts the role's rules into the session's MCP instructions (`ccdash mcp`
+  learns the role from `CCDASH_ROLE` / `CCDASH_ROLE_PROJECT`, which the
+  collector sets, else from the session's row), followed by your own text —
+  **Orchestrator: your instructions** (`orchestrator_prompt`, at most 700
+  characters because Claude Code cuts instructions at 4,096; several lines
+  with `ccdash brief orchestrator --edit`);
+- takes the working tools away: `claude --disallowedTools` with the
+  **Orchestrator: tools taken away** setting (`orchestrator_deny`, default
+  `Bash Edit Write NotebookEdit Agent WebSearch WebFetch`);
+- passes `--model` / `--effort` from **Orchestrator: model** / **effort**
+  (`orchestrator_model`, empty = claude's own; `orchestrator_effort`, default
+  `low`) — on a resume too, unlike an ordinary session. A project can
+  override both for its own orchestrator.
+
+A session that is already running keeps what it was started with: a role
+(or a changed deny list) applies from its next restart, and the portal
+offers that restart right away. A claude started in a terminal gets the
+rules (from its row, when its `ccdash mcp` starts) but not the tool
+restriction — ccdash didn't start it.
+
+**Only you give a role**: the portal's session menu (役割（統括）: 統括にする /
+プロジェクトの統括にする / 統括をやめる / 統括を引き継ぐ…), the 役割 choice of the
+New session dialog, or
+
+```sh
+ccdash role                                  # who is an orchestrator
+ccdash role 231 orchestrator                 # also: project-orchestrator, none
+ccdash role 250 --from 231                   # 250 takes over 231's role and its children
+ccdash role --project web --model haiku --effort low   # what web's orchestrator runs with
+ccdash brief orchestrator --edit             # your own rules (--set-file f, --clear)
+```
+
+No MCP tool sets a role, `start_session` can't start an orchestrator, and
+another machine can't either (the hub refuses a device token on the role
+routes and a `role` in its start). Routes: `POST /api/sessions/{id}/role
+{"role", "from"}` → `{role, project, replaced, moved, restart_needed}` and
+`POST /api/projects/orchestrator {"project","model","effort"}`; both need
+the host's Attach ON through the hub.
+
+What the tools do for orchestrators:
+
+- `list_projects` rows carry `orchestrator` (ref, url, status, `reach`).
+- `start_session` called by the **global** orchestrator for a project that
+  has a running orchestrator starts nothing and returns `routed: true` with
+  `project_orchestrator` — hand the request to it; `direct: true` starts the
+  session anyway.
+- `tell_session` also carries messages between the global orchestrator and
+  a project's orchestrator (the latter names the former `"orchestrator"`),
+  across machines too: the receiving collector checks the roles itself — its
+  own rows, and the sending device's answer through the hub.
+- `my_sessions` adds `project_sessions` for a project's orchestrator (the
+  project's sessions it didn't start, grouped the same way) and
+  `orchestrators` for the global one (per project orchestrator: its children
+  counted per group, and the ones waiting on you).
+
 #### Notes for handed-over work (`ccdash brief`)
 
 A session that hands work to others with `start_session` would otherwise

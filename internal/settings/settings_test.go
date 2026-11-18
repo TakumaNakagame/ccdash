@@ -2,6 +2,7 @@ package settings
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -179,5 +180,78 @@ func TestDefaultModelEffort(t *testing.T) {
 	l, err := Load(ctx, mapStore{"default_model": "--print", "default_effort": "max"})
 	if err != nil || l.DefaultModel != "" || l.DefaultEffort != "max" {
 		t.Errorf("load: %q %q, %v", l.DefaultModel, l.DefaultEffort, err)
+	}
+}
+
+// TestOrchestratorSettings: the deny list is tool names only, the model and
+// effort are checked like the defaults, an emptied list / "default" effort
+// survive a reload although their defaults are not empty, and the
+// operator's own text is capped and local-only.
+func TestOrchestratorSettings(t *testing.T) {
+	ctx := context.Background()
+	st := mapStore{}
+	s := Defaults()
+	if s.OrchestratorDeny != OrchestratorDenyDefault || s.OrchestratorEffort != "low" || s.OrchestratorModel != "" || s.OrchestratorPrompt != "" {
+		t.Fatalf("defaults: %+v", s)
+	}
+	s, err := Set(ctx, st, s, "orchestrator_deny", " Bash,Edit  mcp__slack__post  Bash(git:*) Bash ")
+	if err != nil || s.OrchestratorDeny != "Bash Edit mcp__slack__post Bash(git:*)" || st["orchestrator_deny"] != s.OrchestratorDeny {
+		t.Errorf("set deny: %q stored %q, %v", s.OrchestratorDeny, st["orchestrator_deny"], err)
+	}
+	for _, bad := range []string{"--dangerously-skip-permissions", "Bash -x", "Edit;rm", "a=b", "Bash(git commit)x y\"", "$(id)"} {
+		if _, err := Set(ctx, st, s, "orchestrator_deny", bad); err == nil {
+			t.Errorf("orchestrator_deny %q: want an error", bad)
+		}
+	}
+	if st["orchestrator_deny"] != "Bash Edit mcp__slack__post Bash(git:*)" {
+		t.Errorf("a refused deny list was stored: %q", st["orchestrator_deny"])
+	}
+	// Emptied: nothing is taken away, also after a reload.
+	s, err = Set(ctx, st, s, "orchestrator_deny", "  ")
+	if err != nil || s.OrchestratorDeny != "" {
+		t.Errorf("empty deny: %q, %v", s.OrchestratorDeny, err)
+	}
+	if l, _ := Load(ctx, st); l.OrchestratorDeny != "" {
+		t.Errorf("an emptied deny list came back as %q", l.OrchestratorDeny)
+	}
+	s, err = Set(ctx, st, s, "orchestrator_effort", "default")
+	if err != nil || s.OrchestratorEffort != "" || Get(s, "orchestrator_effort") != "default" {
+		t.Errorf("effort default: %q, %v", s.OrchestratorEffort, err)
+	}
+	if l, _ := Load(ctx, st); l.OrchestratorEffort != "" {
+		t.Errorf("effort left to claude came back as %q", l.OrchestratorEffort)
+	}
+	if _, err := Set(ctx, st, s, "orchestrator_effort", "ultra"); err == nil {
+		t.Error("orchestrator_effort ultra: want an error")
+	}
+	if _, err := Set(ctx, st, s, "orchestrator_model", "-p"); err == nil {
+		t.Error("orchestrator_model -p: want an error")
+	}
+	if s, err = Set(ctx, st, s, "orchestrator_model", " haiku "); err != nil || s.OrchestratorModel != "haiku" {
+		t.Errorf("model: %q, %v", s.OrchestratorModel, err)
+	}
+
+	// The operator's own text: kept as written, capped in characters.
+	text := "新しい仕事は既存のプロジェクトに入れる。\n依頼文には受け入れの条件を必ず書く。"
+	if s, err = Set(ctx, st, s, KeyOrchestratorPrompt, "  "+text+"\r\n"); err != nil || s.OrchestratorPrompt != text {
+		t.Errorf("prompt: %q, %v", s.OrchestratorPrompt, err)
+	}
+	fits := strings.Repeat("あ", OrchestratorPromptMax)
+	if _, err := Set(ctx, st, s, KeyOrchestratorPrompt, fits); err != nil {
+		t.Errorf("a prompt of exactly %d characters: %v", OrchestratorPromptMax, err)
+	}
+	_, err = Set(ctx, st, s, KeyOrchestratorPrompt, fits+"あい")
+	if err == nil || !strings.Contains(err.Error(), "702 characters") || !strings.Contains(err.Error(), "at most 700") || !strings.Contains(err.Error(), "shorten it by 2") {
+		t.Errorf("too long: %v", err)
+	}
+	if st[KeyOrchestratorPrompt] != fits {
+		t.Error("a refused prompt was stored")
+	}
+	// Written into the table by hand, too long: dropped whole, not cut.
+	if l, _ := Load(ctx, mapStore{KeyOrchestratorPrompt: fits + "x", "orchestrator_deny": "Bash --flag", "orchestrator_model": "--print"}); l.OrchestratorPrompt != "" || l.OrchestratorDeny != OrchestratorDenyDefault || l.OrchestratorModel != "" {
+		t.Errorf("hand-written values: prompt %d chars, deny %q, model %q", len([]rune(l.OrchestratorPrompt)), l.OrchestratorDeny, l.OrchestratorModel)
+	}
+	if !LocalOnly(KeyOrchestratorPrompt) || LocalOnly("orchestrator_deny") {
+		t.Error("orchestrator_prompt must be local-only (and only it)")
 	}
 }

@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -128,8 +129,42 @@ func (h *Hub) servePeer(w http.ResponseWriter, r *http.Request, tok string, api 
 	if r.Method != http.MethodGet {
 		log.Printf("hub: peer %q: %s %s", d.Name, r.Method, r.URL.Path)
 	}
+	if ok, why := peerStartOK(r); !ok {
+		http.Error(w, why, http.StatusForbidden)
+		return
+	}
 	r.Header.Del("Cookie")
 	api.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), peerKey{}, &d)))
+}
+
+// peerStartMax bounds the /pty/start body the hub reads to look for a role.
+const peerStartMax = 4 << 20
+
+var peerStartPath = regexp.MustCompile(`^/api/d/[^/]+/pty/start$`)
+
+// peerStartOK refuses a peer's start that asks for an orchestrator role:
+// only the operator makes a session an orchestrator (the role route is not
+// a peer route either). The target collector refuses it too, by the peer
+// headers; the hub is the one that knows for certain who is a peer. The
+// body is put back for the proxy.
+func peerStartOK(r *http.Request) (bool, string) {
+	if r.Method != http.MethodPost || !peerStartPath.MatchString(r.URL.Path) || r.Body == nil {
+		return true, ""
+	}
+	b, err := io.ReadAll(io.LimitReader(r.Body, peerStartMax+1))
+	_ = r.Body.Close()
+	if err != nil || len(b) > peerStartMax {
+		return false, "the start request is too large"
+	}
+	r.Body = io.NopCloser(bytes.NewReader(b))
+	r.ContentLength = int64(len(b))
+	var body struct {
+		Role string `json:"role"`
+	}
+	if json.Unmarshal(b, &body) == nil && strings.TrimSpace(body.Role) != "" {
+		return false, "another device can't start an orchestrator: only the operator gives a session a role"
+	}
+	return true, ""
 }
 
 // peerKey carries the calling device of a peer request to the device

@@ -78,7 +78,10 @@ type ptyEntry struct {
 	// id (0 = none). Guarded by Server.ptyMu like the project.
 	parent     string
 	parentHost string
-	briefID    int64
+	// role: the orchestrator role a NEW spawn was started with, written to
+	// its row by applyPTYProjects (a resume's role is already on the row).
+	role    string
+	briefID int64
 	// cwd is where the child started; prompt is the dialog a spawn not yet
 	// tied to a session waits on (attentionLoop), e.g. the folder-trust
 	// question. Both guarded by Server.ptyMu.

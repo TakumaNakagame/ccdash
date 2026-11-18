@@ -3207,6 +3207,9 @@ var (
 	// gridBadgeStyle marks a session chosen for the grid (space), in the
 	// working light's sky blue.
 	gridBadgeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("#38bdf8"))
+	// roleBadgeStyle marks an orchestrator session: the pane title's
+	// greys, so it reads as a label, not as a status.
+	roleBadgeStyle = lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("237")).Foreground(lipgloss.Color("15"))
 	paneTitle      = lipgloss.NewStyle().Bold(true).Padding(0, 1).Background(lipgloss.Color("237")).Foreground(lipgloss.Color("15"))
 	paneTitleDim   = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("8"))
 	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
@@ -3733,6 +3736,12 @@ func (m *model) handleKeySettings(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			v := settings.Get(m.settings, cur.Key).(int)
 			m.settingsBuffer = strconv.Itoa(v)
 		case settings.KindString:
+			if v, _ := settings.Get(m.settings, cur.Key).(string); strings.Contains(v, "\n") {
+				// The inline editor holds one line; saving from it would
+				// flatten the text.
+				m.err = fmt.Errorf("%s", i18n.T("複数行の値です。ccdash brief orchestrator --edit で編集してください"))
+				return m, nil
+			}
 			m.settingsEdit = true
 			m.settingsBuffer = settings.Get(m.settings, cur.Key).(string)
 			m.settingsPick = -1
@@ -3880,7 +3889,9 @@ func (m *model) renderSettingsBody(height int) string {
 			case cur == "":
 				valStr = subtitleStyle.Render("(not set)")
 			default:
-				valStr = cur
+				// One line per row: a value written with several lines
+				// (ccdash brief orchestrator) shows them joined.
+				valStr = strings.Join(strings.Fields(cur), " ")
 			}
 		case settings.KindAction:
 			valStr = pendingStyle.Render("[run]")
@@ -4352,6 +4363,11 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if gridMarked {
 		titleBudget -= 7 // " GRID " + space
 	}
+	// An orchestrator (Session.Role) says so in front of its title.
+	role := roleBadge(s)
+	if role != "" {
+		titleBudget -= runewidth.StringWidth(role) + 1
+	}
 	// Title generation in flight: a spinner in front of the title, so it
 	// shows even when line 2 is cut short.
 	titling := ""
@@ -4385,6 +4401,9 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	}
 	if recent != "" {
 		titleStyled = recentStyle.Render(recent) + " " + titleStyled
+	}
+	if role != "" {
+		titleStyled = roleBadgeStyle.Render(role) + " " + titleStyled
 	}
 	if gridMarked {
 		titleStyled = gridBadgeStyle.Render(" GRID ") + " " + titleStyled
@@ -4455,6 +4474,18 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		line1, line2 = beamRow(fitWidth(line1, width), fitWidth(line2, width), width, m.animTick)
 	}
 	return bar + line1 + "\n" + bar + line2 + "\n"
+}
+
+// roleBadge is the mark of an orchestrator session on its row ("" for
+// every other session): the portal's 統括 / プロジェクト統括 chips.
+func roleBadge(s mdl.Session) string {
+	switch s.Role {
+	case mdl.RoleOrchestrator:
+		return " " + i18n.T("統括") + " "
+	case mdl.RoleProjectOrchestrator:
+		return " " + i18n.T("PJ統括") + " "
+	}
+	return ""
 }
 
 func padRight(s string, width int) string {

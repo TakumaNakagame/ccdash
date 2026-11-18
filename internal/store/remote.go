@@ -298,6 +298,18 @@ func (r *Remote) PTYs(ctx context.Context) ([]PTY, error) {
 	return rows, err
 }
 
+func (r *Remote) SetRole(ctx context.Context, sessionID, role, from string) (model.RoleChange, error) {
+	var out model.RoleChange
+	err := r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "role"), nil,
+		map[string]string{"role": role, "from": from}, &out)
+	return out, err
+}
+
+func (r *Remote) SetProjectOrchestrator(ctx context.Context, project, modelName, effort string) error {
+	return r.doJSON(ctx, mutationTimeout, http.MethodPost, "/api/projects/orchestrator", nil,
+		map[string]string{"project": project, "model": modelName, "effort": effort}, nil)
+}
+
 func (r *Remote) SetParent(ctx context.Context, sessionID, parent, parentHost string) error {
 	return r.doJSON(ctx, mutationTimeout, http.MethodPost, sessionPath(sessionID, "parent"), nil,
 		map[string]string{"parent": parent, "parentHost": parentHost}, nil)

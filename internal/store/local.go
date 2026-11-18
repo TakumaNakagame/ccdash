@@ -20,6 +20,7 @@ import (
 	"github.com/TakumaNakagame/ccdash/internal/model"
 	"github.com/TakumaNakagame/ccdash/internal/paths"
 	"github.com/TakumaNakagame/ccdash/internal/redact"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
 	"github.com/TakumaNakagame/ccdash/internal/summarize"
 	"github.com/TakumaNakagame/ccdash/internal/tasks"
 	"github.com/TakumaNakagame/ccdash/internal/transcript"
@@ -176,6 +177,30 @@ func (l *Local) SetProjectBrief(ctx context.Context, project, brief string) erro
 
 func (l *Local) SetProjectDir(ctx context.Context, project, dir string) (string, error) {
 	return l.db.SetProjectDir(ctx, project, dir)
+}
+
+// SetRole writes the row; whether the session runs under the collector
+// right now (so the role applies from its next restart) is asked of the
+// collector, and left false when it isn't up.
+func (l *Local) SetRole(ctx context.Context, sessionID, role, from string) (model.RoleChange, error) {
+	ch, err := l.db.SetRole(ctx, sessionID, role, from)
+	if err != nil {
+		return ch, err
+	}
+	if hosted, err := l.HostedSessions(ctx); err == nil {
+		for _, k := range hosted {
+			ch.RestartNeeded = ch.RestartNeeded || k == sessionID
+			ch.RestartFrom = ch.RestartFrom || from != "" && k == from
+		}
+	}
+	return ch, nil
+}
+
+func (l *Local) SetProjectOrchestrator(ctx context.Context, project, modelName, effort string) error {
+	if !settings.ValidModel(modelName) || !settings.ValidEffort(effort) {
+		return fmt.Errorf("model must be an alias or a model id, effort one of %s", strings.Join(settings.Efforts, ", "))
+	}
+	return l.db.SetProjectOrchestratorModel(ctx, project, modelName, effort)
 }
 
 func (l *Local) SendInput(ctx context.Context, ptyKey string, in Input) error {

@@ -291,6 +291,29 @@ func lastReply(ctx context.Context, st store.Store, x model.Session) string {
 	return ""
 }
 
+// childRowOf is one session as a my_sessions row (without its group's
+// extras and its latest reply). grand counts each session's own children.
+func (s *Server) childRowOf(l located, peers map[string]string, grand map[string]int, now time.Time) *childRow {
+	x := l.x
+	at := changedAt(x)
+	r := &childRow{
+		Ref: l.ref(), Title: x.DisplayTitle(), Project: x.Project, Host: l.h.name, Status: string(x.Status),
+		Reason: x.AttentionReason, Pending: x.PendingCount, Wait: x.Wait, WaitNote: x.WaitNote,
+		Peer: peerOf(peers, l), Children: grand[x.SessionID], SessionID: x.SessionID, at: at, l: l,
+	}
+	r.Reach = reachOf(r.Peer)
+	if r.Title == "" {
+		r.Title = "(no prompt yet)"
+	}
+	if s.hubURL != "" {
+		r.URL = s.hubURL + "/s/" + url.PathEscape(x.SessionID)
+	}
+	if !at.IsZero() {
+		r.Age = ago(now.Sub(at))
+	}
+	return r
+}
+
 // mySessions is the my_sessions tool: the caller's children on every
 // reachable host, grouped. It stamps the caller's row with the time of the
 // call (model.Session.ChildrenSeenAt) — the caller's own bookmark, which is
@@ -332,66 +355,55 @@ func (s *Server) mySessions(ctx context.Context, sinceLast bool) (any, error) {
 		}
 	}
 	peers := s.peers(ctx)
-	groups := map[string][]*childRow{}
-	total, unchanged := 0, 0
-	for _, l := range ls {
-		x := l.x
-		if x.Parent != self {
-			continue
+	// file sorts the sessions keep picks into the four groups (newest
+	// first, the finished ones capped) and fetches their latest replies.
+	file := func(keep func(model.Session) bool) (groups map[string][]*childRow, total, unchanged, finishedMore int) {
+		groups = map[string][]*childRow{}
+		for _, l := range ls {
+			x := l.x
+			if !keep(x) {
+				continue
+			}
+			total++
+			if filter && changedAt(x).Before(cut) {
+				unchanged++
+				continue
+			}
+			r := s.childRowOf(l, peers, grand, now)
+			g := childGroup(x, shown)
+			if g == groupWorking {
+				r.Tool = x.Tool
+				if !x.TurnStartedAt.IsZero() {
+					r.WorkingFor = now.Sub(x.TurnStartedAt).Round(time.Second).String()
+				}
+			}
+			groups[g] = append(groups[g], r)
 		}
-		total++
-		at := changedAt(x)
-		if filter && at.Before(cut) {
-			unchanged++
-			continue
+		for _, rows := range groups {
+			sort.SliceStable(rows, func(i, j int) bool { return rows[i].at.After(rows[j].at) })
 		}
-		r := &childRow{
-			Ref: l.ref(), Title: x.DisplayTitle(), Project: x.Project, Host: l.h.name, Status: string(x.Status),
-			Reason: x.AttentionReason, Pending: x.PendingCount, Wait: x.Wait, WaitNote: x.WaitNote,
-			Peer: peerOf(peers, l), Children: grand[x.SessionID], SessionID: x.SessionID, at: at, l: l,
+		if f := groups[groupFinished]; len(f) > finishedMax {
+			finishedMore = len(f) - finishedMax
+			groups[groupFinished] = f[:finishedMax]
 		}
-		r.Reach = reachOf(r.Peer)
-		if r.Title == "" {
-			r.Title = "(no prompt yet)"
-		}
-		if s.hubURL != "" {
-			r.URL = s.hubURL + "/s/" + url.PathEscape(x.SessionID)
-		}
-		if !at.IsZero() {
-			r.Age = ago(now.Sub(at))
-		}
-		g := childGroup(x, shown)
-		if g == groupWorking {
-			r.Tool = x.Tool
-			if !x.TurnStartedAt.IsZero() {
-				r.WorkingFor = now.Sub(x.TurnStartedAt).Round(time.Second).String()
+		// The replies come from transcript tails: fetch them together.
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 6)
+		for _, rows := range groups {
+			for _, r := range rows {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					r.LastReply = lastReply(ctx, r.l.h.st, r.l.x)
+				}()
 			}
 		}
-		groups[g] = append(groups[g], r)
+		wg.Wait()
+		return groups, total, unchanged, finishedMore
 	}
-	for _, rows := range groups {
-		sort.SliceStable(rows, func(i, j int) bool { return rows[i].at.After(rows[j].at) })
-	}
-	finishedMore := 0
-	if f := groups[groupFinished]; len(f) > finishedMax {
-		finishedMore = len(f) - finishedMax
-		groups[groupFinished] = f[:finishedMax]
-	}
-	// The replies come from transcript tails: fetch them together.
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 6)
-	for _, rows := range groups {
-		for _, r := range rows {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				r.LastReply = lastReply(ctx, r.l.h.st, r.l.x)
-			}()
-		}
-	}
-	wg.Wait()
+	groups, total, unchanged, finishedMore := file(func(x model.Session) bool { return x.Parent == self })
 
 	// Spawns of the caller that have no session yet: stuck on a dialog
 	// (the operator must answer it) or still starting.
@@ -438,6 +450,38 @@ func (s *Server) mySessions(ctx context.Context, sinceLast bool) (any, error) {
 	if meErr == nil {
 		if r := (located{x: me, h: s.selfHost(ctx)}).ref(); r != "" {
 			out["parent"] = r
+		}
+	}
+	// What the caller's role adds (role.go): a project's orchestrator also
+	// watches the project's sessions it didn't start; the global one gets
+	// each project orchestrator's children in numbers.
+	if meErr == nil {
+		switch me.Role {
+		case model.RoleProjectOrchestrator:
+			if me.Project != "" {
+				pg, ptotal, punchanged, pmore := file(func(x model.Session) bool {
+					return x.Project == me.Project && x.Parent != self && x.SessionID != self
+				})
+				ps := map[string]any{"project": me.Project, "sessions": ptotal}
+				pcounts := map[string]int{}
+				for _, g := range []string{groupNeeds, groupWorking, groupReported, groupFinished} {
+					rows := pg[g]
+					if rows == nil {
+						rows = []*childRow{}
+					}
+					ps[g] = rows
+					pcounts[g] = len(rows)
+				}
+				pcounts[groupFinished] += pmore
+				ps["counts"] = pcounts
+				if filter {
+					ps["unchanged"] = punchanged
+				}
+				ps["note"] = "the project's sessions you did not start (e.g. the operator's own); they are not your children — adopt_session makes one yours, and you can only message your children"
+				out["project_sessions"] = ps
+			}
+		case model.RoleOrchestrator:
+			out["orchestrators"] = s.orchestratorSummaries(ls, self, peers, shown, now)
 		}
 	}
 	switch {
@@ -553,7 +597,8 @@ func (s *Server) releaseSession(ctx context.Context, ref, hostArg string) (any, 
 }
 
 // tellSession is the tell_session tool: a message from the caller to one of
-// its children or to its own parent, handed to the collector that has the
+// its children or to its own parent — or between the global orchestrator
+// and a project's orchestrator — handed to the collector that has the
 // target (store.TellSession). That collector checks the relation again,
 // writes the header line naming the sender and decides when the text
 // reaches claude — this side only refuses early what it would refuse.
@@ -572,7 +617,18 @@ func (s *Server) tellSession(ctx context.Context, ref, hostArg, text string) (an
 	}
 	me, meErr := s.findSession(ctx, self)
 	var l located
-	if strings.EqualFold(ref, "parent") {
+	if strings.EqualFold(ref, "orchestrator") {
+		if meErr != nil {
+			return nil, fmt.Errorf("can't look up your own session: %w", meErr)
+		}
+		if me.Role != model.RoleProjectOrchestrator {
+			return nil, fmt.Errorf(`"orchestrator" is how a project's orchestrator names the global orchestrator; this session is not a project's orchestrator`)
+		}
+		var ok bool
+		if l, ok = s.globalOrchestrator(ctx, me); !ok {
+			return nil, fmt.Errorf("no global orchestrator session can be reached from here (the operator makes one in ccdash)")
+		}
+	} else if strings.EqualFold(ref, "parent") {
 		if meErr != nil {
 			return nil, fmt.Errorf("can't look up your own session to find its parent: %w", meErr)
 		}
@@ -591,8 +647,10 @@ func (s *Server) tellSession(ctx context.Context, ref, hostArg, text string) (an
 		return nil, fmt.Errorf("%s is your own session", name)
 	case x.Parent == self: // a child
 	case meErr == nil && me.Parent == x.SessionID: // the parent
+	case meErr == nil && me.Role == model.RoleOrchestrator && x.Role == model.RoleProjectOrchestrator: // a project's orchestrator
+	case meErr == nil && me.Role == model.RoleProjectOrchestrator && x.Role == model.RoleOrchestrator: // the global orchestrator
 	default:
-		return nil, fmt.Errorf("%s is neither your child nor your parent: tell_session only carries messages between a session and the sessions it started or adopted (my_sessions lists yours). The operator talks to any other session themselves", name)
+		return nil, fmt.Errorf("%s is neither your child nor your parent: tell_session only carries messages between a session and the sessions it started or adopted (my_sessions lists yours), and between the global orchestrator and a project's orchestrator. The operator talks to any other session themselves", name)
 	}
 	if err := s.attachOn(ctx, l.h, "messaging sessions"); err != nil {
 		return nil, err

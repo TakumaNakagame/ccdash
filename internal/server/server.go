@@ -84,13 +84,13 @@ type Server struct {
 	// loop and a just-arrived message) and guards the maps: msgLast is when
 	// a session last got a message, msgHold when it was resumed with one
 	// (nothing more until that turn is over), msgRetry when a failed resume
-	// may be tried again. childOnPeer asks another host, through the hub,
-	// whether a session there is a child of one here.
-	msgMu       sync.Mutex
-	msgLast     map[string]time.Time
-	msgHold     map[string]time.Time
-	msgRetry    map[string]time.Time
-	childOnPeer func(ctx context.Context, deviceID, child, parent string) (bool, error)
+	// may be tried again. senderOnPeer asks another host, through the hub,
+	// for the parent and the role of a session there.
+	msgMu        sync.Mutex
+	msgLast      map[string]time.Time
+	msgHold      map[string]time.Time
+	msgRetry     map[string]time.Time
+	senderOnPeer func(ctx context.Context, deviceID, id string) (parent, role string, err error)
 
 	// statusLines: latest relayed statusLine JSON per session (statusline.go).
 	statusMu    sync.Mutex
@@ -126,7 +126,7 @@ func New(d *db.DB, addr string) *Server {
 		ptyMap:  map[string]*ptyEntry{},
 		msgLast: map[string]time.Time{}, msgHold: map[string]time.Time{}, msgRetry: map[string]time.Time{},
 	}
-	s.childOnPeer = hubChildOf
+	s.senderOnPeer = hubSenderOf
 	if err := d.SweepRunningTitles(context.Background()); err != nil {
 		log.Printf("title sweep: %v", err)
 	}
@@ -198,6 +198,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/projects/order", wrap(s.handleAPIProjectOrder))
 	s.mux.HandleFunc("POST /api/projects/brief", wrap(s.handleAPIProjectBrief))
 	s.mux.HandleFunc("POST /api/projects/dir", wrap(s.handleAPIProjectDir))
+	s.mux.HandleFunc("POST /api/sessions/{id}/role", wrap(s.handleAPIRole))
+	s.mux.HandleFunc("POST /api/projects/orchestrator", wrap(s.handleAPIProjectOrchestrator))
 	s.mux.HandleFunc("GET /api/brief-common", wrap(s.handleAPIBriefCommon))
 	s.mux.HandleFunc("PUT /api/brief-common", wrap(s.handleAPIBriefCommonSet))
 	s.mux.HandleFunc("GET /api/start-info", wrap(s.handleAPIStartInfo))

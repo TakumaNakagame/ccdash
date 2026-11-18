@@ -181,6 +181,10 @@ func (d *DB) migrate() error {
 		`ALTER TABLE projects ADD COLUMN dir TEXT`,
 		`ALTER TABLE briefs ADD COLUMN notes TEXT`,
 		`ALTER TABLE briefs ADD COLUMN own_len INTEGER`,
+		`ALTER TABLE sessions ADD COLUMN role TEXT`,
+		`ALTER TABLE projects ADD COLUMN orchestrator TEXT`,
+		`ALTER TABLE projects ADD COLUMN orchestrator_model TEXT`,
+		`ALTER TABLE projects ADD COLUMN orchestrator_effort TEXT`,
 	} {
 		if _, err := d.sql.Exec(alter); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate alter: %w", err)
@@ -498,7 +502,8 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
 		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0),
 		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0), COALESCE(s.origin,''),
-		       COALESCE(s.parent,''), COALESCE(s.parent_host,''), COALESCE(s.children_seen_at,0)
+		       COALESCE(s.parent,''), COALESCE(s.parent_host,''), COALESCE(s.children_seen_at,0),
+		       COALESCE(s.role,'')
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE COALESCE(s.archived,0) = ?
 		ORDER BY COALESCE(s.favorite,0) DESC,
@@ -526,7 +531,7 @@ func (d *DB) ListSessions(ctx context.Context, archived bool) ([]model.Session, 
 			&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
 			&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt,
 			&s.Wait, &s.WaitNote, &waitAt, &s.Origin,
-			&s.Parent, &s.ParentHost, &kidsAt); err != nil {
+			&s.Parent, &s.ParentHost, &kidsAt, &s.Role); err != nil {
 			return nil, err
 		}
 		finishAttention(&s, attAt)
@@ -626,7 +631,8 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		       COALESCE(s.attention,''), COALESCE(s.attention_reason,''), COALESCE(s.attention_at,0),
 		       COALESCE(s.color,''), COALESCE(s.last_activity,0), COALESCE(s.seen_at,0), COALESCE(s.later_at,0), COALESCE(s.grid_at,0),
 		       COALESCE(s.wait,''), COALESCE(s.wait_note,''), COALESCE(s.wait_at,0), COALESCE(s.origin,''),
-		       COALESCE(s.parent,''), COALESCE(s.parent_host,''), COALESCE(s.children_seen_at,0)
+		       COALESCE(s.parent,''), COALESCE(s.parent_host,''), COALESCE(s.children_seen_at,0),
+		       COALESCE(s.role,'')
 		FROM sessions s LEFT JOIN projects p ON p.name = s.project
 		WHERE s.session_id = ?
 	`, sessionID)
@@ -645,7 +651,7 @@ func (d *DB) GetSession(ctx context.Context, sessionID string) (model.Session, b
 		&s.Num, &s.GenTitle, &genAt, &s.TitleStatus,
 		&s.Attention, &s.AttentionReason, &attAt, &s.ColorOverride, &actAt, &seenAt, &laterAt, &gridAt,
 		&s.Wait, &s.WaitNote, &waitAt, &s.Origin,
-		&s.Parent, &s.ParentHost, &kidsAt)
+		&s.Parent, &s.ParentHost, &kidsAt, &s.Role)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Session{}, false, nil
 	}
@@ -998,6 +1004,15 @@ func (d *DB) SetProject(ctx context.Context, sessionID, project string) error {
 			return err
 		}
 	}
+	// A project's orchestrator that leaves the project stops being one:
+	// the role is about that project.
+	if _, err := d.sql.ExecContext(ctx, `UPDATE sessions SET role = NULL
+		WHERE session_id = ?1 AND role = ?3 AND COALESCE(project,'') <> ?2`, sessionID, project, model.RoleProjectOrchestrator); err != nil {
+		return err
+	}
+	if _, err := d.sql.ExecContext(ctx, `UPDATE projects SET orchestrator = NULL WHERE orchestrator = ?1 AND name <> ?2`, sessionID, project); err != nil {
+		return err
+	}
 	_, err := d.sql.ExecContext(ctx, `UPDATE sessions SET project = NULLIF(?, '') WHERE session_id = ?`, project, sessionID)
 	return err
 }
@@ -1032,7 +1047,8 @@ func (d *DB) ListProjects(ctx context.Context) ([]model.Project, error) {
 		       (SELECT COUNT(*) FROM tasks t WHERE t.project = p.name AND t.archived_at IS NULL AND t.status NOT IN ('done','cancelled')),
 		       COALESCE(p.dir,''), COALESCE(p.brief,''),
 		       COALESCE((SELECT s.cwd FROM sessions s WHERE s.project = p.name AND COALESCE(s.cwd,'') <> ''
-		                 ORDER BY s.last_seen DESC, s.num DESC LIMIT 1), '')
+		                 ORDER BY s.last_seen DESC, s.num DESC LIMIT 1), ''),
+		       COALESCE(p.orchestrator,''), COALESCE(p.orchestrator_model,''), COALESCE(p.orchestrator_effort,'')
 		FROM projects p
 		ORDER BY COALESCE(p.ord,0), p.name`)
 	if err != nil {
@@ -1042,7 +1058,7 @@ func (d *DB) ListProjects(ctx context.Context) ([]model.Project, error) {
 	out := []model.Project{}
 	for rows.Next() {
 		var p model.Project
-		if err := rows.Scan(&p.Name, &p.Color, &p.Sessions, &p.Tasks, &p.Dir, &p.Brief, &p.RecentDir); err != nil {
+		if err := rows.Scan(&p.Name, &p.Color, &p.Sessions, &p.Tasks, &p.Dir, &p.Brief, &p.RecentDir, &p.Orchestrator, &p.OrchestratorModel, &p.OrchestratorEffort); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -1142,6 +1158,20 @@ func (d *DB) RenameProject(ctx context.Context, from, to string) error {
 		if _, err := tx.ExecContext(ctx, `UPDATE projects SET
 			dir = CASE WHEN COALESCE(dir,'') = '' THEN (SELECT f.dir FROM projects f WHERE f.name = ?2) ELSE dir END,
 			brief = CASE WHEN COALESCE(brief,'') = '' THEN (SELECT f.brief FROM projects f WHERE f.name = ?2) ELSE brief END
+			WHERE name = ?1`, to, from); err != nil {
+			return err
+		}
+		// One orchestrator per project: to keeps its own; without one it
+		// takes from's (with its model and effort), else from's steps down.
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET role = NULL
+			WHERE session_id = (SELECT f.orchestrator FROM projects f WHERE f.name = ?2)
+			  AND COALESCE((SELECT t.orchestrator FROM projects t WHERE t.name = ?1), '') <> ''`, to, from); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE projects SET
+			orchestrator_model = CASE WHEN COALESCE(orchestrator,'') = '' THEN (SELECT f.orchestrator_model FROM projects f WHERE f.name = ?2) ELSE orchestrator_model END,
+			orchestrator_effort = CASE WHEN COALESCE(orchestrator,'') = '' THEN (SELECT f.orchestrator_effort FROM projects f WHERE f.name = ?2) ELSE orchestrator_effort END,
+			orchestrator = CASE WHEN COALESCE(orchestrator,'') = '' THEN (SELECT f.orchestrator FROM projects f WHERE f.name = ?2) ELSE orchestrator END
 			WHERE name = ?1`, to, from); err != nil {
 			return err
 		}

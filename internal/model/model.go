@@ -114,6 +114,46 @@ type Session struct {
 	// ChildrenSeenAt is when this session last listed its children with
 	// ccdash mcp's my_sessions (what since_last compares against).
 	ChildrenSeenAt time.Time `json:"children_seen_at,omitzero"`
+	// Role marks an orchestrator (docs/decisions/0009-orchestrator.md §7,
+	// §10): RoleOrchestrator (the global one) or RoleProjectOrchestrator
+	// (it watches its own Project; projects.orchestrator points back at
+	// it). "" for every other session. Only people set it; ccdash starts
+	// and resumes such a session with the role's rules, tool restrictions
+	// and model.
+	Role string `json:"role,omitempty"`
+}
+
+// The orchestrator roles (Session.Role).
+const (
+	RoleOrchestrator        = "orchestrator"
+	RoleProjectOrchestrator = "project-orchestrator"
+)
+
+// ValidRole reports whether r is "" or one of the roles.
+func ValidRole(r string) bool {
+	return r == "" || r == RoleOrchestrator || r == RoleProjectOrchestrator
+}
+
+// IsOrchestrator reports whether r is one of the orchestrator roles.
+func IsOrchestrator(r string) bool {
+	return r == RoleOrchestrator || r == RoleProjectOrchestrator
+}
+
+// RoleChange is what setting a role did (POST /api/sessions/{id}/role).
+type RoleChange struct {
+	Role string `json:"role"`
+	// Project is the project a project orchestrator watches.
+	Project string `json:"project,omitempty"`
+	// Replaced are the sessions that lost the role to this one: the
+	// project's previous orchestrator, and the session it took over from.
+	Replaced []string `json:"replaced,omitempty"`
+	// Moved counts the children handed over from "from" (this machine's).
+	Moved int `json:"moved,omitempty"`
+	// RestartNeeded: the session runs under ccdash right now, so the
+	// role's rules, tools and model apply from its next restart.
+	RestartNeeded bool `json:"restart_needed"`
+	// RestartFrom: the same for the session the role was taken from.
+	RestartFrom bool `json:"restart_needed_from,omitempty"`
 }
 
 // Brief is what a session was asked to do when ccdash started it: the
@@ -237,6 +277,13 @@ type Project struct {
 	// RecentDir is the cwd of the project's most recently seen session —
 	// a hint for where it lives while Dir is unset.
 	RecentDir string `json:"recent_dir,omitempty"`
+	// Orchestrator is the session id of the project's orchestrator on
+	// this machine ("" = none; Session.Role). OrchestratorModel / -Effort
+	// override the orchestrator_model / orchestrator_effort settings for
+	// it ("" = the setting).
+	Orchestrator       string `json:"orchestrator,omitempty"`
+	OrchestratorModel  string `json:"orchestrator_model,omitempty"`
+	OrchestratorEffort string `json:"orchestrator_effort,omitempty"`
 }
 
 const (

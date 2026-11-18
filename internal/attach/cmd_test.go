@@ -34,3 +34,22 @@ func TestSafeEnvDropsClaudeSessionVars(t *testing.T) {
 		t.Error("TERM not normalized")
 	}
 }
+
+// TestSafeEnvDropsRole: an orchestrator's role is the collector's to hand
+// out per child; one inherited from the collector's own environment (a
+// collector restarted from an orchestrator's shell) must not reach the
+// sessions it hosts.
+func TestSafeEnvDropsRole(t *testing.T) {
+	t.Setenv("CCDASH_ROLE", "orchestrator")
+	t.Setenv("CCDASH_ROLE_PROJECT", "web")
+	t.Setenv("CCDASH_OTHER", "kept")
+	env := SafeEnv()
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "CCDASH_ROLE") {
+			t.Errorf("%s leaked into the child env", kv)
+		}
+	}
+	if !slices.Contains(env, "CCDASH_OTHER=kept") {
+		t.Error("an unrelated CCDASH_ variable was dropped")
+	}
+}

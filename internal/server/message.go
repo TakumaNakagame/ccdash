@@ -13,7 +13,8 @@ package server
 //     message is from, and that it is neither the operator's input nor an
 //     approval. Through the hub the sending machine is the one the hub
 //     authenticated (tunnel.HeaderPeerID …), never a field of the body.
-//   - The two sessions must be parent and child (sessions.parent).
+//   - The two sessions must be parent and child (sessions.parent), or the
+//     global orchestrator and a project's orchestrator (sessions.role).
 //   - It is queued in SQLite (the messages table) and handed to claude
 //     only when that can't be taken for something else: never while an
 //     approval or a dialog is up (the Enter would answer it), never
@@ -151,7 +152,8 @@ func (s *Server) handleAPIMessage(w http.ResponseWriter, r *http.Request) {
 
 // messageSender establishes who a message is from — the name of the
 // sending machine ("" = this one) and the sender's ref for the header —
-// or refuses it (403): the sender must be the target's parent or child.
+// or refuses it (403): the sender must be the target's parent or child, or
+// the two must be the global orchestrator and a project's orchestrator.
 //
 // A local call (loopback token): the sender is a session of this
 // collector, so its row decides everything; nothing but the session id is
@@ -174,7 +176,7 @@ func (s *Server) messageSender(r *http.Request, target model.Session, req messag
 		if !ok {
 			return "", "", http.StatusForbidden, fmt.Errorf("from_session is not a session of this machine")
 		}
-		if target.Parent != from && sx.Parent != target.SessionID {
+		if target.Parent != from && sx.Parent != target.SessionID && !orchestratorPair(sx.Role, target.Role) {
 			return "", "", http.StatusForbidden, fmt.Errorf("the sender is neither this session's parent nor its child")
 		}
 		ref = hubcfg.WithLetter([]model.Session{sx})[0].Ref()
@@ -200,13 +202,16 @@ func (s *Server) messageSender(r *http.Request, target model.Session, req messag
 			return "", "", http.StatusForbidden, fmt.Errorf("this session's parent is not a session of the sending device")
 		}
 	} else {
+		// A child, or the other half of an orchestrator pair: both are
+		// facts of the sender's row, which lives on the sending device —
+		// ask it, through the hub, rather than believe the request.
 		cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-		ok, err := s.childOnPeer(cctx, devID, from, target.SessionID)
+		parent, role, err := s.senderOnPeer(cctx, devID, from)
 		cancel()
 		if err != nil {
 			return "", "", http.StatusForbidden, fmt.Errorf("can't confirm with the sending device that the sender is this session's child (this machine needs peer access to it on the hub): %v", err)
 		}
-		if !ok {
+		if parent != target.SessionID && !orchestratorPair(role, target.Role) {
 			return "", "", http.StatusForbidden, fmt.Errorf("the sender is neither this session's parent nor its child")
 		}
 	}
@@ -255,28 +260,37 @@ func cleanName(n string) string {
 	return n
 }
 
-// hubChildOf asks the device deviceID, through the hub and with this
-// machine's own device token, whether its session child has parent as its
-// parent (Server.childOnPeer). The hub lets that through only while this
-// machine has peer access.
-func hubChildOf(ctx context.Context, deviceID, child, parent string) (bool, error) {
+// orchestratorPair reports whether two roles may message each other
+// without being parent and child: the global orchestrator hands a request
+// to a project's orchestrator, and that one answers it
+// (docs/decisions/0009-orchestrator.md §10).
+func orchestratorPair(a, b string) bool {
+	return a == model.RoleOrchestrator && b == model.RoleProjectOrchestrator ||
+		a == model.RoleProjectOrchestrator && b == model.RoleOrchestrator
+}
+
+// hubSenderOf asks the device deviceID, through the hub and with this
+// machine's own device token, for the parent and the role of its session
+// id (Server.senderOnPeer): "" and "" when it has no such session. The hub
+// lets that through only while this machine has peer access.
+func hubSenderOf(ctx context.Context, deviceID, id string) (parent, role string, err error) {
 	cfg, err := hubcfg.Load()
 	if err != nil {
-		return false, err
+		return "", "", err
 	}
 	st := store.NewHubPeer(strings.TrimRight(cfg.URL, "/")+"/api/d/"+url.PathEscape(deviceID), cfg.Token)
 	for _, archived := range []bool{false, true} {
 		ss, err := st.ListSessions(ctx, archived)
 		if err != nil {
-			return false, err
+			return "", "", err
 		}
 		for _, x := range ss {
-			if x.SessionID == child {
-				return x.Parent == parent, nil
+			if x.SessionID == id {
+				return x.Parent, x.Role, nil
 			}
 		}
 	}
-	return false, nil
+	return "", "", nil
 }
 
 // messageText is what claude reads: the collector's header line, a blank

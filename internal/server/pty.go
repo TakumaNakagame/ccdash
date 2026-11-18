@@ -125,6 +125,12 @@ type ptyStartReq struct {
 	// setting runs first. Nothing else sets it; a resume ignores it.
 	Orchestrated bool `json:"orchestrated"`
 	Plain        bool `json:"plain"`
+	// Role starts the new session as an orchestrator (model.RoleOrchestrator
+	// / RoleProjectOrchestrator, the latter for Project); role.go. Only a
+	// person's start may carry it — handlePTYStart refuses it on an
+	// orchestrated start and from a peer. A resume ignores it: the
+	// session's row decides.
+	Role string `json:"role"`
 
 	// notes / own: what prepareStart appended to the prompt and the
 	// caller's own part of it, for the kept brief.
@@ -193,6 +199,10 @@ func (s *Server) handlePTYStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
+	if code, err := s.checkStartRole(r, &req); err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
 	orchestrated := req.Orchestrated && req.ResumeID == ""
 	if orchestrated {
 		var code int
@@ -251,7 +261,18 @@ func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 	if !validParent(req.Parent) || !validParent(req.ParentHost) {
 		return "", 0, http.StatusBadRequest, fmt.Errorf("parent / parentHost must be at most 128 of a-z, A-Z, 0-9, - and _")
 	}
-	margs, err := modelArgs(req, s.startDefaults())
+	// An orchestrator starts — and resumes — with what its role says:
+	// tools taken away, its own model and effort, and CCDASH_ROLE for its
+	// ccdash mcp (role.go). Everything else keeps modelArgs' rule.
+	cfg := s.startDefaults()
+	rs := s.roleFor(req)
+	var margs []string
+	var err error
+	if rs.role != "" {
+		margs, err = roleArgs(req, cfg, rs)
+	} else {
+		margs, err = modelArgs(req, cfg)
+	}
 	if err != nil {
 		return "", 0, http.StatusBadRequest, err
 	}
@@ -295,6 +316,7 @@ func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 	// child's first hook tells us which session this PTY holds. (A later
 	// duplicate wins in exec's env dedup, overriding any inherited value.)
 	c.Env = append(attach.SafeEnv(), fmt.Sprintf("CCDASH_WRAPPER_PID=%d", tag))
+	c.Env = append(c.Env, rs.env()...)
 
 	sess := attach.New(c)
 	// The key is finalized after Start (we need the PID), but the entry
@@ -308,6 +330,9 @@ func (s *Server) spawnPTY(req ptyStartReq) (string, int, int, error) {
 		entry.parentHost = ""
 	}
 	entry.cwd = req.Cwd
+	if req.ResumeID == "" {
+		entry.role = rs.role
+	}
 	if err := sess.Start(); err != nil {
 		return "", 0, http.StatusInternalServerError, fmt.Errorf("pty start: %v", err)
 	}
@@ -625,8 +650,9 @@ func (s *Server) aliasPTYsByParent(ctx context.Context, procs map[string]procmap
 }
 
 // applyPTYProjects puts a spawned session into the project it was started
-// for (ptyStartReq.Project), records its origin (ptyStartReq.Origin) and its
-// parent (ptyStartReq.Parent), and ties its brief to it, once the PTY has a
+// for (ptyStartReq.Project), records its origin (ptyStartReq.Origin), its
+// parent (ptyStartReq.Parent) and its role (ptyStartReq.Role), and ties its
+// brief to it, once the PTY has a
 // session-ID alias and the session has a row. Runs on the discovery tick
 // and right after a spawn's hook made its row; each PTY is handled once,
 // and a session that already has a project / origin / parent keeps it.
@@ -639,12 +665,13 @@ func (s *Server) applyPTYProjects(ctx context.Context) {
 		parent     string
 		parentHost string
 		briefID    int64
+		role       string
 	}
 	var jobs []job
 	s.ptyMu.Lock()
 	for k, e := range s.ptyMap {
-		if (e.project != "" || e.origin != "" || e.parent != "" || e.briefID != 0) && !e.projectDone && !strings.HasPrefix(k, "pid-") {
-			jobs = append(jobs, job{e, k, e.project, e.origin, e.parent, e.parentHost, e.briefID})
+		if (e.project != "" || e.origin != "" || e.parent != "" || e.briefID != 0 || e.role != "") && !e.projectDone && !strings.HasPrefix(k, "pid-") {
+			jobs = append(jobs, job{e, k, e.project, e.origin, e.parent, e.parentHost, e.briefID, e.role})
 		}
 	}
 	s.ptyMu.Unlock()
@@ -675,6 +702,14 @@ func (s *Server) applyPTYProjects(ctx context.Context) {
 			if err := s.db.SetProject(ctx, j.sid, j.project); err != nil {
 				log.Printf("pty project %s: %v", j.sid, err)
 				continue
+			}
+		}
+		if j.role != "" && sess.Role == "" {
+			// After the project: a project's orchestrator watches the one
+			// it is in. A role that can't be given (no project after all)
+			// is logged and dropped rather than retried forever.
+			if _, err := s.db.SetRole(ctx, j.sid, j.role, ""); err != nil {
+				log.Printf("pty role %s: %v", j.sid, err)
 			}
 		}
 		s.ptyMu.Lock()
