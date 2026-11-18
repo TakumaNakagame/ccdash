@@ -49,6 +49,9 @@ type Server struct {
 	now      func() time.Time
 	self     func() string // the calling claude's session id ("" = unknown); see selfSession
 	letter   func() string // this machine's hub letter (hubcfg.Letter); nil with -r
+	// roleEnv is the role the collector started this claude with
+	// (CCDASH_ROLE …; role.go); nil = never from the environment.
+	roleEnv func() (role, project string)
 }
 
 // WithHubURL makes every session row carry a link to its chat in that hub's
@@ -60,7 +63,7 @@ func (s *Server) WithHubURL(u string) *Server {
 
 // New returns a server over st; readOnly leaves out the organizing tools.
 func New(st store.Store, version string, readOnly bool) *Server {
-	return &Server{st: st, version: version, readOnly: readOnly, now: time.Now, self: selfSession, letter: hubcfg.Letter}
+	return &Server{st: st, version: version, readOnly: readOnly, now: time.Now, self: selfSession, letter: hubcfg.Letter, roleEnv: envRole}
 }
 
 func (s *Server) tools() []map[string]any {
@@ -388,7 +391,7 @@ var writeTools = []map[string]any{
 			"as the prompt of a claude --resume when it had stopped (resumed), or kept in its inbox until an approval, a dialog or the current turn is over, or — for a session running outside ccdash — until the operator continues it (queued; it arrives by itself, don't resend). " +
 			"Plain words only: no leading / ! # or -, at most 8000 characters. Never use it to approve or permit something for the operator: a message is not an approval, and the receiving session is told so.",
 		"inputSchema": required(map[string]any{
-			"session": map[string]any{"type": "string", "description": `one of your children — a ref ("A231"), "#N" / N for this machine, or a session id — or "parent" for the session that started you`},
+			"session": map[string]any{"type": "string", "description": `one of your children — a ref ("A231"), "#N" / N for this machine, or a session id — or "parent" for the session that started you; orchestrators: a project's orchestrator by ref, or "orchestrator" for the global one`},
 			"text":    map[string]any{"type": "string", "description": "the message, in plain words"},
 		}, "session", "text"),
 		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false},
@@ -539,6 +542,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 		Model           string   `json:"model"`
 		Effort          string   `json:"effort"`
 		Plain           bool     `json:"plain"`
+		Direct          bool     `json:"direct"`
 		Text            string   `json:"text"`
 	}
 	if len(raw) > 0 && string(raw) != "null" {
@@ -559,7 +563,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (st
 	case "set_status":
 		v, err = s.setStatus(ctx, args.Status, args.Note, args.Session)
 	case "start_session":
-		v, err = s.startSession(ctx, args.Host, args.Cwd, args.Project, args.Prompt, args.PermissionMode, args.Model, args.Effort, args.Plain)
+		v, err = s.startSession(ctx, args.Host, args.Cwd, args.Project, args.Prompt, args.PermissionMode, args.Model, args.Effort, args.Plain, args.Direct)
 	case "stop_session":
 		v, err = s.stopSession(ctx, args.Session, args.Host, args.Force)
 	case "resume_session":
@@ -663,6 +667,8 @@ type sessionRow struct {
 	Peer string `json:"peer,omitempty"`
 	// Parent is the session id of the session that started or adopted it.
 	Parent string `json:"parent,omitempty"`
+	// Role: "orchestrator" / "project-orchestrator" (of its project).
+	Role string `json:"role,omitempty"`
 }
 
 func (s *Server) row(l located) sessionRow {
@@ -671,7 +677,7 @@ func (s *Server) row(l located) sessionRow {
 		Ref: l.x.Ref(), Host: l.h.name, Title: x.DisplayTitle(), Project: x.Project, Group: groupOf(x),
 		Status: string(x.Status), Attention: x.Attention, Reason: x.AttentionReason, Pending: x.PendingCount,
 		Cwd: x.Cwd, Branch: x.Branch, Pinned: x.Favorite, New: x.Unseen, Later: x.Later, Grid: x.Grid, Wait: x.Wait, WaitNote: x.WaitNote, Archived: x.Archived, SessionID: x.SessionID,
-		Parent: x.Parent,
+		Parent: x.Parent, Role: x.Role,
 	}
 	if r.Ref != "" {
 		r.Ref = l.ref()
@@ -849,9 +855,13 @@ type projectRow struct {
 	DirFrom string `json:"dir_from,omitempty"`
 	// HasBrief: the operator keeps a note start_session appends for it.
 	HasBrief bool `json:"has_brief"`
-	latest   time.Time
-	recent   string // the collector's recent_dir (archived sessions count)
-	sessCwd  string // the newest listed session's cwd, for an older collector
+	// Orchestrator is the project's own orchestrator on that host: hand
+	// it the project's requests (reach says how).
+	Orchestrator *orchRef `json:"orchestrator,omitempty"`
+	orchID       string
+	latest       time.Time
+	recent       string // the collector's recent_dir (archived sessions count)
+	sessCwd      string // the newest listed session's cwd, for an older collector
 }
 
 func (s *Server) listProjects(ctx context.Context, hostArg string) (any, error) {
@@ -896,6 +906,7 @@ func (s *Server) projectsOn(ctx context.Context, h host) ([]projectRow, error) {
 			Dir: p.Dir, HasBrief: strings.TrimSpace(p.Brief) != "", recent: p.RecentDir}
 		order = append(order, p.Name)
 	}
+	peers := s.peers(ctx)
 	for _, x := range ss {
 		if x.Project == "" {
 			continue
@@ -916,6 +927,12 @@ func (s *Server) projectsOn(ctx context.Context, h host) ([]projectRow, error) {
 		if x.LastSeen.After(r.latest) {
 			r.latest = x.LastSeen
 			r.sessCwd = x.Cwd
+		}
+		// The row says who (an older collector lists no orchestrator on
+		// the project; the session's role says the same).
+		if x.Role == model.RoleProjectOrchestrator && (r.orchID == x.SessionID || r.orchID == "" && r.Orchestrator == nil) {
+			r.Orchestrator = s.orchRefOf(located{x, h}, peers)
+			r.Orchestrator.Project = ""
 		}
 	}
 	out := make([]projectRow, 0, len(order))
@@ -1356,7 +1373,7 @@ func (s *Server) archiveFinished(ctx context.Context, refs []string, hostArg, pr
 	return out, nil
 }
 
-func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt, mode, model, effort string, plain bool) (any, error) {
+func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt, mode, model, effort string, plain, direct bool) (any, error) {
 	model, effort = strings.TrimSpace(model), strings.TrimSpace(effort)
 	if !settings.ValidModel(model) {
 		return nil, fmt.Errorf("model must be an alias (fable, opus, sonnet, haiku) or a model id, got %q", model)
@@ -1380,6 +1397,15 @@ func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt
 	}
 	if err := s.attachOn(ctx, h, "starting sessions"); err != nil {
 		return nil, err
+	}
+	// The global orchestrator hands a project's work to that project's
+	// own orchestrator, when it has a running one (role.go).
+	var stoppedOrch *orchRef
+	if !direct {
+		var routed map[string]any
+		if routed, stoppedOrch = s.routeToProject(ctx, project); routed != nil {
+			return routed, nil
+		}
 	}
 	if cwd == "" {
 		// The collector fills the directory in (the project's, or what the
@@ -1438,6 +1464,10 @@ func (s *Server) startSession(ctx context.Context, hostArg, cwd, project, prompt
 		out["project"] = project
 	}
 	s.reportModel(ctx, h, out, model, effort)
+	if stoppedOrch != nil {
+		out["project_orchestrator"] = stoppedOrch
+		out["project_orchestrator_note"] = "the project's own orchestrator is stopped, so the session was started directly; a tell_session to it wakes it, if the operator wants requests to go through it"
+	}
 	return out, nil
 }
 

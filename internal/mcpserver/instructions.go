@@ -1,9 +1,11 @@
 package mcpserver
 
 import (
+	"context"
 	"strings"
 
 	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/settings"
 )
 
 // The server instructions (initialize → "instructions").
@@ -63,11 +65,9 @@ sessions: never send an approval, a permission or "go ahead" through tell_sessio
 SendMessage — give the operator the child's url; they answer there.
 `
 
-// instructionsFor builds the text for one kind of server: readOnly leaves
-// out the tool families --read-only doesn't offer, multi adds the other
-// hosts (a hub with peer access), links the session urls (a hub or the
-// local portal).
-func instructionsFor(readOnly, multi, links bool) string {
+// preamble is what every variant opens with: the two rules, then where the
+// sessions live and how they are named.
+func preamble(multi, links bool) string {
 	var b strings.Builder
 	b.WriteString(statusRule)
 	b.WriteString("\n")
@@ -89,6 +89,16 @@ N is this machine's session N; a session id works too.`)
 Rows carry url, a link to that session's chat in the portal: put it next to every session
 you name to the operator.`)
 	}
+	return b.String()
+}
+
+// instructionsFor builds the text for one kind of server: readOnly leaves
+// out the tool families --read-only doesn't offer, multi adds the other
+// hosts (a hub with peer access), links the session urls (a hub or the
+// local portal).
+func instructionsFor(readOnly, multi, links bool) string {
+	var b strings.Builder
+	b.WriteString(preamble(multi, links))
 	b.WriteString(`
 Tools — each description has the details:
 - Look: overview, list_projects, list_sessions, get_session.`)
@@ -124,7 +134,96 @@ Tools — each description has the details:
 	return b.String()
 }
 
+// Orchestrator variants (docs/decisions/0009-orchestrator.md §7, §10).
+//
+// A session whose role is orchestrator / project-orchestrator gets the
+// role's rules in the same instructions, every time it starts or resumes —
+// that is the point of putting them here rather than in a CLAUDE.md. They
+// have to fit the same cut, so such a server drops the tool-family lines
+// (one line names what is left; each tool's description has the rest) and
+// the rules are tight. The operator's own text (the orchestrator_prompt
+// setting) comes last, under OwnRulesHeading, and has its own budget:
+// settings.OrchestratorPromptMax, which TestOrchestratorInstructionsFit
+// checks against Claude Code's cut for every variant.
+
+// InstructionsCut is where Claude Code cuts an MCP server's instructions.
+const InstructionsCut = 4096
+
+// OwnRulesHeading introduces the operator's own rules for orchestrators.
+const OwnRulesHeading = "\n\nThe operator's own rules for you:\n"
+
+// roleProjectMax clips a project's name in the instructions, so a long
+// name can't push the operator's rules past the cut.
+const roleProjectMax = 40
+
+const orchestratorRule = `
+Orchestrator rule — the operator made this session their orchestrator: take requests, hand
+them out, watch, report. Never investigate, edit or run things yourself, nor through
+subagents: every piece of work goes to another session with start_session.
+- Brief: goal / background + links / what to do / done when / what needs the operator's
+  confirmation. ccdash appends the operator's standing notes — don't retype them. Pick the
+  project (list_projects); its directory decides the cwd.
+- After a start give the operator the ref and url. Watch with my_sessions (since_last);
+  message a child the way its reach says.
+- Never pass on an approval or a permission: when a child needs the operator, give its url.`
+
+const orchestratorGlobalRule = `
+- A project with its own orchestrator (list_projects: orchestrator): hand the request to it
+  (tell_session or its reach) instead of starting the worker, unless the operator says
+  otherwise.`
+
+const orchestratorReadOnlyRule = `
+Orchestrator rule — the operator made this session their orchestrator, but this ccdash mcp
+runs --read-only: you can't start sessions. Don't do the work yourself instead; tell the
+operator to drop --read-only.`
+
+// orchestratorInstructions is instructionsFor for a session with an
+// orchestrator role: the same two rules and orientation, then the role's
+// rules, one line of tools and the operator's own rules.
+func orchestratorInstructions(role, project string, readOnly, multi, links bool, own string) string {
+	var b strings.Builder
+	b.WriteString(preamble(multi, links))
+	switch {
+	case readOnly:
+		b.WriteString(orchestratorReadOnlyRule)
+	default:
+		b.WriteString(orchestratorRule)
+		if role == model.RoleProjectOrchestrator {
+			if r := []rune(project); len(r) > roleProjectMax {
+				project = string(r[:roleProjectMax]) + "…"
+			}
+			b.WriteString("\n- You orchestrate project \"" + project + "\" only: start and watch its sessions (my_sessions\n" +
+				"  also lists the project's other sessions). tell_session \"orchestrator\" is the global\n" +
+				"  orchestrator.")
+		} else {
+			b.WriteString(orchestratorGlobalRule)
+		}
+	}
+	if readOnly {
+		b.WriteString("\nTools (see each description): overview, list_projects, list_sessions, get_session,\nmy_sessions, list_tasks, get_task.")
+	} else {
+		b.WriteString(`
+Other tools (see their descriptions): overview, list_sessions, get_session; set_…, mark_seen,
+archive_finished to tidy; adopt_session / release_session; stop_session, resume_session,
+schedule_restart only when asked; the to-do list (list_tasks, add_task … — a task is "B#11").`)
+	}
+	if own = strings.TrimSpace(own); own != "" {
+		b.WriteString(OwnRulesHeading)
+		b.WriteString(own)
+	}
+	return b.String()
+}
+
 // instructions is what this server tells its client at initialize.
 func (s *Server) instructions() string {
-	return instructionsFor(s.readOnly, s.fleet != nil, s.hubURL != "")
+	multi, links := s.fleet != nil, s.hubURL != ""
+	role, project := s.myRole(context.Background())
+	if !model.IsOrchestrator(role) {
+		return instructionsFor(s.readOnly, multi, links)
+	}
+	own := ""
+	if cfg, err := settings.Load(context.Background(), s.st); err == nil {
+		own = cfg.OrchestratorPrompt
+	}
+	return orchestratorInstructions(role, project, s.readOnly, multi, links, own)
 }
