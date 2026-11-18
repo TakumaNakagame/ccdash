@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +27,7 @@ import (
 	"github.com/TakumaNakagame/ccdash/internal/auth"
 	"github.com/TakumaNakagame/ccdash/internal/buildinfo"
 	mdl "github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/orchtree"
 	"github.com/TakumaNakagame/ccdash/internal/paths"
 	"github.com/TakumaNakagame/ccdash/internal/selfupdate"
 	"github.com/TakumaNakagame/ccdash/internal/settings"
@@ -98,15 +98,30 @@ type model struct {
 	height      int
 	allSessions []mdl.Session // unfiltered, latest from DB
 	sessions    []mdl.Session // post-project-filter — what the list actually renders
-	events      []mdl.Event
-	approvals   []mdl.Approval
-	selSess     int
-	selAppr     int
-	sessScroll  int
-	pane        pane
-	err         error
-	flash       string
-	lastTick    time.Time
+	// The orchestrator tree (orchtree.go). sessMeta is the layout entry of
+	// each row of sessions (bucket, depth, parent mark); treeIdx the parent
+	// links of allSessions, rebuilt on every applyGroupFilter. orchFolded
+	// holds the global orchestrators whose own children z folded away,
+	// subtreeRoot the session Z narrows the list to ("" = everything) —
+	// both for this run only. children* is the m window.
+	sessMeta       []orchtree.Entry
+	foldApplied    bool // the last layout honoured orchFolded (false under the grid)
+	treeIdx        *orchtree.Index
+	orchFolded     map[string]bool
+	subtreeRoot    string
+	childrenOpen   bool
+	childrenRoot   string
+	childrenSel    int
+	childrenScroll int
+	events         []mdl.Event
+	approvals      []mdl.Approval
+	selSess        int
+	selAppr        int
+	sessScroll     int
+	pane           pane
+	err            error
+	flash          string
+	lastTick       time.Time
 
 	// The task pane (tasks.go): the list, its selection and scroll, whether
 	// it has the keyboard, the detail view, and the project-only filter.
@@ -765,6 +780,11 @@ func (m *model) currentSessionID() string {
 // all end up needing the same connect / resize / teardown decisions.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	mm, cmd := m.update(msg)
+	// A fold never takes a tile off the grid: the list is laid out again
+	// whenever the grid opened or closed with something folded.
+	if len(m.orchFolded) > 0 && m.foldApplied == m.gridOpen {
+		m.keepSelection(m.currentSessionID())
+	}
 	if sync := m.syncLive(); sync != nil {
 		cmd = tea.Batch(cmd, sync)
 	}
@@ -1230,6 +1250,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.bangConfirm {
 		return m.handleKeyBang(msg)
 	}
+	if m.childrenOpen {
+		return m.handleKeyChildren(msg)
+	}
 	if m.pane == paneSessions && m.gridOpen && m.gridTyping {
 		return m, m.handleGridTypingKey(msg)
 	}
@@ -1323,6 +1346,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "O":
 		m.toggleRecentOrder()
+		return m, nil
+	case "z":
+		return m, m.toggleFold()
+	case "Z":
+		return m, m.toggleSubtree()
+	case "m":
+		m.openChildren()
 		return m, nil
 	case "j", "down":
 		return m, m.moveWrap(1, msg.IsRepeat)
@@ -1559,6 +1589,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.accountFilter = ""
 			cleared = true
 		}
+		if m.subtreeRoot != "" {
+			m.subtreeRoot = ""
+			cleared = true
+		}
 		if cleared {
 			m.applyGroupFilter()
 			m.selSess = 0
@@ -1574,6 +1608,26 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // intersection.
 func (m *model) applyGroupFilter() {
 	src := m.allSessions
+	// The parent links and the counts come from every session, whatever
+	// the tab or the search shows.
+	m.treeIdx = orchtree.NewIndex(src)
+	if m.subtreeRoot != "" {
+		if _, ok := m.treeIdx.Get(m.subtreeRoot); !ok {
+			m.subtreeRoot = "" // archived, or gone
+		} else {
+			under := map[string]bool{}
+			for _, id := range m.treeIdx.Subtree(m.subtreeRoot) {
+				under[id] = true
+			}
+			out := make([]mdl.Session, 0, len(under))
+			for _, s := range src {
+				if under[s.SessionID] {
+					out = append(out, s)
+				}
+			}
+			src = out
+		}
+	}
 	if m.accountFilter != "" {
 		out := make([]mdl.Session, 0, len(src))
 		for _, s := range src {
@@ -1611,113 +1665,26 @@ func (m *model) applyGroupFilter() {
 		}
 		src = out
 	}
-	if m.settings.RecentOrder {
-		src = byActivity(src)
-	} else {
-		src = laterFirst(projectsFirst(src))
-	}
-	if m.settings.NewestAtBottom {
-		// Reverse a copy: with no filter active src still aliases
-		// m.allSessions, and reversing that in place would flip the
-		// order back on the next applyGroupFilter without a refresh.
-		src = append([]mdl.Session(nil), src...)
-		for i, j := 0, len(src)-1; i < j; i, j = i+1, j-1 {
-			src[i], src[j] = src[j], src[i]
-		}
-	}
-	m.sessions = src
+	// The order, the bands and who hangs under whom: orchtree.ListOrder.
+	// Without any role or parent that is laterFirst(projectsFirst(src)) —
+	// byActivity(src) in recent order — reversed with newest_at_bottom, as
+	// before the tree (TestListOrderLegacy).
+	m.orderSessions(src)
 }
 
 // activityAt is when a session last moved: LastActivity (newest transcript
 // entry or hook), else LastSeen.
-func activityAt(s mdl.Session) time.Time {
-	if !s.LastActivity.IsZero() {
-		return s.LastActivity
-	}
-	return s.LastSeen
-}
+func activityAt(s mdl.Session) time.Time { return orchtree.ActivityAt(s) }
 
 // byActivity is recent order: a sorted copy (src may alias allSessions),
 // the session that moved last first, projects and pins ignored.
-func byActivity(src []mdl.Session) []mdl.Session {
-	out := append([]mdl.Session(nil), src...)
-	sort.SliceStable(out, func(i, j int) bool {
-		a, b := activityAt(out[i]), activityAt(out[j])
-		if !a.Equal(b) {
-			return a.After(b)
-		}
-		return out[i].Num > out[j].Num
-	})
-	return out
-}
+func byActivity(src []mdl.Session) []mdl.Session { return orchtree.ByActivity(src) }
 
-// laterFirst puts "watch later" sessions (L) at the very newest end, in
-// their own block, the most recently marked first — ahead of projects,
-// whose members they temporarily leave. Returns src when none is marked.
-func laterFirst(src []mdl.Session) []mdl.Session {
-	var later, rest []mdl.Session
-	for _, s := range src {
-		if s.Later {
-			later = append(later, s)
-		} else {
-			rest = append(rest, s)
-		}
-	}
-	if len(later) == 0 {
-		return src
-	}
-	sort.SliceStable(later, func(i, j int) bool { return later[i].LaterAt.After(later[j].LaterAt) })
-	return append(later, rest...)
-}
-
-// projectsFirst moves the sessions that belong to a project to the newest
-// end of the list (the top; the bottom with newest_at_bottom, since the
-// caller reverses afterwards), one block per project. The order is stable
-// — activity never moves anything: projects by their operator-set order
-// ([ / ], new projects at the newest end); inside a block pinned sessions
-// come first (most recently pinned first), then the rest newest-started
-// first. Everything else keeps its order
-// (pins, then by date). Returns a new slice when it reorders anything.
-func projectsFirst(src []mdl.Session) []mdl.Session {
-	order := map[string]int{}
-	for _, s := range src {
-		if s.Project != "" {
-			order[s.Project] = s.ProjectOrder
-		}
-	}
-	if len(order) == 0 {
-		return src
-	}
-	var in, rest []mdl.Session
-	for _, s := range src {
-		if s.Project != "" {
-			in = append(in, s)
-		} else {
-			rest = append(rest, s)
-		}
-	}
-	sort.SliceStable(in, func(i, j int) bool {
-		a, b := in[i], in[j]
-		if a.Project != b.Project {
-			if oa, ob := order[a.Project], order[b.Project]; oa != ob {
-				return oa < ob
-			}
-			return a.Project < b.Project
-		}
-		// Pins lead their block, the most recently pinned first.
-		if a.Favorite != b.Favorite {
-			return a.Favorite
-		}
-		if a.Favorite && !a.PinnedAt.Equal(b.PinnedAt) {
-			return a.PinnedAt.After(b.PinnedAt)
-		}
-		if !a.FirstSeen.Equal(b.FirstSeen) {
-			return a.FirstSeen.After(b.FirstSeen)
-		}
-		return a.Num > b.Num
-	})
-	return append(in, rest...)
-}
+// laterFirst and projectsFirst are the two block rules of the list
+// (orchtree.LaterFirst / ProjectsFirst): watch-later sessions in their own
+// block at the very newest end, then one block per project.
+func laterFirst(src []mdl.Session) []mdl.Session    { return orchtree.LaterFirst(src) }
+func projectsFirst(src []mdl.Session) []mdl.Session { return orchtree.ProjectsFirst(src) }
 
 // sessionMatchesQuery returns true when q (lower-cased) appears in any of
 // the human-readable fields of s. We don't search payloads or transcripts
@@ -3130,6 +3097,15 @@ func (m *model) View() tea.View {
 	if m.restartConfirm {
 		confirmBox(m.restartBox())
 	}
+	if m.childrenOpen {
+		if box := m.childrenBox(); box != "" {
+			bw, bh := lipgloss.Width(box), lipgloss.Height(box)
+			out = overlay(out, box, max(0, (m.width-bw)/2), max(1, (m.height-bh)/3))
+			v.Cursor = nil
+		} else {
+			m.closeChildren() // its session left the list
+		}
+	}
 	if m.helpOpen {
 		box := m.helpBox()
 		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
@@ -3300,7 +3276,11 @@ func (m *model) renderHeader() string {
 	if m.groupLocked {
 		leftLabel += " " + subtitleStyle.Render("(locked)")
 	}
-	if m.showArchived || m.groupFilter != "" || m.accountFilter != "" || m.searchQuery != "" {
+	if root, ok := m.tree().Get(m.subtreeRoot); ok && m.subtreeRoot != "" {
+		// Z: only this session and its children are listed.
+		leftLabel += " " + pendingStyle.Render("["+i18n.Tf("%s の子だけ", root.Ref())+"]")
+	}
+	if m.showArchived || m.groupFilter != "" || m.accountFilter != "" || m.searchQuery != "" || m.subtreeRoot != "" {
 		left = leftLabel
 		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap < 1 {
@@ -4080,6 +4060,11 @@ func (m *model) renderSessionsList(width, height int) string {
 		sessionIdx int // -1 for headers
 	}
 
+	// While Z narrows the list, a line over it says so (and how to leave).
+	note := m.subtreeNote(width)
+	if note != "" {
+		height--
+	}
 	now := time.Now()
 	var rows []rowEntry
 	// Project members carry a one-cell gutter in the project's color; the
@@ -4093,7 +4078,7 @@ func (m *model) renderSessionsList(width, height int) string {
 	prevBucket := ""
 	flat := m.settings.RecentOrder
 	for i, s := range m.sessions {
-		bucket := bucketFor(s, now, flat)
+		bucket := m.rowBucket(i, now, flat)
 		inProject := strings.HasPrefix(bucket, projectBucketPrefix)
 		if bucket != prevBucket {
 			// A blank line around each project block keeps neighbouring
@@ -4103,10 +4088,18 @@ func (m *model) renderSessionsList(width, height int) string {
 			}
 			var header string
 			switch {
+			case bucket == bucketOrch:
+				header = orchHeaderStyle.Render(padRight(" "+i18n.T("統括"), width))
 			case bucket == bucketLater:
 				header = laterHeaderStyle.Render(padRight("⏰ "+bucket+"  (L to clear)", width))
 			case inProject:
-				header = renderProjectHeader(s, stats[s.Project], width)
+				st := stats[s.Project]
+				// The project's orchestrator leads its block: its subtree
+				// is the project's 子 / 判断待ち.
+				if orchtree.IsProjectOrch(s) {
+					st.kids = m.tree().Count(s.SessionID)
+				}
+				header = renderProjectHeader(s, st, width)
 			case bucket == bucketFavorites:
 				header = groupHeaderStyle.Render(padRight("📌 "+bucket, width))
 			default:
@@ -4115,9 +4108,36 @@ func (m *model) renderSessionsList(width, height int) string {
 			rows = append(rows, rowEntry{lines: []string{header}, sessionIdx: -1})
 			prevBucket = bucket
 		}
-		row := m.renderSessionRow(s, i == m.selSess, rowW)
+		// A row hanging under another is indented by the tree gutter, which
+		// comes out of the row's own width.
+		depth := 0
+		if e, ok := m.metaAt(i); ok {
+			depth = e.Depth
+		}
+		treeFirst, treeRest := treeGutter(depth)
+		// Never indent a row down to nothing on a narrow list.
+		for depth > 0 && rowW-runewidth.StringWidth(treeFirst) < 24 {
+			depth--
+			treeFirst, treeRest = treeGutter(depth)
+		}
+		innerW := rowW - runewidth.StringWidth(treeFirst)
+		row := m.renderSessionRowDeco(s, i == m.selSess, innerW, m.decoAt(i))
 		// renderSessionRow returns a 2-line block ending with "\n"; split.
 		lines := strings.Split(strings.TrimRight(row, "\n"), "\n")
+		for k := range lines {
+			// A row is never wider than its slot: an overflow would wrap
+			// and throw the line accounting off.
+			if ansi.StringWidth(lines[k]) > innerW {
+				lines[k] = ansi.Truncate(lines[k], innerW, "")
+			}
+			if treeFirst != "" {
+				g := treeRest
+				if k == 0 {
+					g = treeFirst
+				}
+				lines[k] = subtitleStyle.Render(g) + lines[k]
+			}
+		}
 		if len(stats) > 0 {
 			gutter := " "
 			if s.Project != "" {
@@ -4182,6 +4202,11 @@ func (m *model) renderSessionsList(width, height int) string {
 	body := strings.Join(allLines[m.sessScroll:end], "\n")
 	// Mouse clicks map a list row back to its session through this.
 	m.listLineSess = lineSess[m.sessScroll:end]
+	if note != "" {
+		body = note + "\n" + body
+		m.listLineSess = append([]int{-1}, m.listLineSess...)
+		height++
+	}
 	indicator := fmt.Sprintf("%d / %d sessions", m.selSess+1, len(m.sessions))
 	if m.sessScroll > 0 || end < len(allLines) {
 		indicator += "  ↑↓ to scroll"
@@ -4202,6 +4227,9 @@ const projectBucketPrefix = "\x00project:"
 type projectStat struct {
 	total, running, needsYou int
 	latest                   time.Time
+	// kids is the subtree of the project's orchestrator (set by the list
+	// when one leads the block).
+	kids orchtree.Count
 }
 
 // projectStats tallies the sessions of each project in ss.
@@ -4241,6 +4269,9 @@ func renderProjectHeader(s mdl.Session, st projectStat, width int) string {
 	if st.needsYou > 0 {
 		meta += fmt.Sprintf(" · %d needs you", st.needsYou)
 	}
+	if k := kidsText(st.kids); k != "" {
+		meta += " · " + k
+	}
 	name := " PROJECT  " + s.Project + "  "
 	room := width - runewidth.StringWidth(name)
 	if room < 0 {
@@ -4257,19 +4288,26 @@ func renderProjectHeader(s mdl.Session, st projectStat, width int) string {
 // In recent order (flat) there are only date groups, by the same time
 // the list is sorted on (activityAt).
 func bucketFor(s mdl.Session, now time.Time, flat bool) string {
-	at := s.LastSeen
-	if flat {
-		at = activityAt(s)
-	} else {
+	if !flat {
 		if s.Later {
 			return bucketLater
 		}
 		if s.Project != "" {
 			return projectBucketPrefix + s.Project
 		}
-		if s.Favorite {
-			return bucketFavorites
-		}
+	}
+	return dateBucket(s, now, flat)
+}
+
+// dateBucket is the heading of a row that is in no block of its own:
+// Pinned, else by date (LastSeen; the latest activity in recent order,
+// which has only date groups).
+func dateBucket(s mdl.Session, now time.Time, flat bool) string {
+	at := s.LastSeen
+	if flat {
+		at = activityAt(s)
+	} else if s.Favorite {
+		return bucketFavorites
 	}
 	if at.IsZero() {
 		return "Unknown"
@@ -4305,6 +4343,13 @@ func sameYMD(a, b time.Time) bool {
 // Line 1 leads with status, age, and the title (the most useful identifier
 // for the operator). Line 2 carries supporting metadata in dim text.
 func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string {
+	return m.renderSessionRowDeco(s, selected, width, rowDeco{})
+}
+
+// renderSessionRowDeco is renderSessionRow with the tree's marks (deco):
+// "↳ref" in front of the title when the parent isn't the row above, and
+// the 子 / 判断待ち counts leading line 2. Both come out of the row's width.
+func (m *model) renderSessionRowDeco(s mdl.Session, selected bool, width int, deco rowDeco) string {
 	// A one-cell bar in the session's color (Session.Color, shared with the
 	// portal) leads both lines. A background-colored space rather than a
 	// block glyph: those are East-Asian ambiguous width.
@@ -4368,6 +4413,11 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	if role != "" {
 		titleBudget -= runewidth.StringWidth(role) + 1
 	}
+	via := ""
+	if deco.via != "" {
+		via = viaMark + deco.via
+		titleBudget -= runewidth.StringWidth(via) + 1
+	}
 	// Title generation in flight: a spinner in front of the title, so it
 	// shows even when line 2 is cut short.
 	titling := ""
@@ -4394,6 +4444,9 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 	}
 	if ref != "" {
 		titleStyled = refStyle.Render(ref) + " " + titleStyled
+	}
+	if via != "" {
+		titleStyled = subtitleStyle.Render(via) + " " + titleStyled
 	}
 	if s.Unseen && !selected {
 		// Progress since the operator last looked (Session.Unseen).
@@ -4449,6 +4502,12 @@ func (m *model) renderSessionRow(s mdl.Session, selected bool, width int) string
 		pc := mdl.ProjectColorOf(s.Project, s.ProjectColor)
 		proj = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(pc)).Render(name) + subtitleStyle.Render(" · ")
 		metaBudget -= runewidth.StringWidth(name) + 3
+	}
+	// A session with children says how many, and how many wait on the
+	// operator, before anything else on the line.
+	if kids, kw := kidsPrefix(deco); kw > 0 {
+		proj = kids + proj
+		metaBudget -= kw
 	}
 	if metaBudget < 10 {
 		metaBudget = 10
