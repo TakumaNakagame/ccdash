@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/TakumaNakagame/ccdash/internal/model"
+	"github.com/TakumaNakagame/ccdash/internal/orchtree"
 	"github.com/TakumaNakagame/ccdash/internal/plaintext"
 	"github.com/TakumaNakagame/ccdash/internal/store"
 	"github.com/TakumaNakagame/ccdash/internal/transcript"
@@ -160,59 +161,26 @@ func (s *Server) spawnResult(ctx context.Context, h host, sp spawned, out map[st
 	}
 }
 
-// The my_sessions groups, in the order they are returned.
+// The my_sessions groups, in the order they are returned. The rule that
+// files a child (childGroup) is orchtree's — one implementation, shared
+// with the TUI's list and pinned against the portal's by the fixture
+// internal/hub/testdata/orchtree.json.
 const (
-	groupNeeds    = "needs_operator"
-	groupWorking  = "working"
-	groupReported = "reported"
-	groupFinished = "finished"
+	groupNeeds    = orchtree.GroupNeeds
+	groupWorking  = orchtree.GroupWorking
+	groupReported = orchtree.GroupReported
+	groupFinished = orchtree.GroupFinished
 )
 
-// childGroup files a child for my_sessions: waits on the operator (an
-// approval, a question, a declared answer / action), is working (mid-turn,
-// or running and waiting on something in the background), has reported, or
-// is done with.
-//
-// "Reported" is a finished turn that is news to someone: the operator
-// hasn't looked at it (attention done / Unseen), or the caller hasn't been
-// shown it — it ended at or after shown, the caller's previous my_sessions
-// call (reportWindow ago when there was none). The second half matters
-// because the operator's mark is cleared by any ccdash screen the row sat
-// under for three seconds (the TUI cursor, an open chat): a child that
-// finished and was "seen" that way before its parent asked used to land in
-// finished, where a parent looking for reports never noticed it.
-func childGroup(x model.Session, shown time.Time) string {
-	switch {
-	case x.PendingCount > 0 || x.Attention == model.AttentionNeedsYou || model.WaitNeedsYou(x.Wait):
-		return groupNeeds
-	case x.Status == model.StatusActive || running(x) && x.Wait == model.WaitBackground:
-		return groupWorking
-	case x.Attention == model.AttentionDone || x.Unseen:
-		return groupReported
-	}
-	if end := turnEnd(x); !end.IsZero() && !end.Before(shown) {
-		return groupReported
-	}
-	return groupFinished
-}
+// childGroup files a child for my_sessions (orchtree.ChildGroup): waits on
+// the operator, is working, has reported — a finished turn the operator
+// hasn't looked at or the caller hasn't been shown (it ended at or after
+// shown, the caller's previous my_sessions call) — or is done with.
+func childGroup(x model.Session, shown time.Time) string { return orchtree.ChildGroup(x, shown) }
 
 // reportWindow is how far back a first my_sessions call (no earlier one on
-// record) looks for turns the caller hasn't been shown — the same span a
-// just-read reply stays marked in the lists.
-const reportWindow = model.RecentReplyWindow
-
-// turnEnd is when a child that isn't working last finished something: its
-// newest activity, the Stop that left the attention mark, or its declared
-// status.
-func turnEnd(x model.Session) time.Time {
-	t := x.LastActivity
-	for _, o := range []time.Time{x.AttentionAt, x.WaitAt} {
-		if o.After(t) {
-			t = o
-		}
-	}
-	return t
-}
+// record) looks for turns the caller hasn't been shown.
+const reportWindow = orchtree.ReportWindow
 
 // reachOf is how the caller sends a child a message: Claude Code's
 // SendMessage when it runs on this machine and has a name there, else
@@ -225,15 +193,7 @@ func reachOf(peer string) string {
 }
 
 // changedAt is when a child last changed in a way my_sessions shows.
-func changedAt(x model.Session) time.Time {
-	t := x.LastSeen
-	for _, o := range []time.Time{x.LastActivity, x.AttentionAt, x.WaitAt, x.FirstSeen} {
-		if o.After(t) {
-			t = o
-		}
-	}
-	return t
-}
+func changedAt(x model.Session) time.Time { return orchtree.ChangedAt(x) }
 
 // childRow is one child in my_sessions.
 type childRow struct {

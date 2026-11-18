@@ -189,6 +189,13 @@ func (m *model) toggleGrid() tea.Cmd {
 		m.closeAllGridLive()
 		return m.loadTailCmd()
 	}
+	if len(m.orchFolded) > 0 {
+		// Folded rows are tiles like any other: lay the list out without
+		// the folds before picking them (orderSessions).
+		m.gridOpen = true
+		m.keepSelection(m.currentSessionID())
+		m.gridOpen = false
+	}
 	tiles := m.gridSessions()
 	if len(tiles) == 0 {
 		m.flash = "nothing to show — mark sessions with space, or wait for one to work"
