@@ -482,12 +482,19 @@ func TestMessageThroughHub(t *testing.T) {
 		t.Fatal(err)
 	}
 	var asked []string
-	s.childOnPeer = func(_ context.Context, dev, child, parent string) (bool, error) {
-		asked = append(asked, dev+"/"+child+"/"+parent)
-		if dev == "dev-down" {
-			return false, fmt.Errorf("the hub refuses this machine's peer access")
+	s.senderOnPeer = func(_ context.Context, dev, id string) (string, string, error) {
+		asked = append(asked, dev+"/"+id)
+		switch {
+		case dev == "dev-down":
+			return "", "", fmt.Errorf("the hub refuses this machine's peer access")
+		case dev == "dev-A" && id == "far-kid":
+			return "boss-1", "", nil
+		case dev == "dev-A" && id == "far-orch":
+			return "", model.RoleOrchestrator, nil
+		case dev == "dev-A" && id == "far-porch":
+			return "", model.RoleProjectOrchestrator, nil
 		}
-		return dev == "dev-A" && child == "far-kid" && parent == "boss-1", nil
+		return "", "", nil
 	}
 	devA := map[string]string{tunnel.HeaderPeerID: "dev-A", tunnel.HeaderPeerName: "%E4%BB%95%E4%BA%8B+laptop", tunnel.HeaderPeerLetter: "A"}
 	devB := map[string]string{tunnel.HeaderPeerID: "dev-B", tunnel.HeaderPeerName: "other", tunnel.HeaderPeerLetter: "C"}
@@ -543,7 +550,7 @@ func TestMessageThroughHub(t *testing.T) {
 	up := map[string]string{"text": "終わりました", "from_session": "far-kid", "from_ref": "12", "from_host": "the operator"}
 	rec = throughHub(s, false, "boss-1", up, devA)
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
-	if rec.Code != 200 || len(asked) != 1 || asked[0] != "dev-A/far-kid/boss-1" {
+	if rec.Code != 200 || len(asked) != 1 || asked[0] != "dev-A/far-kid" {
 		t.Fatalf("child on dev-A = %d %s (asked %q)", rec.Code, rec.Body, asked)
 	}
 	if m, _, _ := d.Message(ctx, out.ID); m.FromHost != "仕事 laptop" || m.FromRef != "A12" {

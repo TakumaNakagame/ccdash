@@ -250,6 +250,9 @@ var (
 	// working directory (brief.go): narrow routes of their own, never the
 	// generic settings write.
 	hubProjectNote = regexp.MustCompile(`^/api/projects/(brief|dir)$`)
+	// An orchestrator role and a project orchestrator's model (role.go):
+	// the operator's edits, never a peer's.
+	hubRoleEdit = regexp.MustCompile(`^/api/(sessions/[^/]+/role|projects/orchestrator)$`)
 	// A message between a parent and a child session on two machines
 	// (message.go) — for peers only, see hubAllowed.
 	hubMessage = regexp.MustCompile(`^/api/sessions/[^/]+/message$`)
@@ -274,6 +277,18 @@ func hubAllowed(r *http.Request, cfg settings.Settings) (bool, string) {
 		// with attach on, the hub can already start claude with any prompt
 		// in any directory (/pty/start), so a note that later starts carry
 		// is no new power — and with attach off it gets neither.
+		if !cfg.AttachEnabled {
+			return false, "attach is OFF on this device"
+		}
+		return true, ""
+	case r.Method == http.MethodPost && hubRoleEdit.MatchString(p):
+		// The operator's edit in the portal, and the mirror image of the
+		// message route below: never for another joined device. A role
+		// changes how claude is started here (tools, model), so it has the
+		// same gate as starting one.
+		if r.Header.Get(tunnel.HeaderPeerID) != "" {
+			return false, "not available through the hub to another device: only the operator changes roles"
+		}
 		if !cfg.AttachEnabled {
 			return false, "attach is OFF on this device"
 		}

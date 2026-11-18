@@ -67,6 +67,17 @@ func TestPeerAccess(t *testing.T) {
 			t.Errorf("control peer %s %s = %d, want 200", c[0], c[1], w.Code)
 		}
 	}
+	// A peer's start can't ask for an orchestrator role — with any
+	// spelling of the field — and an ordinary start still reaches the
+	// device whole.
+	for _, body := range []string{`{"cwd":"/tmp","role":"orchestrator"}`, `{"cwd":"/tmp","Role":"project-orchestrator","project":"web"}`, `{"role":"x","cwd":"/tmp"}`} {
+		if w := serve(handler, "POST", d+"/pty/start", body, auth); w.Code != http.StatusForbidden {
+			t.Errorf("control peer start %s = %d, want 403", body, w.Code)
+		}
+	}
+	if w := serve(handler, "POST", d+"/pty/start", `{"cwd":"/tmp","prompt":"hello","role":""}`, auth); w.Code != 200 {
+		t.Errorf("control peer plain start = %d, want 200", w.Code)
+	}
 	// Never: device management, approvals, typing, the raw terminal,
 	// settings, other hub routes.
 	for _, c := range [][2]string{
@@ -83,6 +94,10 @@ func TestPeerAccess(t *testing.T) {
 		{"PUT", d + "/api/brief-common"}, {"POST", d + "/api/brief-common"}, {"GET", d + "/api/brief-common"},
 		{"POST", d + "/api/projects/brief"}, {"POST", d + "/api/projects/dir"},
 		{"PUT", d + "/api/settings/session_setup_command"}, {"PUT", d + "/api/settings/brief_common"},
+		// Roles are the operator's to give: not the route, not the
+		// project's orchestrator model, not the orchestrator's own text.
+		{"POST", d + "/api/sessions/abc/role"}, {"POST", d + "/api/projects/orchestrator"},
+		{"PUT", d + "/api/settings/orchestrator_prompt"}, {"POST", d + "/pty/abc/restart"},
 	} {
 		if w := serve(handler, c[0], c[1], `{}`, auth); w.Code != http.StatusForbidden {
 			t.Errorf("control peer %s %s = %d, want 403", c[0], c[1], w.Code)

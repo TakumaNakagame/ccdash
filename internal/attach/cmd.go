@@ -36,7 +36,10 @@ func shellQuote(s string) string {
 // collector (re)started from a claude's shell would otherwise hand every
 // hosted claude CLAUDECODE=1 (a nested session) and that claude's effort.
 func SafeEnv() []string {
-	stripPfx := []string{"WARP_", "GHOSTTY_", "ITERM_", "KITTY_", "TABBY_", "CLAUDE_CODE_", "VSCODE_"}
+	// CCDASH_ROLE*: an orchestrator's role is its own. A collector (or a
+	// setup command) started from an orchestrator's shell must not hand it
+	// to the sessions it hosts; the collector sets it per child (role.go).
+	stripPfx := []string{"WARP_", "GHOSTTY_", "ITERM_", "KITTY_", "TABBY_", "CLAUDE_CODE_", "VSCODE_", "CCDASH_ROLE"}
 	stripKey := map[string]bool{
 		"TERM_PROGRAM":         true,
 		"TERM_PROGRAM_VERSION": true,
