@@ -1,0 +1,672 @@
+{
+ "about": "Cases for the >>> orchtree block of web/app.js (TestOrchTree). order: listOrder(listSort(rows), opt) as 'session|bucket|depth|via'; legacy cases also equal the pre-tree order. groups: childGroup(row, shown). counts: treeIndex(rows).counts as id → [descendants, of them waiting on the operator]. subtree: subtreeIds. inbox: inboxGroups as [orchestrator id, project, row ids].",
+ "order": [
+  {
+   "why": "no orchestrators, blocks only",
+   "opt": {},
+   "rows": [
+    { "session_id": "a", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z" },
+    { "session_id": "b", "num": 2, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "favorite": true, "pinned_at": "2026-11-05T00:00:00Z" },
+    { "session_id": "c", "num": 3, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "web", "project_order": 2 },
+    { "session_id": "d", "num": 4, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "web", "project_order": 2, "favorite": true, "pinned_at": "2026-11-06T00:00:00Z" },
+    { "session_id": "e", "num": 5, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "api", "project_order": 1 },
+    { "session_id": "f", "num": 6, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "later": true, "later_at": "2026-11-12T00:00:00Z" },
+    { "session_id": "g", "num": 7, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "unseen": true, "last_activity": "2026-11-12T05:00:00Z" },
+    { "session_id": "h", "num": 8, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "api", "project_order": 1, "unseen": true, "last_activity": "2026-11-11T03:00:00Z" },
+    { "session_id": "i", "num": 9, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "web", "project_order": 2, "later": true, "later_at": "2026-11-13T00:00:00Z" },
+    { "session_id": "j", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "k", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-10T00:00:00Z", "last_activity": "2026-11-08T01:00:00Z" }
+   ],
+   "legacy": true,
+   "want": [
+    "i|later|0|",
+    "f|later|0|",
+    "k|later|0|",
+    "h|p:api|0|",
+    "e|p:api|0|",
+    "d|p:web|0|",
+    "c|p:web|0|",
+    "j||0|",
+    "b||0|",
+    "g||0|",
+    "a||0|"
+   ]
+  },
+  {
+   "why": "no orchestrators, 新着を上に",
+   "opt": {
+    "lift": true
+   },
+   "rows": [
+    { "session_id": "a", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z" },
+    { "session_id": "b", "num": 2, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "favorite": true, "pinned_at": "2026-11-05T00:00:00Z" },
+    { "session_id": "c", "num": 3, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "web", "project_order": 2 },
+    { "session_id": "d", "num": 4, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "web", "project_order": 2, "favorite": true, "pinned_at": "2026-11-06T00:00:00Z" },
+    { "session_id": "e", "num": 5, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "api", "project_order": 1 },
+    { "session_id": "f", "num": 6, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "later": true, "later_at": "2026-11-12T00:00:00Z" },
+    { "session_id": "g", "num": 7, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "unseen": true, "last_activity": "2026-11-12T05:00:00Z" },
+    { "session_id": "h", "num": 8, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "api", "project_order": 1, "unseen": true, "last_activity": "2026-11-11T03:00:00Z" },
+    { "session_id": "i", "num": 9, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "web", "project_order": 2, "later": true, "later_at": "2026-11-13T00:00:00Z" },
+    { "session_id": "j", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "k", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-10T00:00:00Z", "last_activity": "2026-11-08T01:00:00Z" }
+   ],
+   "legacy": true,
+   "want": [
+    "g|new|0|",
+    "h|new|0|",
+    "k|new|0|",
+    "i|later|0|",
+    "f|later|0|",
+    "e|p:api|0|",
+    "d|p:web|0|",
+    "c|p:web|0|",
+    "j||0|",
+    "b||0|",
+    "a||0|"
+   ]
+  },
+  {
+   "why": "no orchestrators, 更新順",
+   "opt": {
+    "flat": true
+   },
+   "rows": [
+    { "session_id": "a", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z" },
+    { "session_id": "b", "num": 2, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "favorite": true, "pinned_at": "2026-11-05T00:00:00Z" },
+    { "session_id": "c", "num": 3, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "web", "project_order": 2 },
+    { "session_id": "d", "num": 4, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "web", "project_order": 2, "favorite": true, "pinned_at": "2026-11-06T00:00:00Z" },
+    { "session_id": "e", "num": 5, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "api", "project_order": 1 },
+    { "session_id": "f", "num": 6, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "later": true, "later_at": "2026-11-12T00:00:00Z" },
+    { "session_id": "g", "num": 7, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "unseen": true, "last_activity": "2026-11-12T05:00:00Z" },
+    { "session_id": "h", "num": 8, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "api", "project_order": 1, "unseen": true, "last_activity": "2026-11-11T03:00:00Z" },
+    { "session_id": "i", "num": 9, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "web", "project_order": 2, "later": true, "later_at": "2026-11-13T00:00:00Z" },
+    { "session_id": "j", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "k", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-10T00:00:00Z", "last_activity": "2026-11-08T01:00:00Z" }
+   ],
+   "legacy": true,
+   "want": [
+    "j||0|",
+    "b||0|",
+    "c||0|",
+    "d||0|",
+    "e||0|",
+    "f||0|",
+    "g||0|",
+    "h||0|",
+    "a||0|",
+    "i||0|",
+    "k||0|"
+   ]
+  },
+  {
+   "why": "the tree: global orchestrators on top with their no-project children, a project orchestrator first in its block",
+   "opt": {},
+   "rows": [
+    { "session_id": "G", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "role": "orchestrator" },
+    { "session_id": "G2", "num": 9, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "role": "orchestrator", "favorite": true, "pinned_at": "2026-11-03T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-04T00:00:00Z" },
+    { "session_id": "PO", "num": 2, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "role": "project-orchestrator", "project": "mam", "project_order": 1, "parent": "G" },
+    { "session_id": "w1", "num": 3, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO" },
+    { "session_id": "w2", "num": 4, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO", "favorite": true, "pinned_at": "2026-11-08T00:00:00Z" },
+    { "session_id": "w3", "num": 5, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w1" },
+    { "session_id": "w4", "num": 6, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w3" },
+    { "session_id": "m1", "num": 7, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "project": "mam", "project_order": 1 },
+    { "session_id": "m2", "num": 8, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "mam", "project_order": 1, "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "c1", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "G" },
+    { "session_id": "c2", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "c1" },
+    { "session_id": "l1", "num": 12, "first_seen": "2026-11-12T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "parent": "G" },
+    { "session_id": "l2", "num": 13, "first_seen": "2026-11-13T00:00:00Z", "last_seen": "2026-11-07T00:00:00Z", "parent": "l1" },
+    { "session_id": "l3", "num": 14, "first_seen": "2026-11-14T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "parent": "l2" },
+    { "session_id": "l4", "num": 15, "first_seen": "2026-11-15T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "parent": "l3" },
+    { "session_id": "x1", "num": 16, "first_seen": "2026-11-16T00:00:00Z", "last_seen": "2026-11-04T00:00:00Z", "parent": "c1" },
+    { "session_id": "y1", "num": 17, "first_seen": "2026-11-17T00:00:00Z", "last_seen": "2026-11-03T00:00:00Z", "parent": "gone" },
+    { "session_id": "z1", "num": 18, "first_seen": "2026-11-18T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z" }
+   ],
+   "want": [
+    "G|orch|0|",
+    "l1|orch|1|",
+    "l2|orch|2|",
+    "l3|orch|2|l2",
+    "l4|orch|2|l3",
+    "G2|orch|0|",
+    "PO|p:mam|0|G",
+    "w2|p:mam|1|",
+    "w1|p:mam|1|",
+    "w3|p:mam|2|",
+    "w4|p:mam|2|w3",
+    "m2|p:mam|0|",
+    "m1|p:mam|0|",
+    "c1|p:ccdash|0|G",
+    "c2|p:ccdash|1|",
+    "x1||0|c1",
+    "y1||0|",
+    "z1||0|"
+   ]
+  },
+  {
+   "why": "the tree with 新着を上に: an unread orchestrator stays, unread children are lifted",
+   "opt": {
+    "lift": true
+   },
+   "rows": [
+    { "session_id": "G", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "role": "orchestrator" },
+    { "session_id": "G2", "num": 9, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "role": "orchestrator", "favorite": true, "pinned_at": "2026-11-03T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-04T00:00:00Z" },
+    { "session_id": "PO", "num": 2, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "role": "project-orchestrator", "project": "mam", "project_order": 1, "parent": "G" },
+    { "session_id": "w1", "num": 3, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO" },
+    { "session_id": "w2", "num": 4, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO", "favorite": true, "pinned_at": "2026-11-08T00:00:00Z" },
+    { "session_id": "w3", "num": 5, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w1" },
+    { "session_id": "w4", "num": 6, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w3" },
+    { "session_id": "m1", "num": 7, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "project": "mam", "project_order": 1 },
+    { "session_id": "m2", "num": 8, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "mam", "project_order": 1, "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "c1", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "G" },
+    { "session_id": "c2", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "c1" },
+    { "session_id": "l1", "num": 12, "first_seen": "2026-11-12T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "parent": "G" },
+    { "session_id": "l2", "num": 13, "first_seen": "2026-11-13T00:00:00Z", "last_seen": "2026-11-07T00:00:00Z", "parent": "l1" },
+    { "session_id": "l3", "num": 14, "first_seen": "2026-11-14T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "parent": "l2" },
+    { "session_id": "l4", "num": 15, "first_seen": "2026-11-15T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "parent": "l3" },
+    { "session_id": "x1", "num": 16, "first_seen": "2026-11-16T00:00:00Z", "last_seen": "2026-11-04T00:00:00Z", "parent": "c1" },
+    { "session_id": "y1", "num": 17, "first_seen": "2026-11-17T00:00:00Z", "last_seen": "2026-11-03T00:00:00Z", "parent": "gone" },
+    { "session_id": "z1", "num": 18, "first_seen": "2026-11-18T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z" }
+   ],
+   "want": [
+    "G|orch|0|",
+    "l1|orch|1|",
+    "l2|orch|2|",
+    "l3|orch|2|l2",
+    "l4|orch|2|l3",
+    "G2|orch|0|",
+    "PO|p:mam|0|G",
+    "w2|p:mam|1|",
+    "w1|p:mam|1|",
+    "w3|p:mam|2|",
+    "w4|p:mam|2|w3",
+    "m2|p:mam|0|",
+    "m1|p:mam|0|",
+    "c1|p:ccdash|0|G",
+    "c2|p:ccdash|1|",
+    "x1||0|c1",
+    "y1||0|",
+    "z1||0|"
+   ]
+  },
+  {
+   "why": "the global orchestrator's own children folded away",
+   "opt": {
+    "collapsed": [
+     "G"
+    ]
+   },
+   "rows": [
+    { "session_id": "G", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "role": "orchestrator" },
+    { "session_id": "G2", "num": 9, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "role": "orchestrator", "favorite": true, "pinned_at": "2026-11-03T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-04T00:00:00Z" },
+    { "session_id": "PO", "num": 2, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "role": "project-orchestrator", "project": "mam", "project_order": 1, "parent": "G" },
+    { "session_id": "w1", "num": 3, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO" },
+    { "session_id": "w2", "num": 4, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO", "favorite": true, "pinned_at": "2026-11-08T00:00:00Z" },
+    { "session_id": "w3", "num": 5, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w1" },
+    { "session_id": "w4", "num": 6, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w3" },
+    { "session_id": "m1", "num": 7, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "project": "mam", "project_order": 1 },
+    { "session_id": "m2", "num": 8, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "mam", "project_order": 1, "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "c1", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "G" },
+    { "session_id": "c2", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "c1" },
+    { "session_id": "l1", "num": 12, "first_seen": "2026-11-12T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "parent": "G" },
+    { "session_id": "l2", "num": 13, "first_seen": "2026-11-13T00:00:00Z", "last_seen": "2026-11-07T00:00:00Z", "parent": "l1" },
+    { "session_id": "l3", "num": 14, "first_seen": "2026-11-14T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "parent": "l2" },
+    { "session_id": "l4", "num": 15, "first_seen": "2026-11-15T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "parent": "l3" },
+    { "session_id": "x1", "num": 16, "first_seen": "2026-11-16T00:00:00Z", "last_seen": "2026-11-04T00:00:00Z", "parent": "c1" },
+    { "session_id": "y1", "num": 17, "first_seen": "2026-11-17T00:00:00Z", "last_seen": "2026-11-03T00:00:00Z", "parent": "gone" },
+    { "session_id": "z1", "num": 18, "first_seen": "2026-11-18T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z" }
+   ],
+   "want": [
+    "G|orch|0|",
+    "G2|orch|0|",
+    "PO|p:mam|0|G",
+    "w2|p:mam|1|",
+    "w1|p:mam|1|",
+    "w3|p:mam|2|",
+    "w4|p:mam|2|w3",
+    "m2|p:mam|0|",
+    "m1|p:mam|0|",
+    "c1|p:ccdash|0|G",
+    "c2|p:ccdash|1|",
+    "x1||0|c1",
+    "y1||0|",
+    "z1||0|"
+   ]
+  },
+  {
+   "why": "rows taken by 新着 / あとで見る leave the tree; their children move up with a mark; orchestrators never leave",
+   "opt": {
+    "lift": true
+   },
+   "rows": [
+    { "session_id": "G", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "role": "orchestrator" },
+    { "session_id": "G2", "num": 9, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "role": "orchestrator", "favorite": true, "pinned_at": "2026-11-03T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-04T00:00:00Z" },
+    { "session_id": "PO", "num": 2, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "role": "project-orchestrator", "project": "mam", "project_order": 1, "parent": "G", "unseen": true, "later": true, "later_at": "2026-11-16T00:00:00Z" },
+    { "session_id": "w1", "num": 3, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO", "unseen": true, "last_activity": "2026-11-16T02:00:00Z" },
+    { "session_id": "w2", "num": 4, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO", "favorite": true, "pinned_at": "2026-11-08T00:00:00Z" },
+    { "session_id": "w3", "num": 5, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w1" },
+    { "session_id": "w4", "num": 6, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w3" },
+    { "session_id": "m1", "num": 7, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "project": "mam", "project_order": 1 },
+    { "session_id": "m2", "num": 8, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "mam", "project_order": 1, "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "c1", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "G" },
+    { "session_id": "c2", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "c1" },
+    { "session_id": "l1", "num": 12, "first_seen": "2026-11-12T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "parent": "G", "later": true, "later_at": "2026-11-15T00:00:00Z" },
+    { "session_id": "l2", "num": 13, "first_seen": "2026-11-13T00:00:00Z", "last_seen": "2026-11-07T00:00:00Z", "parent": "l1" },
+    { "session_id": "l3", "num": 14, "first_seen": "2026-11-14T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "parent": "l2" },
+    { "session_id": "l4", "num": 15, "first_seen": "2026-11-15T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "parent": "l3" },
+    { "session_id": "x1", "num": 16, "first_seen": "2026-11-16T00:00:00Z", "last_seen": "2026-11-04T00:00:00Z", "parent": "c1" },
+    { "session_id": "y1", "num": 17, "first_seen": "2026-11-17T00:00:00Z", "last_seen": "2026-11-03T00:00:00Z", "parent": "gone" },
+    { "session_id": "z1", "num": 18, "first_seen": "2026-11-18T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z" }
+   ],
+   "want": [
+    "G|orch|0|",
+    "l2|orch|1|l1",
+    "l3|orch|2|",
+    "l4|orch|2|l3",
+    "G2|orch|0|",
+    "w1|new|0|PO",
+    "l1|later|0|G",
+    "PO|p:mam|0|G",
+    "w2|p:mam|1|",
+    "w3|p:mam|1|w1",
+    "w4|p:mam|2|",
+    "m2|p:mam|0|",
+    "m1|p:mam|0|",
+    "c1|p:ccdash|0|G",
+    "c2|p:ccdash|1|",
+    "x1||0|c1",
+    "y1||0|",
+    "z1||0|"
+   ]
+  },
+  {
+   "why": "更新順: global orchestrators on top, everything else flat with marks",
+   "opt": {
+    "flat": true
+   },
+   "rows": [
+    { "session_id": "G", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "role": "orchestrator" },
+    { "session_id": "G2", "num": 9, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "role": "orchestrator", "favorite": true, "pinned_at": "2026-11-03T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-04T00:00:00Z" },
+    { "session_id": "PO", "num": 2, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "role": "project-orchestrator", "project": "mam", "project_order": 1, "parent": "G" },
+    { "session_id": "w1", "num": 3, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO" },
+    { "session_id": "w2", "num": 4, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO", "favorite": true, "pinned_at": "2026-11-08T00:00:00Z" },
+    { "session_id": "w3", "num": 5, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w1" },
+    { "session_id": "w4", "num": 6, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w3" },
+    { "session_id": "m1", "num": 7, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "project": "mam", "project_order": 1 },
+    { "session_id": "m2", "num": 8, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "mam", "project_order": 1, "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "c1", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "G" },
+    { "session_id": "c2", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "c1" },
+    { "session_id": "l1", "num": 12, "first_seen": "2026-11-12T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "parent": "G" },
+    { "session_id": "l2", "num": 13, "first_seen": "2026-11-13T00:00:00Z", "last_seen": "2026-11-07T00:00:00Z", "parent": "l1" },
+    { "session_id": "l3", "num": 14, "first_seen": "2026-11-14T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "parent": "l2" },
+    { "session_id": "l4", "num": 15, "first_seen": "2026-11-15T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "parent": "l3" },
+    { "session_id": "x1", "num": 16, "first_seen": "2026-11-16T00:00:00Z", "last_seen": "2026-11-04T00:00:00Z", "parent": "c1" },
+    { "session_id": "y1", "num": 17, "first_seen": "2026-11-17T00:00:00Z", "last_seen": "2026-11-03T00:00:00Z", "parent": "gone" },
+    { "session_id": "z1", "num": 18, "first_seen": "2026-11-18T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z" }
+   ],
+   "want": [
+    "G|orch|0|",
+    "G2|orch|0|",
+    "w1||0|PO",
+    "w2||0|PO",
+    "w3||0|w1",
+    "w4||0|w3",
+    "m1||0|",
+    "m2||0|",
+    "c1||0|G",
+    "c2||0|c1",
+    "l1||0|G",
+    "l2||0|l1",
+    "l3||0|l2",
+    "PO||0|G",
+    "l4||0|l3",
+    "x1||0|c1",
+    "y1||0|",
+    "z1||0|"
+   ]
+  },
+  {
+   "why": "parents in a cycle, a self parent",
+   "opt": {},
+   "rows": [
+    { "session_id": "p", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "x", "parent": "q" },
+    { "session_id": "q", "num": 2, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "project": "x", "parent": "p" },
+    { "session_id": "s", "num": 3, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-07T00:00:00Z", "parent": "s" },
+    { "session_id": "u", "num": 4, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "parent": "v" },
+    { "session_id": "v", "num": 5, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "parent": "u" }
+   ],
+   "want": [
+    "q|p:x|0|p",
+    "p|p:x|1|",
+    "s||0|",
+    "u||0|v",
+    "v||0|u"
+   ]
+  },
+  {
+   "why": "archived rows are never fixed",
+   "opt": {},
+   "rows": [
+    { "session_id": "G", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "role": "orchestrator", "archived": true },
+    { "session_id": "PO", "num": 2, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-04T00:00:00Z", "role": "project-orchestrator", "project": "mam", "archived": true },
+    { "session_id": "w", "num": 3, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "project": "mam", "parent": "PO", "archived": true },
+    { "session_id": "n", "num": 4, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-03T00:00:00Z", "parent": "G", "archived": true }
+   ],
+   "want": [
+    "PO|p:mam|0|",
+    "w|p:mam|1|",
+    "G||0|",
+    "n||0|G"
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "why": "a pending approval",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "active", "pending_count": 1 },
+   "want": "needs",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "a question on screen",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "idle", "attention": "needs_you" },
+   "want": "needs",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "a declared answer",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "idle", "wait": "answer" },
+   "want": "needs",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "a declared action, stopped",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "stopped", "wait": "action" },
+   "want": "needs",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "mid-turn",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "active" },
+   "want": "working",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "idle, waiting on CI",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "idle", "wait": "background" },
+   "want": "working",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "stopped with a background wait is not working",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "stopped", "wait": "background", "last_activity": "2026-11-10T00:00:00Z" },
+   "want": "finished",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "finished, unread",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "idle", "attention": "done", "last_activity": "2026-11-10T00:00:00Z" },
+   "want": "reported",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "NEW",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "stopped", "unseen": true, "last_activity": "2026-11-10T00:00:00Z" },
+   "want": "reported",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "read by the operator, but it ended after its parent last looked",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "idle", "wait": "report", "wait_at": "2026-11-18T11:00:00Z", "last_activity": "2026-11-18T10:00:00Z" },
+   "want": "reported",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "ended exactly when the parent looked",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "idle", "last_activity": "2026-11-18T09:00:00Z" },
+   "want": "reported",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "ended before the parent looked",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "idle", "last_activity": "2026-11-18T08:00:00Z" },
+   "want": "finished",
+   "shown": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "no activity on record",
+   "row": { "session_id": "s", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-18T00:00:00Z", "status": "stopped" },
+   "want": "finished",
+   "shown": "2026-11-18T09:00:00Z"
+  }
+ ],
+ "counts": [
+  {
+   "why": "descendants of every session that has any",
+   "rows": [
+    { "session_id": "G", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "role": "orchestrator", "attention": "needs_you", "attention_at": "2026-11-17T01:00:00Z" },
+    { "session_id": "G2", "num": 9, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "role": "orchestrator", "favorite": true, "pinned_at": "2026-11-03T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-04T00:00:00Z" },
+    { "session_id": "PO", "num": 2, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "role": "project-orchestrator", "project": "mam", "project_order": 1, "parent": "G" },
+    { "session_id": "w1", "num": 3, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO" },
+    { "session_id": "w2", "num": 4, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO", "favorite": true, "pinned_at": "2026-11-08T00:00:00Z" },
+    { "session_id": "w3", "num": 5, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w1", "attention": "needs_you", "attention_at": "2026-11-17T05:00:00Z" },
+    { "session_id": "w4", "num": 6, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w3" },
+    { "session_id": "m1", "num": 7, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "project": "mam", "project_order": 1, "attention": "needs_you", "attention_at": "2026-11-17T07:00:00Z" },
+    { "session_id": "m2", "num": 8, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "mam", "project_order": 1, "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "c1", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "G" },
+    { "session_id": "c2", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "c1", "attention": "needs_you", "attention_at": "2026-11-17T11:00:00Z" },
+    { "session_id": "l1", "num": 12, "first_seen": "2026-11-12T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "parent": "G" },
+    { "session_id": "l2", "num": 13, "first_seen": "2026-11-13T00:00:00Z", "last_seen": "2026-11-07T00:00:00Z", "parent": "l1", "attention": "needs_you", "attention_at": "2026-11-17T13:00:00Z" },
+    { "session_id": "l3", "num": 14, "first_seen": "2026-11-14T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "parent": "l2" },
+    { "session_id": "l4", "num": 15, "first_seen": "2026-11-15T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "parent": "l3" },
+    { "session_id": "x1", "num": 16, "first_seen": "2026-11-16T00:00:00Z", "last_seen": "2026-11-04T00:00:00Z", "parent": "c1" },
+    { "session_id": "y1", "num": 17, "first_seen": "2026-11-17T00:00:00Z", "last_seen": "2026-11-03T00:00:00Z", "parent": "gone", "wait": "answer", "wait_at": "2026-11-16T00:00:00Z" },
+    { "session_id": "z1", "num": 18, "first_seen": "2026-11-18T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z", "attention": "needs_you", "attention_at": "2026-11-17T18:00:00Z" },
+    { "session_id": "q1", "num": 30, "first_seen": "2026-11-20T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z", "project": "zeta", "pending_count": 2, "attention_at": "2026-11-18T00:00:00Z" },
+    { "session_id": "q2", "num": 31, "first_seen": "2026-11-21T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z", "project": "alpha", "wait": "action", "wait_at": "2026-11-15T00:00:00Z", "archived": true }
+   ],
+   "want": {
+    "w3": [
+     1,
+     0
+    ],
+    "w1": [
+     2,
+     1
+    ],
+    "PO": [
+     4,
+     1
+    ],
+    "c1": [
+     2,
+     1
+    ],
+    "l3": [
+     1,
+     0
+    ],
+    "l2": [
+     2,
+     0
+    ],
+    "l1": [
+     3,
+     1
+    ],
+    "G": [
+     12,
+     3
+    ]
+   }
+  },
+  {
+   "why": "a cycle counts each row once",
+   "rows": [
+    { "session_id": "p", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "x", "parent": "q" },
+    { "session_id": "q", "num": 2, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "project": "x", "parent": "p" },
+    { "session_id": "s", "num": 3, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-07T00:00:00Z", "parent": "s" },
+    { "session_id": "u", "num": 4, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "parent": "v" },
+    { "session_id": "v", "num": 5, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "parent": "u" }
+   ],
+   "want": {
+    "p": [
+     1,
+     0
+    ],
+    "u": [
+     1,
+     0
+    ]
+   }
+  }
+ ],
+ "subtree": [
+  {
+   "why": "a project orchestrator's subtree",
+   "rows": [
+    { "session_id": "G", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "role": "orchestrator" },
+    { "session_id": "G2", "num": 9, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "role": "orchestrator", "favorite": true, "pinned_at": "2026-11-03T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-04T00:00:00Z" },
+    { "session_id": "PO", "num": 2, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "role": "project-orchestrator", "project": "mam", "project_order": 1, "parent": "G" },
+    { "session_id": "w1", "num": 3, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO" },
+    { "session_id": "w2", "num": 4, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO", "favorite": true, "pinned_at": "2026-11-08T00:00:00Z" },
+    { "session_id": "w3", "num": 5, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w1" },
+    { "session_id": "w4", "num": 6, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w3" },
+    { "session_id": "m1", "num": 7, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "project": "mam", "project_order": 1 },
+    { "session_id": "m2", "num": 8, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "mam", "project_order": 1, "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "c1", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "G" },
+    { "session_id": "c2", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "c1" },
+    { "session_id": "l1", "num": 12, "first_seen": "2026-11-12T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "parent": "G" },
+    { "session_id": "l2", "num": 13, "first_seen": "2026-11-13T00:00:00Z", "last_seen": "2026-11-07T00:00:00Z", "parent": "l1" },
+    { "session_id": "l3", "num": 14, "first_seen": "2026-11-14T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "parent": "l2" },
+    { "session_id": "l4", "num": 15, "first_seen": "2026-11-15T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "parent": "l3" },
+    { "session_id": "x1", "num": 16, "first_seen": "2026-11-16T00:00:00Z", "last_seen": "2026-11-04T00:00:00Z", "parent": "c1" },
+    { "session_id": "y1", "num": 17, "first_seen": "2026-11-17T00:00:00Z", "last_seen": "2026-11-03T00:00:00Z", "parent": "gone" },
+    { "session_id": "z1", "num": 18, "first_seen": "2026-11-18T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z" }
+   ],
+   "root": "PO",
+   "want": [
+    "PO",
+    "w1",
+    "w2",
+    "w3",
+    "w4"
+   ]
+  },
+  {
+   "why": "the global orchestrator's subtree crosses projects",
+   "rows": [
+    { "session_id": "G", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "role": "orchestrator" },
+    { "session_id": "G2", "num": 9, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "role": "orchestrator", "favorite": true, "pinned_at": "2026-11-03T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-04T00:00:00Z" },
+    { "session_id": "PO", "num": 2, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "role": "project-orchestrator", "project": "mam", "project_order": 1, "parent": "G" },
+    { "session_id": "w1", "num": 3, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO" },
+    { "session_id": "w2", "num": 4, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO", "favorite": true, "pinned_at": "2026-11-08T00:00:00Z" },
+    { "session_id": "w3", "num": 5, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w1" },
+    { "session_id": "w4", "num": 6, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w3" },
+    { "session_id": "m1", "num": 7, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "project": "mam", "project_order": 1 },
+    { "session_id": "m2", "num": 8, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "mam", "project_order": 1, "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "c1", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "G" },
+    { "session_id": "c2", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "c1" },
+    { "session_id": "l1", "num": 12, "first_seen": "2026-11-12T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "parent": "G" },
+    { "session_id": "l2", "num": 13, "first_seen": "2026-11-13T00:00:00Z", "last_seen": "2026-11-07T00:00:00Z", "parent": "l1" },
+    { "session_id": "l3", "num": 14, "first_seen": "2026-11-14T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "parent": "l2" },
+    { "session_id": "l4", "num": 15, "first_seen": "2026-11-15T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "parent": "l3" },
+    { "session_id": "x1", "num": 16, "first_seen": "2026-11-16T00:00:00Z", "last_seen": "2026-11-04T00:00:00Z", "parent": "c1" },
+    { "session_id": "y1", "num": 17, "first_seen": "2026-11-17T00:00:00Z", "last_seen": "2026-11-03T00:00:00Z", "parent": "gone" },
+    { "session_id": "z1", "num": 18, "first_seen": "2026-11-18T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z" }
+   ],
+   "root": "G",
+   "want": [
+    "G",
+    "PO",
+    "c1",
+    "l1",
+    "l2",
+    "l3",
+    "l4",
+    "c2",
+    "x1",
+    "w1",
+    "w2",
+    "w3",
+    "w4"
+   ]
+  }
+ ],
+ "inbox": [
+  {
+   "why": "grouped by the orchestrator that watches, else the project, else nothing",
+   "rows": [
+    { "session_id": "G", "num": 1, "first_seen": "2026-11-01T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "role": "orchestrator", "attention": "needs_you", "attention_at": "2026-11-17T01:00:00Z" },
+    { "session_id": "G2", "num": 9, "first_seen": "2026-11-02T00:00:00Z", "last_seen": "2026-11-17T00:00:00Z", "role": "orchestrator", "favorite": true, "pinned_at": "2026-11-03T00:00:00Z", "unseen": true, "later": true, "later_at": "2026-11-04T00:00:00Z" },
+    { "session_id": "PO", "num": 2, "first_seen": "2026-11-03T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "role": "project-orchestrator", "project": "mam", "project_order": 1, "parent": "G" },
+    { "session_id": "w1", "num": 3, "first_seen": "2026-11-04T00:00:00Z", "last_seen": "2026-11-16T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO" },
+    { "session_id": "w2", "num": 4, "first_seen": "2026-11-05T00:00:00Z", "last_seen": "2026-11-15T00:00:00Z", "project": "mam", "project_order": 1, "parent": "PO", "favorite": true, "pinned_at": "2026-11-08T00:00:00Z" },
+    { "session_id": "w3", "num": 5, "first_seen": "2026-11-06T00:00:00Z", "last_seen": "2026-11-14T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w1", "attention": "needs_you", "attention_at": "2026-11-17T05:00:00Z" },
+    { "session_id": "w4", "num": 6, "first_seen": "2026-11-07T00:00:00Z", "last_seen": "2026-11-13T00:00:00Z", "project": "mam", "project_order": 1, "parent": "w3" },
+    { "session_id": "m1", "num": 7, "first_seen": "2026-11-08T00:00:00Z", "last_seen": "2026-11-12T00:00:00Z", "project": "mam", "project_order": 1, "attention": "needs_you", "attention_at": "2026-11-17T07:00:00Z" },
+    { "session_id": "m2", "num": 8, "first_seen": "2026-11-09T00:00:00Z", "last_seen": "2026-11-11T00:00:00Z", "project": "mam", "project_order": 1, "favorite": true, "pinned_at": "2026-11-09T00:00:00Z" },
+    { "session_id": "c1", "num": 10, "first_seen": "2026-11-10T00:00:00Z", "last_seen": "2026-11-10T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "G" },
+    { "session_id": "c2", "num": 11, "first_seen": "2026-11-11T00:00:00Z", "last_seen": "2026-11-09T00:00:00Z", "project": "ccdash", "project_order": 2, "parent": "c1", "attention": "needs_you", "attention_at": "2026-11-17T11:00:00Z" },
+    { "session_id": "l1", "num": 12, "first_seen": "2026-11-12T00:00:00Z", "last_seen": "2026-11-08T00:00:00Z", "parent": "G" },
+    { "session_id": "l2", "num": 13, "first_seen": "2026-11-13T00:00:00Z", "last_seen": "2026-11-07T00:00:00Z", "parent": "l1", "attention": "needs_you", "attention_at": "2026-11-17T13:00:00Z" },
+    { "session_id": "l3", "num": 14, "first_seen": "2026-11-14T00:00:00Z", "last_seen": "2026-11-06T00:00:00Z", "parent": "l2" },
+    { "session_id": "l4", "num": 15, "first_seen": "2026-11-15T00:00:00Z", "last_seen": "2026-11-05T00:00:00Z", "parent": "l3" },
+    { "session_id": "x1", "num": 16, "first_seen": "2026-11-16T00:00:00Z", "last_seen": "2026-11-04T00:00:00Z", "parent": "c1" },
+    { "session_id": "y1", "num": 17, "first_seen": "2026-11-17T00:00:00Z", "last_seen": "2026-11-03T00:00:00Z", "parent": "gone", "wait": "answer", "wait_at": "2026-11-16T00:00:00Z" },
+    { "session_id": "z1", "num": 18, "first_seen": "2026-11-18T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z", "attention": "needs_you", "attention_at": "2026-11-17T18:00:00Z" },
+    { "session_id": "q1", "num": 30, "first_seen": "2026-11-20T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z", "project": "zeta", "pending_count": 2, "attention_at": "2026-11-18T00:00:00Z" },
+    { "session_id": "q2", "num": 31, "first_seen": "2026-11-21T00:00:00Z", "last_seen": "2026-11-02T00:00:00Z", "project": "alpha", "wait": "action", "wait_at": "2026-11-15T00:00:00Z", "archived": true }
+   ],
+   "want": [
+    [
+     "G",
+     "",
+     [
+      "G",
+      "c2",
+      "l2"
+     ]
+    ],
+    [
+     "PO",
+     "mam",
+     [
+      "w3",
+      "m1"
+     ]
+    ],
+    [
+     "",
+     "zeta",
+     [
+      "q1"
+     ]
+    ],
+    [
+     "",
+     "",
+     [
+      "y1",
+      "z1"
+     ]
+    ]
+   ]
+  }
+ ],
+ "shown": [
+  {
+   "why": "the parent's bookmark",
+   "parent": {
+    "children_seen_at": "2026-11-18T09:00:00Z"
+   },
+   "now": "2026-11-18T12:00:00Z",
+   "want": "2026-11-18T09:00:00Z"
+  },
+  {
+   "why": "no bookmark: 30 minutes back",
+   "parent": {},
+   "now": "2026-11-18T12:00:00Z",
+   "want": "2026-11-18T11:30:00Z"
+  }
+ ]
+}

@@ -198,7 +198,7 @@ function haptic(ms = 8) { try { navigator.vibrate?.(ms); } catch {} }
 function paintShell(parts) {
   const detail = parts[0] === "d" && (parts[2] === "s" || parts[2] === "p");
   document.body.classList.toggle("detail", detail);
-  const tab = parts[0] === "grid" ? "grid" : parts[0] === "tasks" ? "tasks" : parts[0] === "d" || parts[0] === "s" ? "sessions" : "home";
+  const tab = parts[0] === "grid" ? "grid" : parts[0] === "tasks" ? "tasks" : parts[0] === "inbox" ? "inbox" : parts[0] === "d" || parts[0] === "s" ? "sessions" : "home";
   for (const a of document.querySelectorAll("#tabbar a")) a.classList.toggle("on", a.dataset.tab === tab);
 }
 
@@ -316,6 +316,10 @@ const ICONS = {
   sidebar: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/>',
   expand: '<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/>',
   eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  child: '<path d="m15 10 5 5-5 5"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/>',
+  tree: '<path d="M21 12h-8"/><path d="M21 6H8"/><path d="M21 18h-8"/><path d="M3 6v4c0 1.1.9 2 2 2h3"/><path d="M3 10v6c0 1.1.9 2 2 2h3"/>',
+  inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  note: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
   download: '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
 };
 function icon(name) {
@@ -476,6 +480,7 @@ function route() {
   mainMount = view;
   if (parts[0] === "grid") return gridPage();
   if (parts[0] === "tasks") return tasksPage(parts[1]);
+  if (parts[0] === "inbox") return inboxPage();
   if (parts[0].split("?")[0] === "intake") return intakePage();
   if (parts[0] === "s") return devicePage();
   if (inDevice) {
@@ -495,7 +500,7 @@ function route() {
 function parentHash() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   if (parts[0] === "grid") return beforeGrid || "#/";
-  if (parts[0] === "s") return "#/";
+  if (parts[0] === "s" || parts[0] === "inbox") return "#/";
   if (parts[0] !== "d" || !parts[1]) return "";
   const dev = `#/d/${parts[1]}`;
   if (parts[2] === "s" && parts[3] && parts[4] === "diff") return `${dev}/s/${parts[3]}`;
@@ -641,7 +646,8 @@ function devicesPage() {
     const cols = BOARD_COLS.map(([k, label]) => {
       const cards = b[k] || [];
       return h("div", { class: "board-col " + k },
-        h("div", { class: "board-head" }, label, h("span", { class: "count" }, cards.length)),
+        h("div", { class: "board-head" }, label, h("span", { class: "count" }, cards.length),
+          k === "needs_you" && cards.length ? h("a", { class: "btn small board-answer", href: "#/inbox" }, T("まとめて答える")) : null),
         ...(cards.length ? cards.slice(0, 30).map(boardCard) : [h("div", { class: "muted small board-empty" }, BOARD_EMPTY[k] || T("なし"))]));
     });
     board.replaceChildren(...cols);
@@ -797,11 +803,13 @@ function inkOn(bg) {
   if (!(bg?.length === 7) || Number.isNaN(v)) return "#ffffff";
   return 0.299 * (v >> 16 & 255) + 0.587 * (v >> 8 & 255) + 0.114 * (v & 255) > 150 ? "#111111" : "#ffffff";
 }
-// projectsFirst mirrors the TUI: project members go to the top, one block
-// per project, in a stable order that activity never changes — projects by
-// their operator-set order (project_order; ▲▼ on the band); inside a block
-// pins first (latest pin first), then newest-started; the rest keep their
-// order.
+// >>> orchtree
+// The session list's order and the orchestrator tree, as pure functions
+// (no DOM, no T()): TestOrchTree runs this block under node against
+// internal/hub/testdata/orchtree.json, and the Android app and the TUI
+// follow the same cases. Rows are the collectors' session rows; a session
+// id is unique across hosts, so parents are matched by id alone.
+
 // pinOrder: among two pinned sessions, the more recently pinned first.
 function pinOrder(a, b) {
   if (!a.favorite || !b.favorite) return 0;
@@ -823,25 +831,16 @@ function newFirst(rows) {
   const fresh = rows.filter((s) => s.unseen).sort((a, b) => t(b) - t(a));
   return fresh.length ? [...fresh, ...rows.filter((s) => !s.unseen)] : rows;
 }
-// The 新着 block is on unless turned off. The choice is a per-user pref
-// (/api/prefs new_first, cached in look) so every browser — and the local
-// portal, whose localStorage is another origin's — shows the same list.
-function newFirstOn() {
-  return look.new_first !== "off";
-}
-// 更新順 (list_order "recent", a per-user pref like new_first): one flat
-// list, the session that moved last first, whatever its project — no
-// project, pin, あとで見る or 新着 blocks; only date bands by that same
-// time, so the order and the bands agree. Off = the project blocks.
-function recentOrderOn() {
-  return look.list_order === "recent";
-}
 const activityAt = (s) => new Date(s.last_activity || s.last_seen || 0).getTime();
 function byActivity(rows) {
   return [...rows].sort((a, b) => (activityAt(b) - activityAt(a)) || ((b.num || 0) - (a.num || 0)));
 }
-// With several hosts a project is one block whatever host its sessions run
-// on (each host keeps its own order; the block takes the lowest).
+// projectsFirst mirrors the TUI: project members go to the top, one block
+// per project, in a stable order that activity never changes — projects by
+// their operator-set order (project_order; ▲▼ on the band); inside a block
+// pins first (latest pin first), then newest-started; the rest keep their
+// order. With several hosts a project is one block whatever host its
+// sessions run on (each host keeps its own order; the block takes the lowest).
 function projectsFirst(rows) {
   const t = (v) => (v ? new Date(v).getTime() : 0);
   if (!rows.some((s) => s.project)) return rows;
@@ -851,6 +850,251 @@ function projectsFirst(rows) {
     a.project === b.project ? (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (t(b.first_seen) - t(a.first_seen)) || ((b.num || 0) - (a.num || 0))
       : (ord.get(a.project) - ord.get(b.project)) || a.project.localeCompare(b.project));
   return [...inP, ...rows.filter((s) => !s.project)];
+}
+
+// listSort is the list's base order, before any block is formed: pins
+// first (latest pin first), then last seen.
+function listSort(rows) {
+  return [...rows].sort((a, b) => (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (new Date(b.last_seen) - new Date(a.last_seen)));
+}
+
+const ROLE_ORCH = "orchestrator", ROLE_PROJECT_ORCH = "project-orchestrator";
+// A global orchestrator is fixed at the top of the list, a project's at the
+// top of its project block — unless archived (the アーカイブ view is flat).
+const isTopOrch = (s) => s.role === ROLE_ORCH && !s.archived;
+const isProjectOrch = (s) => s.role === ROLE_PROJECT_ORCH && !s.archived && !!s.project;
+const TREE_MAX_DEPTH = 2;
+
+// needsOperator: the session waits on the person — a pending approval, a
+// question or dialog (attention needs_you), or a declared answer / action.
+// The one rule behind every 判断待ち count (the first case of childGroup in
+// internal/mcpserver/orchestrator.go).
+function needsOperator(s) {
+  return !!s && ((s.pending_count || 0) > 0 || s.attention === "needs_you" || s.wait === "answer" || s.wait === "action");
+}
+
+// childGroup files a session for the 子セッション pane, exactly as ccdash
+// mcp's my_sessions does (childGroup in orchestrator.go): "needs" (waits on
+// the operator), "working" (mid-turn, or running with a declared background
+// wait), "reported" (a finished turn that is news: unread by the operator,
+// or ended at / after shown — when its parent last listed its children),
+// else "finished". shown and the times are Unix ms.
+function childGroup(s, shown) {
+  const t = (v) => (v ? new Date(v).getTime() : 0);
+  if (needsOperator(s)) return "needs";
+  const running = s.status === "active" || s.status === "idle";
+  if (s.status === "active" || (running && s.wait === "background")) return "working";
+  if (s.attention === "done" || s.unseen) return "reported";
+  const end = Math.max(t(s.last_activity), t(s.attention_at), t(s.wait_at));
+  return end && end >= shown ? "reported" : "finished";
+}
+// childShown is the "shown" of childGroup for a parent row: when it last
+// called my_sessions (children_seen_at), else 30 min ago (reportWindow).
+function childShown(parent, now) {
+  const at = parent?.children_seen_at ? new Date(parent.children_seen_at).getTime() : 0;
+  return at || now - 30 * 60 * 1000;
+}
+// childChangedAt orders the rows of a group, newest first (changedAt in Go).
+function childChangedAt(s) {
+  const t = (v) => (v ? new Date(v).getTime() : 0);
+  return Math.max(t(s.last_seen), t(s.last_activity), t(s.attention_at), t(s.wait_at), t(s.first_seen));
+}
+// childGroups files rows (a parent's children) into the pane's sections.
+function childGroups(rows, shown) {
+  const g = { needs: [], working: [], reported: [], finished: [] };
+  for (const s of rows) g[childGroup(s, shown)].push(s);
+  for (const k of Object.keys(g)) g[k].sort((a, b) => childChangedAt(b) - childChangedAt(a));
+  return g;
+}
+
+// treeIndex reads the parent links of rows once (O(n)): kids (parent id →
+// children in row order), and for every session with descendants
+// counts.get(id) = { n, needs } over its whole subtree (itself excluded).
+// A parent that isn't among rows (archived, a host that is offline) leaves
+// its children as roots; a cycle of parents is cut where it closes.
+function treeIndex(rows) {
+  const byId = new Map(), kids = new Map(), counts = new Map();
+  for (const s of rows) byId.set(s.session_id, s);
+  for (const s of rows) {
+    if (!s.parent || s.parent === s.session_id || !byId.has(s.parent)) continue;
+    if (!kids.has(s.parent)) kids.set(s.parent, []);
+    kids.get(s.parent).push(s);
+  }
+  const state = new Map(); // id → 1 while being counted, 2 when done
+  const count = (s) => {
+    const id = s.session_id;
+    if (state.get(id) === 2) return counts.get(id) || { n: 0, needs: 0 };
+    state.set(id, 1);
+    const c = { n: 0, needs: 0 };
+    for (const k of kids.get(id) || []) {
+      if (state.get(k.session_id) === 1) continue; // a cycle
+      const kc = count(k);
+      c.n += 1 + kc.n;
+      c.needs += (needsOperator(k) ? 1 : 0) + kc.needs;
+    }
+    state.set(id, 2);
+    if (c.n) counts.set(id, c);
+    return c;
+  };
+  for (const s of rows) if (kids.has(s.session_id)) count(s);
+  return { byId, kids, counts };
+}
+
+// subtreeIds: root and every session below it (the list's 子セッションだけ表示).
+function subtreeIds(rows, root, index = treeIndex(rows)) {
+  const out = new Set([root]), todo = [root];
+  while (todo.length) {
+    for (const k of index.kids.get(todo.pop()) || []) {
+      if (!out.has(k.session_id)) { out.add(k.session_id); todo.push(k.session_id); }
+    }
+  }
+  return out;
+}
+
+// listOrder lays the session list out. rows come in the base order
+// (listSort); the result is one entry per
+// shown row, in order: { s, bucket, depth, via }.
+//   bucket  "orch" | "new" | "later" | "p:<project>" | "" (a date / pin band)
+//   depth   0–2: how far the row is indented under the row it hangs from
+//   via     the row's parent when that parent is not the row directly
+//           above its level (shown as a "↳ <parent ref>" mark), else null
+// opt: lift (新着を上に), flat (更新順), collapsed (a Set of global
+// orchestrator ids whose own children are folded away).
+//
+// The order (docs: CLAUDE.md "The session list's order"):
+//  1. "orch": every global orchestrator, oldest first (first_seen, num) —
+//     never moved by activity, a pin, あとで見る or 新着. Under each (unless
+//     collapsed) its descendants that are in no project, depth 1 and 2.
+//  2. "new" (lift only): unread rows, last moved first.
+//  3. "later": あとで見る rows, last marked first.
+//  4. one block per project in project order: its project orchestrators
+//     (oldest first), each followed by its tree; then the other members in
+//     the base order of projectsFirst, each root followed by its tree. A
+//     member hangs under its parent when that parent is in the same block.
+//  5. the rest in base order (the DOM groups them by pin / date).
+// Orchestrators never go to 2 or 3. A row taken by 2 or 3 leaves the tree;
+// its own children stay where it was, one level up, with via set. Below
+// depth 2 rows stay at depth 2 with via set. Without any role or parent
+// this is exactly newFirst(laterFirst(projectsFirst(rows))).
+function listOrder(rows, opt = {}) {
+  const t = (v) => (v ? new Date(v).getTime() : 0);
+  const out = [];
+  const oldest = (a, b) => (t(a.first_seen) - t(b.first_seen)) || ((a.num || 0) - (b.num || 0));
+  const tops = rows.filter(isTopOrch).sort(oldest);
+  const index = treeIndex(rows);
+  const parentOf = (s) => (s.parent && s.parent !== s.session_id && index.byId.get(s.parent)) || null;
+  const put = (s, bucket, depth, marked) => out.push({ s, bucket, depth, via: marked ? parentOf(s) : null });
+  if (opt.flat) {
+    for (const s of tops) put(s, "orch", 0, true);
+    for (const s of byActivity(rows)) if (!isTopOrch(s)) put(s, "", 0, true);
+    return out;
+  }
+  const fixed = (s) => isTopOrch(s) || isProjectOrch(s);
+  const lifted = (s) => !!opt.lift && !!s.unseen && !fixed(s);
+  const away = (s) => !fixed(s) && (lifted(s) || !!s.later);
+  const base = projectsFirst(rows);
+  const done = new Set(); // rows placed (or folded away) by a tree walk
+  // walk places the children of p that belong to this tree (ok), depth
+  // first in row order. under is the depth of the row they hang from.
+  const walk = (p, under, bucket, ok, show, loose) => {
+    for (const c of index.kids.get(p.session_id) || []) {
+      if (!ok(c) || done.has(c.session_id)) continue;
+      done.add(c.session_id);
+      if (away(c)) { walk(c, under, bucket, ok, show, true); continue; }
+      const depth = Math.min(under + 1, TREE_MAX_DEPTH);
+      if (show) put(c, bucket, depth, loose || depth !== under + 1);
+      walk(c, depth, bucket, ok, show, false);
+    }
+  };
+  const noProject = (c) => !c.project && !fixed(c);
+  for (const o of tops) {
+    done.add(o.session_id);
+    put(o, "orch", 0, true);
+    walk(o, 0, "orch", noProject, !opt.collapsed?.has(o.session_id), false);
+  }
+  // A walk marks an "away" row done only to pass through it; it is still
+  // shown, in its own block.
+  const sorted = laterFirst(base);
+  if (opt.lift) for (const s of [...sorted.filter(lifted)].sort((a, b) => activityAt(b) - activityAt(a))) put(s, "new", 0, true);
+  for (const s of sorted) if (s.later && !lifted(s) && !fixed(s)) put(s, "later", 0, true);
+  let at = 0;
+  while (at < base.length && base[at].project) {
+    const name = base[at].project, bucket = "p:" + name;
+    let end = at;
+    while (end < base.length && base[end].project === name) end++;
+    const members = base.slice(at, end).filter((s) => !isTopOrch(s));
+    at = end;
+    const mine = (c) => c.project === name && !isTopOrch(c);
+    // root places a member that hangs from nothing in this block.
+    const root = (s) => {
+      if (done.has(s.session_id)) return;
+      done.add(s.session_id);
+      if (away(s)) { walk(s, -1, bucket, mine, true, true); return; }
+      put(s, bucket, 0, true);
+      walk(s, 0, bucket, mine, true, false);
+    };
+    for (const s of members.filter(isProjectOrch).sort(oldest)) root(s);
+    for (const s of members) { const p = parentOf(s); if (!p || !mine(p)) root(s); }
+    for (const s of members) root(s); // what a cycle of parents left over
+  }
+  for (; at < base.length; at++) {
+    const s = base[at];
+    if (isTopOrch(s) || away(s) || done.has(s.session_id)) continue;
+    put(s, "", 0, true);
+  }
+  return out;
+}
+
+// inboxGroups files the sessions that wait on the operator (needsOperator)
+// for #/inbox: under the orchestrator that watches them — the nearest one
+// up the parent chain, else their project's orchestrator — else under
+// their project, else under "". Groups: orchestrators (global first, then
+// oldest first), then projects by name, then the rest; rows oldest wait
+// first. Each: { orch, project, rows }.
+function inboxGroups(rows) {
+  const t = (v) => (v ? new Date(v).getTime() : 0);
+  const index = treeIndex(rows);
+  const projOrch = new Map();
+  for (const s of rows) if (isProjectOrch(s) && !projOrch.has(s.project)) projOrch.set(s.project, s);
+  const watcher = (s) => {
+    const seen = new Set([s.session_id]);
+    for (let p = index.byId.get(s.parent); p && !seen.has(p.session_id); p = index.byId.get(p.parent)) {
+      if (isTopOrch(p) || isProjectOrch(p)) return p;
+      seen.add(p.session_id);
+    }
+    if (isTopOrch(s) || isProjectOrch(s)) return s;
+    return (s.project && projOrch.get(s.project)) || null;
+  };
+  const groups = new Map();
+  for (const s of rows) {
+    if (!needsOperator(s) || s.archived) continue;
+    const o = watcher(s);
+    const key = o ? "o:" + o.session_id : s.project ? "p:" + s.project : "";
+    if (!groups.has(key)) groups.set(key, { orch: o, project: o ? o.project || "" : s.project || "", rows: [] });
+    groups.get(key).rows.push(s);
+  }
+  const since = (s) => Math.max(t(s.attention_at), t(s.wait_at)) || t(s.last_activity) || t(s.last_seen);
+  const rank = (g) => (g.orch ? (isTopOrch(g.orch) ? 0 : 1) : g.project ? 2 : 3);
+  const out = [...groups.values()];
+  for (const g of out) g.rows.sort((a, b) => since(a) - since(b));
+  return out.sort((a, b) => (rank(a) - rank(b)) ||
+    (a.orch && b.orch ? (t(a.orch.first_seen) - t(b.orch.first_seen)) || ((a.orch.num || 0) - (b.orch.num || 0)) : a.project.localeCompare(b.project)));
+}
+// <<< orchtree
+
+// The 新着 block is on unless turned off. The choice is a per-user pref
+// (/api/prefs new_first, cached in look) so every browser — and the local
+// portal, whose localStorage is another origin's — shows the same list.
+function newFirstOn() {
+  return look.new_first !== "off";
+}
+// 更新順 (list_order "recent", a per-user pref like new_first): one flat
+// list, the session that moved last first, whatever its project — no
+// project, pin, あとで見る or 新着 blocks; only date bands by that same
+// time, so the order and the bands agree (global orchestrators still sit
+// on top). Off = the project blocks.
+function recentOrderOn() {
+  return look.list_order === "recent";
 }
 // unifyProjectColors gives every session of a project the same color in a
 // list mixing hosts: each host stores its own copy of the project, and a
@@ -947,11 +1191,12 @@ async function projectPicker(id, { current = "", count = 1 } = {}, pick) {
   });
 }
 
-function projectHeader(name, color, members, onNew, onMove, onMenu) {
+function projectHeader(name, color, members, onNew, onMove, onMenu, kids = null) {
   const running = members.filter((s) => s.status === "active" || s.status === "idle").length;
-  const needs = members.filter((s) => s.attention === "needs_you").length;
+  const needs = members.filter(needsOperator).length;
   const fresh = members.filter((s) => s.unseen).length;
-  const meta = [T("{0} セッション", members.length), running ? T("{0} 稼働中", running) : null, needs ? T("{0} 要対応", needs) : null, fresh ? `${fresh} NEW` : null].filter(Boolean).join(" · ");
+  // kids: what the project's orchestrator has under it (treeIndex counts).
+  const meta = [T("{0} セッション", members.length), kids?.n ? T("子 {0}", kids.n) : null, running ? T("{0} 稼働中", running) : null, needs ? T("{0} 要対応", needs) : null, fresh ? `${fresh} NEW` : null].filter(Boolean).join(" · ");
   return h("div", { class: "bucket project", style: `--proj:${color};--ink:${inkOn(color)}` },
     h("span", { class: "proj-dot" }), h("b", {}, name), h("span", { class: "proj-meta" }, meta),
     onMove ? h("button", { type: "button", class: "proj-new", title: T("プロジェクトを上へ"), "aria-label": T("プロジェクトを上へ"), onclick: (e) => { e.stopPropagation(); onMove(-1); } }, icon("up")) : null,
@@ -1062,6 +1307,38 @@ async function onlineDevices() {
 }
 
 const sessKey = (s) => s._dev + "\t" + s.session_id;
+
+// ---- the orchestrator tree in the list (0009 §8, §10) ----
+// Which global orchestrators have their own children folded away: a
+// per-browser convenience, like the chosen tab.
+const orchFoldKey = "ccdash.orchFold";
+function orchFolded() {
+  try { const v = JSON.parse(localStorage.getItem(orchFoldKey) || "[]"); return new Set(Array.isArray(v) ? v : []); } catch { return new Set(); }
+}
+function setOrchFolded(sid, on) {
+  const v = orchFolded();
+  on ? v.add(sid) : v.delete(sid);
+  try { localStorage.setItem(orchFoldKey, JSON.stringify([...v].slice(-50))); } catch {}
+}
+// listSubtree narrows the list to one session and everything under it
+// (子セッションだけ表示); listRepaint redraws the list on screen, if any.
+let listSubtree = null; // { sid, label }
+let listRepaint = null;
+function showSubtree(s, devId) {
+  listSubtree = s ? { sid: s.session_id, label: ((s.num ? sref(s, devId) + " " : "") + sessionTitle(s)).trim() } : null;
+  const parts = location.hash.replace(/^#\/?/, "").split("/");
+  const onList = parts[0] === "s" || (parts[0] === "d" && parts[1] && !parts[2]);
+  if ((split && wideQuery.matches) || onList) listRepaint?.();
+  else location.hash = "#/s";
+}
+// kidsChip: how many sessions a row has under it and how many of them wait
+// on the operator; pressing it narrows the list to them.
+function kidsChip(c, onClick) {
+  if (!c?.n) return null;
+  return h("button", { type: "button", class: "chip kids", title: T("子セッションだけ表示"),
+    onclick: (e) => { e.stopPropagation(); onClick(); } },
+    icon("tree"), T("子 {0}", c.n), c.needs ? h("b", {}, T("判断待ち {0}", c.needs)) : null);
+}
 
 async function devicePage(opts = {}) {
   const mount = opts.mount || mainMount;
@@ -1219,6 +1496,7 @@ async function devicePage(opts = {}) {
       h("button", { class: "btn small", onclick: () => { selected.clear(); paintSel(); render(); } }, T("選択解除")));
   };
   let visible = [];
+  const treeNote = h("div", { class: "row host-note muted small", hidden: true });
   mount.append(h("div", { class: "page" + (opts.compact ? " compact" : "") },
     h("div", { class: "row" },
       h("h1", { class: "grow" }, single ? name : T("セッション")),
@@ -1239,7 +1517,7 @@ async function devicePage(opts = {}) {
     status, usageCard, approvals, spawns,
     tabs,
     h("div", { class: "row", style: "margin-bottom:8px" }, h("label", { class: "search grow" }, icon("search"), filter), orderBtn, liftBtn, archBtn),
-    selBar, list, more, settingsBox));
+    treeNote, selBar, list, more, settingsBox));
 
   let last = null, tab = loadTab(one || ALL_HOSTS), limit = 100, briefs = {}, briefsAt = 0, shownTab = null;
   const render = () => {
@@ -1272,50 +1550,74 @@ async function devicePage(opts = {}) {
       revealInStrip(tabs, tabs.querySelector(".tab.on"));
     }
 
+    // The parent links and the counts come from every session, whatever
+    // the tab or the search shows.
+    const index = treeIndex(sessions);
+    if (listSubtree && !index.byId.has(listSubtree.sid)) listSubtree = null; // archived, or its host left
+    const under = listSubtree ? subtreeIds(sessions, listSubtree.sid, index) : null;
+    treeNote.hidden = !under;
+    if (under && treeNote.dataset.sid !== listSubtree.sid) {
+      treeNote.dataset.sid = listSubtree.sid;
+      treeNote.replaceChildren(
+        h("span", { class: "grow" }, T("「{0}」とその子セッションだけを表示中", listSubtree.label)),
+        h("button", { class: "btn small", onclick: () => { listSubtree = null; delete treeNote.dataset.sid; render(); } }, T("すべてのセッションを表示")));
+    }
     const q = filter.value.trim().toLowerCase();
-    const rows = sessions
+    const rows = listSort(sessions
+      .filter((s) => !under || under.has(s.session_id))
       .filter((s) => !tab || groupOf(s) === tab)
-      .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${sref(s, s._dev)} ${groupOf(s)} ${s.project || ""} ${s._devName}`.toLowerCase().includes(q))
-      .sort((a, b) => (!!b.favorite - !!a.favorite) || pinOrder(a, b) || (new Date(b.last_seen) - new Date(a.last_seen)));
+      .filter((s) => !q || `${sessionTitle(s)} ${s.cwd} #${s.num} ${sref(s, s._dev)} ${groupOf(s)} ${s.project || ""} ${s._devName}`.toLowerCase().includes(q)));
     // Read on every render: another browser may have flipped them (loadLook).
     const flat = recentOrderOn();
     orderBtn.classList.toggle("on", flat);
     // 新着を上に has nothing to lift in 更新順: what moved is on top already.
     liftBtn.hidden = flat;
-    const sorted = flat ? byActivity(rows) : laterFirst(projectsFirst(rows));
     const lift = newFirstOn() && !flat;
     liftBtn.classList.toggle("on", lift);
-    const ordered = lift && !showArchived ? newFirst(sorted) : sorted;
+    // The order, the bands and who hangs under whom: listOrder (orchtree).
+    const folded = orchFolded();
+    const entries = listOrder(rows, { flat, lift: lift && !showArchived, collapsed: folded });
+    const ordered = entries.map((e) => e.s);
     const freshRows = ordered.filter((s) => s.unseen);
     const out = [];
     let bk = null;
     visible = ordered.slice(0, limit).map(sessKey);
-    for (const s of ordered.slice(0, limit)) {
+    for (const e of entries.slice(0, limit)) {
+      const s = e.s;
       // A project is one block across hosts: two hosts' "web" merge.
-      const b = flat ? dateBucket(s, true) : lift && s.unseen ? "\0new" : s.later ? "\0later" : s.project ? "\0p\0" + s.project : dateBucket(s);
+      const b = e.bucket || "d:" + dateBucket(s, flat);
       if (b !== bk) {
         bk = b;
-        out.push(b === "\0new" ? h("div", { class: "bucket new" }, icon("bell"), T("新着 {0}", freshRows.length), h("span", { class: "grow" }),
-          h("button", { type: "button", class: "btn small", title: T("新着をすべて既読にする"), onclick: (e) => { e.stopPropagation(); markAllSeen(freshRows); } }, T("すべて既読")))
-          : flat ? h("div", { class: "bucket" }, b)
-          : s.later ? h("div", { class: "bucket later" }, icon("clock"), T("あとで見る"))
-          : s.project
-          ? projectHeader(s.project, projectColorOf(s.project, s.project_color),
-            ordered.filter((x) => x.project === s.project),
+        const members = e.bucket.startsWith("p:") ? ordered.filter((x) => x.project === s.project) : null;
+        out.push(e.bucket === "new" ? h("div", { class: "bucket new" }, icon("bell"), T("新着 {0}", freshRows.length), h("span", { class: "grow" }),
+          h("button", { type: "button", class: "btn small", title: T("新着をすべて既読にする"), onclick: (ev) => { ev.stopPropagation(); markAllSeen(freshRows); } }, T("すべて既読")))
+          : e.bucket === "orch" ? h("div", { class: "bucket orch" }, T("統括"))
+          : e.bucket === "later" ? h("div", { class: "bucket later" }, icon("clock"), T("あとで見る"))
+          : members
+          ? projectHeader(s.project, projectColorOf(s.project, s.project_color), members,
             // The project's directory: where its most recent session works
             // (on that session's host; the dialog can switch hosts).
             () => { const r = projectRecent(ordered, s.project); newSession(r._dev, { cwd: r.cwd, project: s.project }); },
             async (delta) => {
               // Each host keeps its own order: move the project on all of them.
-              const hosts = [...new Set(ordered.filter((x) => x.project === s.project).map((x) => x._dev))];
-              try { await Promise.all(hosts.map((d) => dev(d).post("/api/projects/order", { project: s.project, delta }))); refreshNow(); } catch (e) { toast(e.message); }
+              const hosts = [...new Set(members.map((x) => x._dev))];
+              try { await Promise.all(hosts.map((d) => dev(d).post("/api/projects/order", { project: s.project, delta }))); refreshNow(); } catch (err) { toast(err.message); }
             },
             // Its directory and note are per host: open on the host of
             // its most recent session (the dialog can switch).
-            () => projectSettings(s.project, projectRecent(ordered, s.project)._dev))
-          : h("div", { class: "bucket" }, b));
+            () => projectSettings(s.project, projectRecent(ordered, s.project)._dev),
+            index.counts.get(members.find(isProjectOrch)?.session_id))
+          : h("div", { class: "bucket" }, b.slice(2)));
       }
-      out.push(sessionRow(s._dev, s, live.has(s._dev + "\t" + s.session_id), infos[s._dev], !tab, sel, briefs[sessKey(s)], multi ? s._devName : "", flat));
+      const isFold = folded.has(s.session_id);
+      out.push(sessionRow(s._dev, s, live.has(s._dev + "\t" + s.session_id), infos[s._dev], !tab, sel, briefs[sessKey(s)], multi ? s._devName : "", flat, {
+        depth: e.depth, via: e.via,
+        kids: index.counts.get(s.session_id),
+        onKids: () => { limit = 100; showSubtree(listSubtree?.sid === s.session_id ? null : s, s._dev); },
+        // A global orchestrator's own (no-project) children fold away.
+        fold: e.bucket === "orch" && !flat && isTopOrch(s) && (index.kids.get(s.session_id) || []).some((c) => !c.project)
+          ? { on: isFold, toggle: () => { setOrchFolded(s.session_id, !isFold); render(); } } : null,
+      }));
     }
     list.replaceChildren(...(out.length ? out : [h("div", { class: "empty" }, q ? T("該当なし") : devs.some((d) => d.online) ? T("セッションがありません") : T("接続中のホストがありません"))]));
     more.replaceChildren(...(rows.length > limit
@@ -1341,6 +1643,8 @@ async function devicePage(opts = {}) {
           p.prompt ? h("span", { class: "chip pend" }, T("要対応")) : h("span", { class: "chip live" }, "live")))))] : []));
   };
   filter.addEventListener("input", render);
+  listRepaint = render;
+  bucket.push(() => { if (listRepaint === render) listRepaint = null; });
   const markAllSeen = async (rows) => {
     await Promise.all(rows.map((s) => dev(s._dev).post(`/api/sessions/${encodeURIComponent(s.session_id)}/seen`, {}).catch(() => {})));
     toast(T("{0} 件を既読にしました", rows.length));
@@ -1633,7 +1937,6 @@ const NEW_FLASH_MS = 2400;
 // with the role's rules, without the working tools, on the role's model.
 // ROLE_LABEL is the badge on its row and chat header (the Android app's
 // roleLabel is the twin).
-const ROLE_ORCH = "orchestrator", ROLE_PROJECT_ORCH = "project-orchestrator";
 const ROLE_BAR_MIN = 560; // px: the narrowest chat header that still shows the badge
 const ROLE_LABEL = { [ROLE_ORCH]: T("統括"), [ROLE_PROJECT_ORCH]: T("プロジェクト統括") };
 function roleTitle(s) {
@@ -1731,8 +2034,18 @@ function roleSection(id, s, close, refresh) {
   return box;
 }
 
-function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, hostName = "", projectChip = false) {
+// viaChip: "↳ B880" — the row's parent, shown where the row doesn't sit
+// right under it (tree.via from listOrder).
+function viaChip(p) {
+  if (!p) return null;
+  const ref = sref(p, p._dev) || sessionTitle(p);
+  return h("span", { class: "chip via", title: T("親セッション: {0}", ((p.num ? sref(p, p._dev) + " " : "") + sessionTitle(p)).trim()) }, icon("child"), ref);
+}
+
+function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, hostName = "", projectChip = false, tree = null) {
   const chips = [];
+  const vc = viaChip(tree?.via);
+  if (vc) chips.push(vc);
   if (projectChip && s.project) {
     const c = projectColorOf(s.project, s.project_color);
     chips.push(h("span", { class: "chip proj", style: `--proj:${c};--ink:${inkOn(c)}`, title: T("プロジェクト") }, s.project));
@@ -1749,6 +2062,10 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, host
   if (s.attention === "needs_you") { if (!wc) chips.push(h("span", { class: "chip pend", title: tr(s.attention_reason) }, T("要対応"))); }
   else if (s.attention === "done") chips.push(h("span", { class: "chip done" }, T("未確認")));
   if (s.account && s.account !== "default") chips.unshift(h("span", { class: "chip" }, s.account));
+  const kc = kidsChip(tree?.kids, tree?.onKids || (() => showSubtree(s, id)));
+  const foldBtn = tree?.fold ? h("button", { type: "button", class: "grid-mark fold", title: tree.fold.on ? T("子セッションをひらく") : T("子セッションをたたむ"),
+    "aria-label": tree.fold.on ? T("子セッションをひらく") : T("子セッションをたたむ"), "aria-expanded": tree.fold.on ? "false" : "true",
+    onclick: (e) => { e.stopPropagation(); tree.fold.toggle(); } }, icon(tree.fold.on ? "down" : "up")) : null;
   const sub = [s.attention === "needs_you" && s.attention_reason ? "? " + tr(s.attention_reason)
     : waitDeclared(s) && !WAIT_LABEL_NEEDS[s.wait] && s.wait_note ? s.wait_note : null,
     showGroup ? groupOf(s) : null, shortPath(s.cwd, info?.home), s.branch, rel(s.last_seen)].filter(Boolean).join(" · ");
@@ -1771,7 +2088,7 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, host
   }
   const proj = s.project ? `;--proj:${projectColorOf(s.project, s.project_color)}` : "";
   return h("div", { class: "item srow" + (here ? " selected" : "") + (check?.checked ? " checked" : "") + (s.project ? " in-project" : "") + (s.status === "active" ? " working" : "") +
-    (s.unseen ? " unseen" : "") + (justNew(id, s) ? " just-new" : ""), "data-sid": s.session_id, "data-dev": id, title: sub || null,
+    (s.unseen ? " unseen" : "") + (justNew(id, s) ? " just-new" : "") + (tree?.depth ? " depth-" + tree.depth : ""), "data-sid": s.session_id, "data-dev": id, title: sub || null,
     style: `--sess:${sessionColorOf(s)}${proj}`, onclick: (e) => {
     if (selectingIn(e.currentTarget)) return; // a drag to copy text, not a tap
     if (e.currentTarget.dataset.longpressed) { delete e.currentTarget.dataset.longpressed; return; }
@@ -1796,9 +2113,9 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, host
       h("div", { class: titleClass("title", s), title: s.title_status === "running" ? TITLING_TIP : null }, s.favorite ? h("span", { class: "pin", title: T("ピン留め") }, icon("pin")) : null, sessionTitle(s)),
       // Two lines only: the title, then badges · state · model. The details
       // (reason, path, branch, when) are the row's tooltip.
-      h("div", { class: "sub" }, chips.length ? h("span", { class: "badges" }, ...chips) : null, statusTag(s.status),
+      h("div", { class: "sub" }, chips.length ? h("span", { class: "badges" }, ...chips) : null, statusTag(s.status), kc,
         brief ? h("span", { class: "sub-text usage" }, usageLine(brief)) : null)),
-    h("span", { class: "srow-tail" }, mark),
+    h("span", { class: "srow-tail" }, foldBtn, mark),
     s.status === "active" ? beamEl() : null);
 }
 
@@ -3142,6 +3459,17 @@ function sessionMenu(id, s, groups, refresh) {
     const title = h("input", { class: "grow", value: s.custom_title || "", placeholder: s.gen_title || s.title || T("タイトル") });
     const group = h("input", { class: "grow", value: s.user_group || "", placeholder: s.repo || base(s.cwd) || T("グループ"), list: "group-names" });
     const projColor = projectColorOf(s.project, s.project_color);
+    // 依頼: shown once the host says it kept a brief or a message for this
+    // session (an older collector has neither).
+    const briefBtn = h("button", { type: "button", class: "btn", hidden: true }, icon("note"), T("依頼"));
+    loadBrief(id, sid).then((data) => {
+      if (!data) return;
+      briefBtn.hidden = false;
+      briefBtn.onclick = () => { close(); briefDialog(s, id, data); };
+    });
+    // 子セッションだけ表示: for an orchestrator, or once a child is found.
+    const kidsBtn = h("button", { type: "button", class: "btn", hidden: !ROLE_LABEL[s.role], onclick: () => { close(); showSubtree(s, id); } }, icon("tree"), T("子セッションだけ表示"));
+    if (kidsBtn.hidden) allSessions().then(({ sessions }) => { kidsBtn.hidden = !sessions.some((x) => x.parent === sid); }).catch(() => {});
     const postProjectColor = async (color, done) => {
       close();
       try {
@@ -3197,7 +3525,8 @@ function sessionMenu(id, s, groups, refresh) {
         h("button", { type: "button", class: "btn", onclick: async () => {
           close();
           try { await d.post("/api/titles", { sessionIds: [sid] }); toast(T("タイトルを生成しています（claude -p）")); refresh(); } catch (e) { toast(e.message); }
-        } }, T("タイトルを自動生成"))),
+        } }, T("タイトルを自動生成")),
+        briefBtn, kidsBtn),
       h("div", { class: "actions" }, h("button", { class: "btn primary" }, T("閉じる"))));
   });
 }
@@ -4294,11 +4623,395 @@ function openAgent(id, sid, a) {
   });
 }
 
+// ---------- orchestrators: 子セッション pane, 判断待ち (0009 §6, §8) ----------
+
+// allSessions: every online host's unarchived sessions as one list (rows
+// carry _dev / _devName), and — with ptys — their PTYs. It reads through
+// sharedGet, so a chat, the pane and the cards on one page share requests.
+async function allSessions({ ptys = false } = {}) {
+  const devs = (await onlineDevices()).filter((d) => d.online);
+  const per = await Promise.all(devs.map(async (d) => {
+    try {
+      const [ss, ps] = await Promise.all([sharedGet(d.id, "/api/sessions"), ptys ? sharedGet(d.id, "/pty/").catch(() => []) : []]);
+      return { d, ss: ss || [], ps: ps || [] };
+    } catch { return null; } // a host that drops mid-poll leaves the list
+  }));
+  const sessions = [], pty = [];
+  for (const r of per.filter(Boolean)) {
+    for (const s of r.ss) sessions.push(Object.assign(s, { _dev: r.d.id, _devName: r.d.name || r.d.id }));
+    for (const p of r.ps) pty.push(Object.assign(p, { _dev: r.d.id, _devName: r.d.name || r.d.id }));
+  }
+  unifyProjectColors(sessions);
+  return { sessions, ptys: pty, multi: devs.length > 1 };
+}
+
+// placeNodes puts nodes into parent in order, moving only what is out of
+// place (moving a node blurs an input inside it) and dropping the rest.
+function placeNodes(parent, nodes) {
+  nodes.forEach((n, i) => { if (parent.children[i] !== n) parent.insertBefore(n, parent.children[i] || null); });
+  while (parent.children.length > nodes.length) parent.lastElementChild.remove();
+}
+
+// memoNode keeps a polled node while what it shows (sig) holds.
+function memoNode(cache, key, sig, build) {
+  const hit = cache.get(key);
+  if (hit && hit.sig === sig) { hit.used = true; return hit.el; }
+  const el = build();
+  cache.set(key, { sig, el, used: true });
+  return el;
+}
+function sweepNodes(cache) {
+  for (const [k, v] of cache) { if (!v.used) cache.delete(k); else v.used = false; }
+}
+
+// kidRow: one session in the 子セッション pane (and a 判断待ち entry past
+// the mounted cards): ref, title, project, what it declared, how long ago.
+function kidRow(s, kids, multi) {
+  const why = s.attention === "needs_you" && s.attention_reason ? tr(s.attention_reason)
+    : waitDeclared(s) && s.wait_note ? s.wait_note : "";
+  const chips = [roleChip(s), multi ? h("span", { class: "chip host" }, s._devName) : null];
+  if (s.project) {
+    const c = projectColorOf(s.project, s.project_color);
+    chips.push(h("span", { class: "chip proj", style: `--proj:${c};--ink:${inkOn(c)}` }, s.project));
+  }
+  const wc = waitChip(s);
+  if (wc) chips.push(wc);
+  else if (needsOperator(s)) chips.push(h("span", { class: "chip pend" }, T("要対応")));
+  const fc = freshChip(s);
+  if (fc) chips.push(fc);
+  return h("a", { class: "kid-row" + (s.status === "active" ? " working" : ""), href: `#/d/${s._dev}/s/${encodeURIComponent(s.session_id)}`, style: `--sess:${sessionColorOf(s)}` },
+    h("div", { class: "kid-top" }, h("span", { class: "num" }, sref(s, s._dev)), h("span", { class: "title grow" }, sessionTitle(s)),
+      h("span", { class: "muted small" }, rel(new Date(childChangedAt(s)).toISOString()))),
+    h("div", { class: "sub" }, h("span", { class: "badges" }, ...chips.filter(Boolean)), statusTag(s.status),
+      kids?.n ? h("span", { class: "muted" }, T("子 {0}", kids.n) + (kids.needs ? " · " + T("判断待ち {0}", kids.needs) : "")) : null),
+    why ? h("div", { class: "kid-why" }, why) : null);
+}
+const kidSig = (s, kids, multi) => JSON.stringify([s.num, sessionTitle(s), s.project, s.project_color, s.status, s.attention, s.attention_reason, s.wait, s.wait_note,
+  s.unseen, s.role, s.pending_count, kids?.n, kids?.needs, multi, Math.floor((Date.now() - childChangedAt(s)) / 60000)]);
+
+// decisionList keeps the 判断待ち cards of a page: one slot per waiting
+// session, a chatView in decisionOnly mode inside it. Each round the
+// caller asks slot() for every waiting entry — { s } (a session row with
+// _dev) or { pty } (a spawn stopped on a dialog before it has a session) —
+// in the order shown, then calls done(). To keep the polling sane, only
+// the first cap slots hold a card (the rest are plain rows; more() raises
+// the cap), a card is mounted only while its slot is near the viewport,
+// and done() destroys the cards of sessions that no longer wait. A card
+// that holds the focus is never torn down under the operator.
+const DECISION_CAP = 6;
+function decisionList(bucket) {
+  const slots = new Map(); // "dev\tid" → { el, view, near, on, entry }
+  const rows = new Map();
+  let cap = DECISION_CAP, round = [];
+  const byEl = new WeakMap();
+  const io = "IntersectionObserver" in window ? new IntersectionObserver((es) => {
+    for (const e of es) { const sl = byEl.get(e.target); if (sl) { sl.near = e.isIntersecting; sync(sl); } }
+  }, { rootMargin: "400px 0px" }) : null;
+  const drop = (sl) => {
+    if (!sl.view) return;
+    sl.el.style.minHeight = sl.el.offsetHeight + "px"; // the page keeps its length
+    sl.view.destroy();
+    sl.view = null;
+    sl.el.replaceChildren();
+  };
+  const sync = (sl) => {
+    const want = sl.on && sl.near;
+    if (want && !sl.view) {
+      const e = sl.entry;
+      sl.view = chatView(e.s ? e.s._dev : e.pty._dev, { sid: e.s?.session_id, key: e.s ? undefined : e.pty.key, decisionOnly: true, deviceName: e.multi ? (e.s || e.pty)._devName : "" });
+      sl.el.style.minHeight = "";
+      sl.el.replaceChildren(sl.view.el);
+    } else if (!want && sl.view && !sl.el.contains(document.activeElement)) {
+      drop(sl);
+    }
+  };
+  const keyOf = (e) => (e.s ? e.s._dev + "\t" + e.s.session_id : e.pty._dev + "\tpty:" + e.pty.key);
+  const api = {
+    // slot returns the node for a waiting entry.
+    slot(entry) {
+      const k = keyOf(entry);
+      let sl = slots.get(k);
+      if (!sl) {
+        sl = { el: h("div", { class: "dec-slot" }), view: null, near: !io, on: false, entry };
+        slots.set(k, sl);
+        byEl.set(sl.el, sl);
+        io?.observe(sl.el);
+      }
+      sl.entry = entry;
+      const at = round.push(k) - 1;
+      const on = at < cap || !!sl.view && sl.el.contains(document.activeElement);
+      if (on !== sl.on && !on) drop(sl);
+      sl.on = on;
+      // A card not mounted yet (below the fold) keeps a place to scroll to.
+      if (on && !sl.view && !sl.el.style.minHeight) sl.el.style.minHeight = "72px";
+      if (on) sync(sl);
+      else if (entry.s) {
+        sl.el.style.minHeight = "";
+        const row = memoNode(rows, k, kidSig(entry.s, null, entry.multi), () => kidRow(entry.s, null, entry.multi));
+        if (sl.el.firstChild !== row) sl.el.replaceChildren(row);
+      }
+      return sl.el;
+    },
+    // done ends a round: forget the sessions that stopped waiting.
+    done() {
+      const keep = new Set(round);
+      for (const [k, sl] of slots) {
+        if (keep.has(k)) continue;
+        io?.unobserve(sl.el);
+        sl.view?.destroy();
+        sl.el.remove();
+        slots.delete(k);
+      }
+      sweepNodes(rows);
+      const left = Math.max(0, round.length - cap);
+      round = [];
+      return left;
+    },
+    // more is the button under the list while some entries are rows.
+    more(left, repaint) {
+      return left ? h("button", { type: "button", class: "btn dec-more", onclick: () => { cap += DECISION_CAP; repaint(); } }, T("さらに表示（残り {0}）", left)) : null;
+    },
+    destroy() {
+      io?.disconnect();
+      for (const sl of slots.values()) sl.view?.destroy();
+      slots.clear();
+    },
+  };
+  bucket.push(api.destroy);
+  return api;
+}
+
+// kidsPane is the 子セッション pane of a chat: docked right in the tasks
+// pane's place on a wide screen (it covers the tasks while open), a full
+// sheet behind the chat bar's toggle on a phone. It shows only for a
+// session that has a role or children. Sections, as ccdash mcp's
+// my_sessions files them (childGroups): 判断待ち — every session under this
+// one that waits on the operator, as cards answered in place — then the
+// direct children 作業中 / 報告あり / 終わり. A project orchestrator also
+// gets its project's other sessions (folded), a global one each project
+// orchestrator with its counts. Children on other hosts are included.
+const kidsOpenKey = "ccdash.kidsOpen";
+const KIDS_FINISHED = 20;
+function kidsPane(id, sid, bucket) {
+  const count = h("span", { class: "count", hidden: true });
+  const button = h("button", { type: "button", class: "btn small kids-toggle", hidden: true, title: T("子セッション"), "aria-label": T("子セッション") },
+    icon("tree"), h("span", { class: "hide-sm" }, T("子セッション")), count);
+  const title = h("span", { class: "grow" }, T("子セッション"));
+  const body = h("div", { class: "kids-body" });
+  const el = h("aside", { id: "kidspane", "aria-label": T("子セッション") },
+    h("div", { class: "task-bar" }, title,
+      h("button", { class: "btn small icon", title: T("閉じる"), "aria-label": T("閉じる"), onclick: () => setOpen(false, true) }, icon("x"))),
+    body);
+  // Wide: open unless closed before (kept per browser). Phone: a sheet,
+  // closed until asked for.
+  let open = false, relevant = false, finCap = KIDS_FINISHED;
+  try { open = wideQuery.matches && localStorage.getItem(kidsOpenKey) !== "0"; } catch {}
+  const cards = decisionList(bucket);
+  const rows = new Map(), heads = new Map();
+  const others = h("details", { class: "kids-others" }, h("summary", {}), h("div", { class: "kids-list" }));
+  const paintPane = () => {
+    const on = open && relevant;
+    button.classList.toggle("on", on);
+    if (on === el.isConnected) return;
+    if (on) document.body.append(el); else el.remove();
+    document.body.classList.toggle("kids-open", on);
+    requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+  };
+  function setOpen(on, keep) {
+    open = on;
+    if (keep && wideQuery.matches) try { localStorage.setItem(kidsOpenKey, on ? "1" : "0"); } catch {}
+    paintPane();
+    if (on) tick().catch(() => {});
+    else cards.done();
+  }
+  button.addEventListener("click", () => setOpen(!open, true));
+  // On a phone, following a row or a card's link leaves the sheet.
+  el.addEventListener("click", (e) => { if (!wideQuery.matches && e.target.closest("a[href]")) setOpen(false); });
+  const head = (key, label, n) => memoNode(heads, key, label + n, () => h("h3", { class: "kids-head" }, label, h("span", { class: "count" }, n)));
+  const row = (s, index, multi) => memoNode(rows, s._dev + "\t" + s.session_id, kidSig(s, index.counts.get(s.session_id), multi), () => kidRow(s, index.counts.get(s.session_id), multi));
+  async function tick() {
+    const { sessions, multi } = await allSessions();
+    const index = treeIndex(sessions);
+    const self = index.byId.get(sid);
+    const direct = index.kids.get(sid) || [];
+    relevant = !!self && (!!ROLE_LABEL[self.role] || direct.length > 0);
+    button.hidden = !relevant;
+    const c = index.counts.get(sid) || { n: 0, needs: 0 };
+    // On a phone's bar: only the number that waits (else the total).
+    const sig = c.n + "/" + c.needs;
+    if (count.dataset.sig !== sig) {
+      count.dataset.sig = sig;
+      count.hidden = !c.n;
+      count.replaceChildren(h("span", { class: c.needs ? "hide-sm" : null }, String(c.n) + (c.needs ? " · " : "")),
+        c.needs ? h("b", {}, h("span", { class: "hide-sm" }, T("判断待ち") + " "), String(c.needs)) : null);
+    }
+    paintPane();
+    if (!open || !relevant) { cards.done(); return; } // a closed pane keeps no card polling
+    title.textContent = T("子セッション {0}", c.n);
+    const under = subtreeIds(sessions, sid, index);
+    const g = childGroups(direct, childShown(self, Date.now()));
+    // Everything under this session that waits on the operator, the
+    // longest wait first — not only the direct children.
+    const waitAt = (s) => Math.max(new Date(s.attention_at || 0).getTime(), new Date(s.wait_at || 0).getTime()) || childChangedAt(s);
+    const needs = sessions.filter((s) => s.session_id !== sid && under.has(s.session_id) && needsOperator(s)).sort((a, b) => waitAt(a) - waitAt(b));
+    const out = [];
+    if (needs.length) {
+      out.push(head("needs", T("判断待ち"), needs.length), ...needs.map((s) => cards.slot({ s, multi })));
+    }
+    const left = cards.done();
+    if (left) out.push(memoNode(heads, "more", String(left), () => cards.more(left, () => tick().catch(() => {}))));
+    for (const [k, label] of [["working", T("作業中")], ["reported", T("報告あり")], ["finished", T("終わり")]]) {
+      const list = g[k];
+      if (!list.length) continue;
+      const shown = k === "finished" ? list.slice(0, finCap) : list;
+      out.push(head(k, label, list.length), ...shown.map((s) => row(s, index, multi)));
+      if (shown.length < list.length) out.push(memoNode(heads, "fin-more", String(list.length - shown.length), () =>
+        h("button", { type: "button", class: "btn dec-more", onclick: () => { finCap += KIDS_FINISHED; tick().catch(() => {}); } }, T("さらに表示（残り {0}）", list.length - shown.length))));
+    }
+    if (!c.n) out.push(memoNode(heads, "empty", "", () => h("div", { class: "muted small kids-empty" }, T("子セッションはまだありません。この統括が start_session で始めたセッションがここに並びます。"))));
+    if (self.role === ROLE_ORCH) {
+      // Each project's orchestrator, with what its own children are doing.
+      const pos = sessions.filter((s) => isProjectOrch(s) && s.session_id !== sid).sort((a, b) => (a.project || "").localeCompare(b.project || ""));
+      if (pos.length) out.push(head("pos", T("プロジェクトの統括"), pos.length), ...pos.map((s) => {
+        const pg = childGroups(index.kids.get(s.session_id) || [], childShown(s, Date.now()));
+        const sum = [pg.needs.length ? T("判断待ち {0}", pg.needs.length) : null, pg.working.length ? T("作業中 {0}", pg.working.length) : null,
+          pg.reported.length ? T("報告あり {0}", pg.reported.length) : null].filter(Boolean).join(" · ");
+        return memoNode(rows, "po\t" + s.session_id, kidSig(s, index.counts.get(s.session_id), multi) + sum, () => {
+          const r = kidRow(s, index.counts.get(s.session_id), multi);
+          if (sum) r.append(h("div", { class: "kid-why" + (pg.needs.length ? " needs" : "") }, sum));
+          return r;
+        });
+      }));
+    }
+    if (self.role === ROLE_PROJECT_ORCH && self.project) {
+      // The rest of its project: sessions the operator started by hand, or
+      // another session's children.
+      const rest = listSort(sessions.filter((s) => s.project === self.project && !under.has(s.session_id)));
+      if (rest.length) {
+        const n = rest.filter(needsOperator).length;
+        others.firstChild.textContent = T("このプロジェクトのほかのセッション {0}", rest.length) + (n ? " · " + T("判断待ち {0}", n) : "");
+        placeNodes(others.lastChild, rest.map((s) => row(s, index, multi)));
+        out.push(others);
+      }
+    }
+    sweepNodes(rows);
+    sweepNodes(heads);
+    placeNodes(body, out);
+  }
+  every(3000, tick, bucket);
+  bucket.push(() => { el.remove(); document.body.classList.remove("kids-open"); requestAnimationFrame(() => window.dispatchEvent(new Event("resize"))); });
+  return { button };
+}
+
+// inboxPage (#/inbox) is the one place for everything that waits on the
+// operator, on every host: a card per session, answered in place, grouped
+// by the orchestrator that watches it, else its project (inboxGroups).
+// Spawns stopped on a dialog before they have a session come last.
+function inboxPage() {
+  crumbs({ text: T("ホーム"), href: "#/" }, { text: T("判断待ち") });
+  const body = h("div", { class: "inbox" }, h("div", { class: "empty" }, T("読み込み中…")));
+  const total = h("span", { class: "count" });
+  view.append(h("div", { class: "page inbox-page" },
+    h("div", { class: "row" }, h("h1", { class: "grow" }, T("判断待ち"), total)),
+    h("p", { class: "muted small" }, T("承認・質問・回答・操作を待っているセッションです。ここで答えると、そのセッションに直接届きます。")),
+    body));
+  const cards = decisionList(cleanup);
+  const heads = new Map();
+  const tick = async () => {
+    const { sessions, ptys, multi } = await allSessions({ ptys: true });
+    const groups = inboxGroups(sessions);
+    // A spawn with no session yet that shows a dialog (the folder-trust
+    // question): only its own screen can answer it.
+    const named = new Set(ptys.filter((p) => !p.key.startsWith("pid-")).map((p) => p._dev + "\t" + p.pid));
+    const spawns = ptys.filter((p) => p.key.startsWith("pid-") && p.prompt && !named.has(p._dev + "\t" + p.pid));
+    const out = [];
+    let n = 0;
+    for (const g of groups) {
+      n += g.rows.length;
+      const o = g.orch;
+      const key = o ? "o:" + o.session_id : "p:" + g.project;
+      const color = g.project ? projectColorOf(g.project, g.rows.find((s) => s.project === g.project)?.project_color || o?.project_color) : "";
+      const label = o ? `${sref(o, o._dev)} ${sessionTitle(o)}`.trim() : g.project || T("そのほか");
+      out.push(memoNode(heads, key, JSON.stringify([label, o?.role, g.project, color, g.rows.length]), () => h("h2", { class: "inbox-head" },
+        o ? roleChip(o) : null,
+        o ? h("a", { href: `#/d/${o._dev}/s/${encodeURIComponent(o.session_id)}`, class: "grow" }, label) : h("span", { class: "grow" }, label),
+        o && g.project ? h("span", { class: "chip proj", style: `--proj:${color};--ink:${inkOn(color)}` }, g.project) : null,
+        h("span", { class: "count" }, g.rows.length))));
+      for (const s of g.rows) out.push(cards.slot({ s, multi }));
+    }
+    if (spawns.length) {
+      n += spawns.length;
+      out.push(memoNode(heads, "spawns", String(spawns.length), () => h("h2", { class: "inbox-head" }, h("span", { class: "grow" }, T("起動中（未登録）")), h("span", { class: "count" }, spawns.length))));
+      for (const p of spawns) out.push(cards.slot({ pty: p, multi }));
+    }
+    const left = cards.done();
+    if (left) out.push(memoNode(heads, "more", String(left), () => cards.more(left, () => tick().catch(() => {}))));
+    sweepNodes(heads);
+    total.textContent = n ? String(n) : "";
+    if (!n) out.push(memoNode(heads, "empty", "", () => h("div", { class: "empty" }, T("あなたを待っているセッションはありません"))));
+    placeNodes(body, out);
+  };
+  every(3000, tick);
+}
+
+// briefDialog shows what a session was asked to do — the brief ccdash kept
+// when it started it (the caller's own text, then the operator's notes
+// ccdash appended: own_len / notes) — and the messages other sessions sent
+// it through tell_session, with who sent them.
+const BRIEF_NOTE = { common: T("共通の注意"), project: T("プロジェクトの注意") };
+function briefParts(b) {
+  const text = b.text || "";
+  if (!b.own_len || !(b.notes || []).length) return { own: text, notes: "" };
+  // own_len counts bytes of the UTF-8 text.
+  const bytes = enc.encode(text);
+  if (b.own_len >= bytes.length) return { own: text, notes: "" };
+  const dec = new TextDecoder();
+  return { own: dec.decode(bytes.slice(0, b.own_len)).replace(/\s+$/, ""), notes: dec.decode(bytes.slice(b.own_len)).trim() };
+}
+// loadBrief: { briefs, messages } of a session, or null when there is
+// nothing to show (none kept, or a collector from before briefs).
+async function loadBrief(id, sid) {
+  const r = await dev(id).get(`/api/sessions/${encodeURIComponent(sid)}/brief?messages=1`).catch(() => null);
+  const briefs = Array.isArray(r) ? r : r?.briefs || [];
+  const messages = Array.isArray(r) ? [] : r?.messages || [];
+  return briefs.length || messages.length ? { briefs, messages } : null;
+}
+function briefDialog(s, id, data) {
+  const when = (t) => (t && new Date(t).getFullYear() > 2000 ? new Date(t).toLocaleString() : "");
+  dialog((body) => {
+    body.append(h("h1", {}, T("依頼")),
+      h("p", { class: "muted small" }, (s.num ? sref(s, id) + " " : "") + sessionTitle(s)));
+    for (const b of data.briefs) {
+      const { own, notes } = briefParts(b);
+      body.append(h("div", { class: "brief-item" },
+        h("div", { class: "muted small" }, [when(b.created_at), b.project || "", b.cwd || ""].filter(Boolean).join(" · ")),
+        h("pre", { class: "brief-text" }, own),
+        notes ? h("details", { class: "brief-notes" },
+          h("summary", {}, T("ccdash が付けた注意（{0}）", (b.notes || []).map((n) => BRIEF_NOTE[n] || n).join("・"))),
+          h("pre", { class: "brief-text" }, notes)) : null));
+    }
+    if (data.messages.length) {
+      body.append(h("h2", {}, T("受け取った伝言 {0}", data.messages.length)));
+      for (const m of data.messages) {
+        const from = [m.from_ref, m.from_host].filter(Boolean).join(" · ") || T("不明なセッション");
+        const state = when(m.delivered_at) ? T("{0} に届いた", when(m.delivered_at)) : T("まだ届いていません（手すきになったら届きます）");
+        body.append(h("div", { class: "brief-item" },
+          h("div", { class: "muted small" }, T("{0} から", from) + " · " + when(m.created_at) + " · " + state),
+          h("pre", { class: "brief-text" }, m.text)));
+      }
+    }
+    body.append(h("div", { class: "actions" }, h("button", { class: "btn primary" }, T("閉じる"))));
+  });
+}
+
 // ---- the chat view ----
 
 // chatPage mounts a full-screen chatView for one session (or fresh spawn).
 async function chatPage(id, { sid, key }) {
-  const v = chatView(id, { sid, key });
+  // An orchestrator's chat (or any session with children) gets the
+  // 子セッション pane; its toggle sits in the chat's bar.
+  const kids = sid ? kidsPane(id, sid, cleanup) : null;
+  const v = chatView(id, { sid, key, headerExtra: kids?.button });
   mainMount.append(v.el);
   cleanup.push(v.destroy);
 }
@@ -4321,7 +5034,17 @@ function sharedGet(id, path, ttl = 1200) {
 // approvals, subagents, images, voice, / completion, quick commands, !
 // commands, stop) instead of keeping a second, thinner implementation.
 // Returns { el, destroy, scrollBottom }; destroy stops its polling.
-function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
+//
+// decisionOnly is the same view cut down to what the operator has to
+// answer (a 判断待ち card: the 子セッション pane, #/inbox): the pending
+// approvals, the pending question / screen prompt, the "! command" buttons
+// of the latest reply, and — for a declared answer / action — that reply's
+// end and the input box. Everything still goes straight to this session
+// through the routes the chat uses; like a grid tile it becomes "seen" only
+// once engaged (clicked / focused), never by being listed.
+// headerExtra: nodes the page adds to the full chat's bar.
+function chatView(id, { sid, key, compact = false, decisionOnly = false, deviceName: devName = "", headerExtra = null }) {
+  const tile = compact || decisionOnly; // one of many on screen
   const bucket = [];
   const d = dev(id);
   let name = devName;
@@ -4331,7 +5054,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   // History window: the poll reads only the last TAIL bytes and splices
   // them onto what's loaded (by entry uuid), so "older history" loaded
   // once stays without re-downloading megabytes on every update.
-  const TAIL = compact ? 98304 : 393216; // a tile shows less; "older history" still loads more
+  const TAIL = tile ? 98304 : 393216; // a tile shows less; "older history" still loads more
   let entries = [], hasOlder = false, loadedBytes = 0, loadingOlder = false;
   const tailURL = (bytes) => `/api/sessions/${encodeURIComponent(sid)}/transcript?mode=tail&bytes=${bytes}`;
   const splice = (fresh) => {
@@ -4371,14 +5094,19 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   const maxBtn = compact ? h("button", { class: "btn small icon tile-maxbtn", type: "button", title: T("大きく表示 / 戻す"), "aria-label": T("大きく表示 / 戻す"),
     onclick: () => root.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })) }, icon("expand")) : null;
   let root;
-  const bar = compact
+  // A decision card: why it waits, and the way into its chat.
+  const reasonEl = h("div", { class: "dec-reason", hidden: true });
+  const openChat = h("a", { class: "btn small icon", href: "#", title: T("チャットを開く"), "aria-label": T("チャットを開く"), onclick: (e) => { e.preventDefault(); location.hash = chatHref(); } }, icon("open"));
+  const bar = decisionOnly
+    ? h("div", { class: "term-bar dec-head" }, devName ? h("span", { class: "chip dev" }, devName) : null, titleEl, roleEl, statusEl, openChat)
+    : compact
     ? h("div", { class: "term-bar tile-head" },
       h("span", { class: "chip dev" }, devName), titleEl, roleEl, freshEl, waitEl, statusEl, stopTop,
       h("a", { class: "btn small icon", href: "#", title: T("チャット画面で開く"), "aria-label": T("チャット画面で開く"), onclick: (e) => { e.preventDefault(); location.hash = chatHref(); } }, icon("open")),
       maxBtn, menuBtn,
       h("button", { class: "btn small icon tile-close", type: "button", title: T("グリッドから外す"), "aria-label": T("グリッドから外す"), onclick: () => root.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })) }, icon("x")))
     : h("div", { class: "term-bar" },
-      h("a", { class: "btn small icon", href: listHash, "aria-label": T("戻る"), title: T("戻る"), onclick: (e) => { e.preventDefault(); goBack(); } }, icon("back")), titleEl, roleEl, freshEl, waitEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
+      h("a", { class: "btn small icon", href: listHash, "aria-label": T("戻る"), title: T("戻る"), onclick: (e) => { e.preventDefault(); goBack(); } }, icon("back")), titleEl, roleEl, freshEl, waitEl, statusEl, headerExtra, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
   if (compact) titleEl.addEventListener("dblclick", () => root.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, T("読み込み中…")));
   const scroller = h("div", { class: "chat" }, log);
@@ -4526,7 +5254,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   const paintQuick = (cmds) => quickRow.replaceChildren(
     ...cmds.map((c) => h("button", { type: "button", class: "chip quick", title: c, onclick: () => sendQuick(c) }, c.length > 18 ? c.slice(0, 18) + "…" : c)),
     h("button", { type: "button", class: "chip quick edit", title: T("クイックコマンドを編集"), "aria-label": T("クイックコマンドを編集"), onclick: () => editQuick(paintQuick) }, icon("edit")));
-  api("/api/quick").then(paintQuick).catch(() => {});
+  if (!decisionOnly) api("/api/quick").then(paintQuick).catch(() => {});
   const composer = h("form", { class: "composer" }, attachBtn, micBtn, slashBtn, h("div", { class: "grow col" }, thumbs, slashBox, input), fileInput, h("div", { class: "row" }, stopBtn, sendBtn));
   for (const ev of ["dragover", "drop"]) {
     scroller.addEventListener(ev, (e) => {
@@ -4568,7 +5296,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     const onModel = hosted ? openModelMenu : null;
     statusLine.replaceChildren(...(fresh ? liveStatusParts(fresh, onModel) : lastUsage ? statusParts(lastUsage, onModel) : []));
   };
-  root = h("div", { class: compact ? "tile chat-wrap compact" : "chat-wrap" }, bar, agentBar, agentList, scroller,
+  root = h("div", { class: decisionOnly ? "chat-wrap decision" : compact ? "tile chat-wrap compact" : "chat-wrap" }, bar, decisionOnly ? reasonEl : null, agentBar, agentList, scroller,
     h("div", { class: "chat-bottom" }, approvalsEl, promptEl, h("div", { class: "quick-bar" }, quickRow, statusLine), composer),
     compact ? h("div", { class: "tile-resize", title: T("ドラッグで大きさを変更") }) : null);
 
@@ -4589,7 +5317,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   // On a touch screen, typing into a tile maximises it: the on-screen
   // keyboard would otherwise cover most of a small tile.
   // engaged / lookingSince gate MarkSeen (see poll).
-  if (compact) {
+  if (tile) {
     root.addEventListener("pointerdown", () => { engagedTile = root; });
     root.addEventListener("focusin", () => { engagedTile = root; });
   }
@@ -4686,6 +5414,26 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   // focus / IME composition of an input in it and jumps the scroll. Nodes
   // are kept by a signature of what they show and reused while it holds;
   // a tool card rebuilt for its result keeps the open state it had.
+  // decisionNodes: what a decision card shows of the transcript — the
+  // pending question, and the latest reply when the session declared that
+  // it waits for an answer / action or when that reply offers "! command"
+  // buttons (a reply the operator has since answered is not the latest).
+  const decisionNodes = (keep) => {
+    const out = [];
+    for (const it of items) if (it.kind === "tool" && it.name === "AskUserQuestion" && it.result == null) out.push(renderItem(it, askCtx));
+    const lastTalk = items.filter((x) => x.kind === "assistant" || x.kind === "user").pop();
+    if (lastTalk?.kind === "assistant") {
+      const declared = !!WAIT_LABEL_NEEDS[session?.wait];
+      out.push(keep("r" + (declared ? "d" : "b") + sigOf(lastTalk), () => {
+        const el = renderItem(lastTalk, askCtx);
+        if (!el || (!declared && !el.querySelector(".bang-btn"))) return null;
+        const box = h("div", { class: "dec-reply" }, el);
+        requestAnimationFrame(() => (box.scrollTop = box.scrollHeight)); // its end is what asks
+        return box;
+      }));
+    }
+    return out.filter(Boolean);
+  };
   let shown = new Map(); // signature → nodes drawn by the last render
   const sigs = new WeakMap(); // item → JSON (items are only mutated inside parseTranscript)
   const toolOpen = new Map(); // tool_use id → open, as the operator left it
@@ -4710,7 +5458,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
       return node;
     };
     let prevAt = 0;
-    const nodes = items.flatMap((it) => {
+    const nodes = decisionOnly ? decisionNodes(keep) : items.flatMap((it) => {
       // A new day, or a long pause, gets a divider; messages their time.
       const div = chatDivider(prevAt, it.at);
       if (it.at) prevAt = it.at;
@@ -4729,13 +5477,13 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
       if (it.at && TIMED_KINDS.has(it.kind)) out.push(keep("t" + sigOf(it), () => msgTime(it)));
       return out;
     }).filter(Boolean);
-    if (hasOlder && nodes.length) {
+    if (hasOlder && nodes.length && !decisionOnly) {
       nodes.unshift(keep("o" + loadingOlder, () => h("button", { class: "btn older", disabled: loadingOlder, onclick: loadOlder },
         loadingOlder ? T("読み込み中…") : T("↑ 古い履歴を読み込む"))));
     }
     pendingSends = pendingSends.filter((p) => Date.now() - p.at < 120000);
     for (const p of pendingSends) nodes.push(keep("p" + p.at + p.text, () => h("div", { class: "bubble user pending" }, p.text)));
-    if (!nodes.length) {
+    if (!nodes.length && !decisionOnly) {
       const msg = ptyKey && !sid ? T("claude を起動しました。メッセージを送って始めましょう。") : T("まだメッセージがありません。");
       nodes.push(keep("e" + msg, () => h("div", { class: "empty" }, msg)));
     }
@@ -4829,7 +5577,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     allGroups = uniqueGroups(sessions, true).filter(Boolean);
     if (!sid && ptyKey) {
       const a = aliasOf(ptys, ptyKey);
-      if (a) { sid = a; if (!compact) history.replaceState(null, "", `#/d/${id}/s/${encodeURIComponent(sid)}`); }
+      if (a) { sid = a; if (!tile) history.replaceState(null, "", `#/d/${id}/s/${encodeURIComponent(sid)}`); }
     }
     if (sid) {
       if (ptys.some((p) => p.key === sid && p.alive)) ptyKey = sid;
@@ -4841,7 +5589,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     // it (clears "done" and the NEW mark; while it works, each poll keeps
     // it seen). A grid tile counts only once engaged (focused, clicked,
     // maximised) — merely being on screen among many tiles isn't reading.
-    const looking = !!sid && !document.hidden && document.hasFocus() && (!compact || engagedTile === root);
+    const looking = !!sid && !document.hidden && document.hasFocus() && (!tile || engagedTile === root);
     if (!looking) lookingSince = 0;
     else if (!lookingSince) lookingSince = Date.now();
     if ((session?.attention === "done" || session?.unseen) && looking && Date.now() - lookingSince >= SEEN_DWELL_MS) {
@@ -4867,11 +5615,12 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
       root.classList.toggle("just-new", justNew(id, session));
     }
 
-    const title = session ? (session.num ? sref(session, id) + " " : "") + sessionTitle(session) : sid ? sid : T("新規セッション");
+    const spawnDir = !sid && decisionOnly ? base(ptys.find((p) => p.key === ptyKey)?.cwd || "") : "";
+    const title = session ? (session.num ? sref(session, id) + " " : "") + sessionTitle(session) : sid ? sid : spawnDir || T("新規セッション");
     titleEl.textContent = title;
     titleEl.classList.toggle("titling", session?.title_status === "running");
     titleEl.style.setProperty("--sess", session ? sessionColorOf(session) : sessionColor(sid));
-    if (!compact) {
+    if (!tile) {
       crumbs({ text: T("ホーム"), href: "#/" }, { text: name, href: `#/d/${id}` }, { text: title });
       // Full screen (the phone app's usual view): the light runs round the
       // header while Claude is mid-turn, like a tile's frame.
@@ -4895,7 +5644,17 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     stopBtn.hidden = !(hosted && session?.status === "active");
     stopTop.hidden = stopBtn.hidden;
     if (compact) stopBtn.hidden = true; // the tile's header has 中断
-    input.placeholder = hosted ? T("メッセージ") : compact ? T("送信で再開") : T("送信するとこのセッションを再開します");
+    input.placeholder = hosted ? (decisionOnly ? T("返事を入力") : T("メッセージ")) : tile ? T("送信で再開") : T("送信するとこのセッションを再開します");
+    if (decisionOnly) {
+      // Why it waits, in full; the input box only for a declared answer /
+      // action (an approval or a dialog is answered by its own card).
+      const declared = !!WAIT_LABEL_NEEDS[session?.wait];
+      const why = session?.attention === "needs_you" && session.attention_reason ? tr(session.attention_reason)
+        : declared ? WAIT_LABEL[session.wait] + (session.wait_note ? ": " + session.wait_note : "") : "";
+      reasonEl.textContent = why;
+      reasonEl.hidden = !why;
+      composer.hidden = !declared;
+    }
 
     // approvals for this session
     renderApprovals(approvalsEl, id, sid ? aps.filter((a) => a.session_id === sid) : [], sessions);
@@ -4931,19 +5690,21 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
       render(atBottom());
     }
 
+    // A decision card needs none of the rest but the screen prompt.
+    const full = !decisionOnly;
     // Claude Code's own status (every other poll; served from memory)
-    if (sid && agentTick % 2 === 0) {
+    if (full && sid && agentTick % 2 === 0) {
       liveSt = await d.get(`/api/sessions/${encodeURIComponent(sid)}/statusline`).catch(() => null);
     }
 
     // usage (every seventh poll)
-    if (sid && agentTick % 7 === 0) {
+    if (full && sid && agentTick % 7 === 0) {
       const u = await d.get(`/api/sessions/${encodeURIComponent(sid)}/usage`).catch(() => null);
       if (u?.total?.messages) { lastUsage = u; paintStatus(); }
     }
 
     // git changes (every fifth poll)
-    if (sid && agentTick % 5 === 0) {
+    if (full && sid && agentTick % 5 === 0) {
       const g = await d.get(`/hub/git/status?session=${encodeURIComponent(sid)}`).catch(() => null);
       const n = g?.files?.length || 0;
       diffBtn.hidden = !g?.repo;
@@ -4952,7 +5713,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     }
 
     // subagents (every third poll: it reads a directory of transcripts)
-    if (sid && agentTick++ % 3 === 0) {
+    if (full && sid && agentTick++ % 3 === 0) {
       const list = await d.get(`/hub/subagents?session=${encodeURIComponent(sid)}`).catch(() => null);
       if (Array.isArray(list)) { agents = list; paintAgents(); }
     }
@@ -4988,8 +5749,8 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     paintStatus();
   }
 
-  every(compact ? 3000 : 1500, poll, bucket);
-  if (!compact) autoFocus(input);
+  every(tile ? 3000 : 1500, poll, bucket);
+  if (!tile) autoFocus(input);
   return {
     el: root,
     destroy: () => bucket.splice(0).forEach((fn) => { try { fn(); } catch {} }),
@@ -5391,8 +6152,19 @@ function updateBadge(b) {
     bd.textContent = needs + done > 99 ? "99+" : String(needs + done);
     bd.classList.toggle("needs", needs > 0);
   }
+  // 判断待ち carries how many wait on the operator: its tab on a phone, and
+  // the header chip leads there while any does.
+  const inboxA = document.querySelector('#tabbar a[data-tab="inbox"]');
+  if (inboxA) {
+    let bd = inboxA.querySelector(".tb-badge");
+    if (!bd) { bd = h("span", { class: "tb-badge needs" }); inboxA.append(bd); }
+    bd.hidden = needs === 0;
+    bd.textContent = needs > 99 ? "99+" : String(needs);
+  }
   const el = $("#att");
   if (!el) return;
+  el.href = needs ? "#/inbox" : "#/";
+  el.title = needs ? T("判断待ちのセッションにまとめて答える") : "";
   el.hidden = needs + done === 0;
   el.textContent = needs ? T("要対応 {0}", needs) : T("未確認 {0}", done);
   el.classList.toggle("needs", needs > 0);

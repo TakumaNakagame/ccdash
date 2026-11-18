@@ -66,6 +66,28 @@ Japanese body text gets `line-height: 1.6`; UI chrome (rows, buttons) 1.4.
 - **Copy:** verbs on buttons (送信 / 再開 / 中断), errors say what to do,
   empty states say what to do next. No "Submit", no apologies.
 
+## Orchestrators in the list, and answering in one place
+
+- **The tree is indentation, nothing else.** A child row is indented one
+  step under its parent (two steps at most); no connector lines, no nested
+  cards. A row whose parent is not the row it hangs under names it with the
+  `child` icon + the parent's ref ("↳ B880" is how the design doc writes it;
+  on screen it is the SVG, never the arrow glyph).
+- **Orchestrators don't move.** Global ones sit in a 統括 band above
+  everything, a project's first in its project block. Their count is a quiet
+  bordered chip (`子 12`), the part that asks for action in `--warn`
+  (`判断待ち 4`); pressing it narrows the list to that subtree, and a note
+  row above the list says so and clears it.
+- **判断待ち cards are the chat, cut down** (`chatView` with `decisionOnly`):
+  the one card style, a title line with the way into the chat, the reason in
+  `--warn`, then only the controls that answer — the approval card, the
+  question card, the reply's end with its `! command` button, the input box.
+  Never build a second approval or question component for a new surface.
+- **The 子セッション pane** docks where the tasks pane docks and covers it
+  while open; on a phone it is a full sheet behind a toggle in the chat bar.
+  Sections are plain headings with a count (判断待ち / 作業中 / 報告あり /
+  終わり), in that order — what waits on the person is always first.
+
 ## App shell (phone / tablet, < 1024px)
 
 Platform-neutral "modern app", not iOS- or Material-specific.
@@ -73,7 +95,7 @@ Platform-neutral "modern app", not iOS- or Material-specific.
 - **Nav bar**: top-level pages show the brand; detail pages (chat, terminal,
   diff) use their own bar as the nav bar — back chevron, title, actions — and
   hide the header. Bars are translucent (`backdrop-filter`) and sticky.
-- **Bottom tab bar** (`#tabbar`: ホーム / セッション / グリッド) on top-level
+- **Bottom tab bar** (`#tabbar`: ホーム / セッション / グリッド / 判断待ち / タスク) on top-level
   pages only; hidden in detail views. `paintShell` keeps it in sync.
 - **Navigation** slides: push from the right, pop back (`navigate()`, View
   Transitions); swipe right from the edge goes back. Never both at once.
