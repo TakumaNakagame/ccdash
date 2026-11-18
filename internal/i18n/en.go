@@ -7,11 +7,14 @@ package i18n
 var en = map[string]string{
 	// Labels stored or sent in Japanese (model.WaitLabel, attention
 	// reasons, internal/tasks labels, restart waits).
-	"回答待ち":    "Awaiting answer",
-	"作業待ち":    "Awaiting action",
-	"報告":      "Report",
-	"自動で続行":   "Continuing",
-	"要対応":     "Needs you",
+	"回答待ち":  "Awaiting answer",
+	"作業待ち":  "Awaiting action",
+	"報告":    "Report",
+	"自動で続行": "Continuing",
+	"要対応":   "Needs you",
+	"統括":    "ORCH",
+	"PJ統括":  "P-ORCH",
+	"複数行の値です。ccdash brief orchestrator --edit で編集してください": "This value has several lines: edit it with ccdash brief orchestrator --edit",
 	"完了":      "Done",
 	"作業中":     "Working",
 	"承認待ち":    "Awaiting approval",

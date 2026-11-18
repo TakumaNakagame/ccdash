@@ -1628,6 +1628,109 @@ const NEW_FLASH_MS = 2400;
 
 // projectChip: in 更新順 there is no project band over a row, so the row
 // names its project itself, in the project's color.
+// ---- orchestrator roles (docs/decisions/0009-orchestrator.md §7, §10) ----
+// A session the operator made an orchestrator: ccdash starts and resumes it
+// with the role's rules, without the working tools, on the role's model.
+// ROLE_LABEL is the badge on its row and chat header (the Android app's
+// roleLabel is the twin).
+const ROLE_ORCH = "orchestrator", ROLE_PROJECT_ORCH = "project-orchestrator";
+const ROLE_BAR_MIN = 560; // px: the narrowest chat header that still shows the badge
+const ROLE_LABEL = { [ROLE_ORCH]: T("統括"), [ROLE_PROJECT_ORCH]: T("プロジェクト統括") };
+function roleTitle(s) {
+  if (s?.role === ROLE_ORCH) return T("全体の統括: 依頼を受けてセッションに渡し、見守って報告します");
+  if (s?.role === ROLE_PROJECT_ORCH) return T("プロジェクト「{0}」の統括: このプロジェクトのセッションを見守ります", s.project || "");
+  return "";
+}
+function roleChip(s) {
+  return ROLE_LABEL[s?.role] ? h("span", { class: "chip role", title: roleTitle(s) }, ROLE_LABEL[s.role]) : null;
+}
+
+// roleSettings reads what a host does to an orchestrator: the tools it
+// takes away and the model / effort it starts with. old = the host's
+// ccdash predates roles (its /hub/settings has no orchestrator_deny).
+async function roleSettings(id) {
+  const rows = await dev(id).get("/hub/settings").catch(() => null);
+  const val = (k) => { const v = rows?.find?.((r) => r.key === k)?.value; return typeof v === "string" && v !== "default" ? v : ""; };
+  return { old: !Array.isArray(rows) || !rows.some((r) => r.key === "orchestrator_deny"),
+    deny: val("orchestrator_deny"), model: val("orchestrator_model"), effort: val("orchestrator_effort") };
+}
+
+// roleExplain is the short text under the role controls: what changes.
+function roleExplain(rs) {
+  return T("統括にすると、起動・再開のたびに ccdash が統括のルールを渡し、作業用の道具（{0}）を外し、モデルを {1}・effort を {2} にします。作業は自分でせず、ほかのセッションに渡す役です。",
+    rs.deny ? rs.deny.split(/\s+/).join("・") : T("なし"), rs.model || T("既定"), rs.effort || T("既定"));
+}
+
+// setRole posts a role change and, when the session is running under
+// ccdash, offers the restart that makes it take effect.
+async function setRole(id, s, body, done, refresh) {
+  const d = dev(id), sid = s.session_id;
+  let r;
+  try { r = await d.post(`/api/sessions/${encodeURIComponent(sid)}/role`, body); }
+  catch (e) { toast(e.message, 5000); return; }
+  refresh?.();
+  if (!r?.restart_needed && !r?.restart_needed_from) { toast(done); return; }
+  const restart = async (key) => {
+    try { await d.post(`/pty/${encodeURIComponent(key)}/restart`, {}); }
+    catch (e) { toast(e.message, 5000); return false; }
+    return true;
+  };
+  dialog((bodyEl, close) => {
+    const go = h("button", { type: "button", class: "btn primary", onclick: async () => {
+      go.disabled = true;
+      let ok = true;
+      if (r.restart_needed) ok = await restart(sid);
+      if (ok && r.restart_needed_from && body.from) ok = await restart(body.from);
+      close();
+      if (ok) toast(T("再起動しました"));
+      setTimeout(() => refresh?.(), 800);
+    } }, T("再起動して反映"));
+    bodyEl.append(h("h1", {}, done),
+      h("p", {}, T("このセッションはいま ccdash の上で動いています。役割（統括のルール・外す道具・モデル）は、次に起動し直したときから反映されます。")),
+      h("p", { class: "muted small" }, T("再起動は claude を終了して claude --resume で起動し直します。会話は残りますが、応答中の内容は中断されます。")),
+      h("div", { class: "actions" }, h("button", { class: "btn" }, T("あとで")), go));
+  });
+}
+
+// roleTakeover picks the orchestrator this session takes over from: its
+// role and its children move over in one step.
+function roleTakeover(id, s, refresh) {
+  dialog(async (body, close) => {
+    body.append(h("h1", {}, T("統括を引き継ぐ")),
+      h("p", { class: "muted small" }, T("選んだ統括の役割と、その子セッションを、このセッション（{0}）に移します。元のセッションは統括ではなくなります。", (s.num ? sref(s, id) + " " : "") + sessionTitle(s))));
+    const list = h("div", { class: "col role-pick" }, h("p", { class: "muted small" }, T("読み込み中…")));
+    body.append(list, h("div", { class: "actions" }, h("button", { class: "btn" }, T("キャンセル"))));
+    let all = [];
+    try { all = (await dev(id).get("/api/sessions")) || []; } catch (e) { list.replaceChildren(h("p", { class: "attach-off small" }, e.message)); return; }
+    const from = all.filter((x) => ROLE_LABEL[x.role] && x.session_id !== s.session_id);
+    if (!from.length) { list.replaceChildren(h("p", { class: "muted" }, T("このホストに、引き継げる統括がありません。"))); return; }
+    list.replaceChildren(...from.map((x) => h("button", { type: "button", class: "btn role-from", onclick: () => {
+      if (x.role === ROLE_PROJECT_ORCH && !s.project) { toast(T("先に、このセッションをプロジェクト「{0}」に入れてください", x.project || ""), 5000); return; }
+      close();
+      setRole(id, s, { from: x.session_id }, T("統括を引き継ぎました"), refresh);
+    } }, h("span", { class: "num" }, sref(x, id)), h("span", { class: "grow title" }, sessionTitle(x)), roleChip(x),
+      x.role === ROLE_PROJECT_ORCH && x.project ? h("span", { class: "muted small" }, x.project) : null)));
+  });
+}
+
+// roleSection is the session menu's part for roles.
+function roleSection(id, s, close, refresh) {
+  const box = h("div", { class: "col role-box" }, h("p", { class: "muted small" }, T("読み込み中…")));
+  roleSettings(id).then((rs) => {
+    if (rs.old) { box.replaceChildren(h("p", { class: "attach-off small" }, T("このホストの ccdash は古いため、統括にできません。ccdash を更新してください。"))); return; }
+    const act = (body, done) => () => { close(); setRole(id, s, body, done, refresh); };
+    box.replaceChildren(
+      h("p", { class: "muted small" }, roleExplain(rs)),
+      h("div", { class: "menu-grid" },
+        s.role !== ROLE_ORCH ? h("button", { type: "button", class: "btn", onclick: act({ role: ROLE_ORCH }, T("統括にしました")) }, T("統括にする")) : null,
+        s.project && s.role !== ROLE_PROJECT_ORCH ? h("button", { type: "button", class: "btn", title: T("プロジェクト「{0}」の統括にします（プロジェクトに 1 つ。いまの統括と入れ替わります）", s.project),
+          onclick: act({ role: ROLE_PROJECT_ORCH }, T("プロジェクト「{0}」の統括にしました", s.project)) }, T("プロジェクトの統括にする")) : null,
+        s.role ? h("button", { type: "button", class: "btn", onclick: act({ role: "" }, T("統括をやめました")) }, T("統括をやめる")) : null,
+        h("button", { type: "button", class: "btn", onclick: () => { close(); roleTakeover(id, s, refresh); } }, T("統括を引き継ぐ…"))));
+  });
+  return box;
+}
+
 function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, hostName = "", projectChip = false) {
   const chips = [];
   if (projectChip && s.project) {
@@ -1635,6 +1738,8 @@ function sessionRow(id, s, live, info, showGroup, sel = null, brief = null, host
     chips.push(h("span", { class: "chip proj", style: `--proj:${c};--ink:${inkOn(c)}`, title: T("プロジェクト") }, s.project));
   }
   if (hostName) chips.push(h("span", { class: "chip host", title: T("このセッションが動くホスト") }, hostName));
+  const rc = roleChip(s);
+  if (rc) chips.push(rc);
   const fresh = freshChip(s);
   if (fresh) chips.push(fresh);
   // (watch-later rows sit under the あとで見る band, which says so)
@@ -1802,11 +1907,39 @@ function newSession(id, preset = {}) {
     const effortDef = h("option", { value: "" }, T("effort: 既定"));
     const effort = h("select", { class: "mode", "aria-label": "effort" }, effortDef,
       ...START_EFFORTS.map((x) => h("option", { value: x }, T("effort: {0}", x))));
+    // The role: none, the global orchestrator, or — when the session
+    // starts in a project — that project's orchestrator. With a role the
+    // two selects' 既定 is the role's model / effort, not the host's.
+    const role = h("select", { class: "mode", "aria-label": T("役割") },
+      h("option", { value: "" }, T("役割: なし")),
+      h("option", { value: ROLE_ORCH }, T("役割: 統括")),
+      preset.project ? h("option", { value: ROLE_PROJECT_ORCH }, T("役割: プロジェクトの統括")) : null);
+    const roleNote = h("p", { class: "muted small", hidden: true });
     const paintDefaults = async () => {
       const host = id;
       const rows = await dev(host).get("/hub/settings").catch(() => null);
       if (host !== id) return; // the host changed meanwhile
       const val = (k) => { const v = rows?.find?.((r) => r.key === k)?.value; return typeof v === "string" && v !== "default" ? v : ""; };
+      // A collector from before roles ignores the field: don't offer it.
+      const noRoles = !Array.isArray(rows) || !rows.some((r) => r.key === "orchestrator_deny");
+      role.disabled = noRoles;
+      role.title = noRoles ? T("このホストの ccdash は古いため、統括にできません。ccdash を更新してください。") : "";
+      if (noRoles) role.value = "";
+      roleNote.hidden = !role.value;
+      if (role.value) {
+        let pm = "", pe = "";
+        if (role.value === ROLE_PROJECT_ORCH) {
+          const ps = await dev(host).get("/api/projects").catch(() => null);
+          if (host !== id) return;
+          const p = ps?.find?.((x) => x.name === preset.project);
+          pm = p?.orchestrator_model || ""; pe = p?.orchestrator_effort || "";
+        }
+        const rs = { deny: val("orchestrator_deny"), model: pm || val("orchestrator_model"), effort: pe || val("orchestrator_effort") };
+        roleNote.textContent = roleExplain(rs);
+        modelDef.textContent = rs.model ? T("モデル: 既定（{0}）", rs.model) : T("モデル: 既定");
+        effortDef.textContent = rs.effort ? T("effort: 既定（{0}）", rs.effort) : T("effort: 既定");
+        return;
+      }
       // A collector from before these settings ignores the two fields.
       const old = Array.isArray(rows) && !rows.some((r) => r.key === "default_model");
       model.disabled = effort.disabled = old;
@@ -1817,6 +1950,7 @@ function newSession(id, preset = {}) {
       effortDef.textContent = de ? T("effort: 既定（{0}）", de) : T("effort: 既定");
     };
     paintDefaults();
+    role.addEventListener("change", paintDefaults);
     const skillBox = h("div", { class: "dirlist skills", hidden: true });
     let skillList = null;
     const loadSkills = async () => {
@@ -1876,6 +2010,7 @@ function newSession(id, preset = {}) {
         const req = { cwd: path.value, cols: 120, rows: 36, prompt: first, permissionMode: mode.value, project };
         if (model.value) req.model = model.value;
         if (effort.value) req.effort = effort.value;
+        if (role.value) req.role = role.value;
         const r = await dev(id).post("/pty/start", req);
         try { localStorage.setItem("ccdash.newSessionHost", id); } catch {}
         close();
@@ -1888,7 +2023,7 @@ function newSession(id, preset = {}) {
       projectNote,
       h("div", { class: "row" }, path, h("button", { type: "button", class: "btn", onclick: () => load(path.value) }, T("移動"))),
       dirs,
-      h("div", { class: "col" }, prompt, skillBox, h("div", { class: "row start-opts" }, mode, model, effort)),
+      h("div", { class: "col" }, prompt, skillBox, h("div", { class: "row start-opts" }, mode, model, effort, role), roleNote),
       h("div", { class: "actions" },
         h("button", { class: "btn", value: "cancel" }, T("キャンセル")),
         startBtn));
@@ -1916,6 +2051,11 @@ async function briefHost(id) {
   try { out.attach = !!(await deviceInfo(id)).attachEnabled; } catch {}
   try { out.common = (await dev(id).get("/api/brief-common"))?.brief || ""; } catch (e) { out.old = true; }
   try { out.projects = (await dev(id).get("/api/projects")) || []; } catch {}
+  // For the project's orchestrator: who it is, and the host's settings
+  // for the role (absent on a ccdash from before roles).
+  out.settings = {}; out.sessions = [];
+  try { for (const r of (await dev(id).get("/hub/settings")) || []) out.settings[r.key] = typeof r.value === "string" && r.value !== "default" ? r.value : ""; } catch {}
+  try { out.sessions = (await dev(id).get("/api/sessions")) || []; } catch {}
   return out;
 }
 
@@ -1983,8 +2123,34 @@ function projectSettings(name, id) {
           toast(note.value.trim() ? T("依頼文の注意を保存しました") : T("依頼文の注意を消しました"));
         } catch (e) { toast(e.message); }
       };
+      // What this project's orchestrator runs with ("" = the host's
+      // orchestrator_model / orchestrator_effort settings).
+      const noRoles = !("orchestrator_deny" in (st.settings || {}));
+      const om = h("select", { class: "mode", disabled: locked || noRoles, "aria-label": T("統括のモデル") },
+        h("option", { value: "" }, st.settings?.orchestrator_model ? T("モデル: 設定どおり（{0}）", st.settings.orchestrator_model) : T("モデル: 設定どおり")),
+        ...START_MODELS.map((m) => h("option", { value: m }, T("モデル: {0}", m))));
+      if (p.orchestrator_model && !START_MODELS.includes(p.orchestrator_model)) om.append(h("option", { value: p.orchestrator_model }, T("モデル: {0}", p.orchestrator_model)));
+      om.value = p.orchestrator_model || "";
+      const oe = h("select", { class: "mode", disabled: locked || noRoles, "aria-label": T("統括の effort") },
+        h("option", { value: "" }, st.settings?.orchestrator_effort ? T("effort: 設定どおり（{0}）", st.settings.orchestrator_effort) : T("effort: 設定どおり")),
+        ...START_EFFORTS.map((x) => h("option", { value: x }, T("effort: {0}", x))));
+      oe.value = p.orchestrator_effort || "";
+      const saveOrch = async () => {
+        try {
+          await dev(host).post("/api/projects/orchestrator", { project: name, model: om.value, effort: oe.value });
+          toast(T("統括のモデルと effort を保存しました"));
+        } catch (e) { toast(e.message); }
+      };
+      const orch = p.orchestrator ? st.sessions.find((x) => x.session_id === p.orchestrator) : null;
       box.replaceChildren(...[
         briefState(st, hostName, ds.length > 1),
+        h("label", {}, T("このプロジェクトの統括")),
+        orch ? h("a", { class: "row role-current", href: `#/d/${host}/s/${encodeURIComponent(orch.session_id)}`, onclick: () => close() },
+          h("span", { class: "num" }, sref(orch, host)), h("span", { class: "grow title" }, sessionTitle(orch)), roleChip(orch))
+          : h("p", { class: "muted small" }, noRoles ? T("このホストの ccdash は古いため、統括にできません。ccdash を更新してください。")
+            : T("まだいません。プロジェクトのセッションのメニュー「プロジェクトの統括にする」か、帯の ＋ の「役割」で置けます。")),
+        h("div", { class: "row start-opts" }, om, oe,
+          h("button", { type: "button", class: "btn", disabled: locked || noRoles, onclick: saveOrch }, T("保存"))),
         h("label", {}, T("作業ディレクトリ")),
         h("div", { class: "row brief-dir" }, path,
           h("button", { type: "button", class: "btn", disabled: locked, onclick: () => load(path.value || p.recent_dir || "") }, T("選ぶ")),
@@ -3019,6 +3185,9 @@ function sessionMenu(id, s, groups, refresh) {
           onclick: () => postProjectColor(c, T("プロジェクトの色を変更しました")),
         })),
         h("button", { type: "button", class: "btn small", title: T("ほかのプロジェクトと被らない色を引き直す"), onclick: () => postProjectColor("random", T("プロジェクトの色を引き直しました")) }, icon("shuffle"), T("引き直す"))) : null,
+      h("label", {}, T("役割（統括）")),
+      s.role ? h("div", { class: "row" }, roleChip(s), h("span", { class: "muted small grow" }, roleTitle(s))) : null,
+      roleSection(id, s, close, refresh),
       h("label", {}, T("グループ（空にすると repo 名に戻す）")),
       h("div", { class: "row" }, group, h("button", { type: "button", class: "btn", onclick: () => { close(); post("/group", { group: group.value.trim() }, T("グループを保存しました")); } }, T("保存"))),
       h("div", { class: "menu-grid" },
@@ -4179,6 +4348,7 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   const statusEl = h("span", { class: "chip" });
   const freshEl = h("span", { hidden: true });
   const waitEl = h("span", { hidden: true });
+  const roleEl = h("span", { hidden: true });
   const termBtn = h("a", { class: "btn small", href: "#" }, T("ターミナル"));
   const endBtn = h("button", { class: "btn small danger", hidden: true, title: T("claude を終了してアーカイブする"), onclick: async () => {
     if (!confirm(END_CONFIRM)) return;
@@ -4203,12 +4373,12 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
   let root;
   const bar = compact
     ? h("div", { class: "term-bar tile-head" },
-      h("span", { class: "chip dev" }, devName), titleEl, freshEl, waitEl, statusEl, stopTop,
+      h("span", { class: "chip dev" }, devName), titleEl, roleEl, freshEl, waitEl, statusEl, stopTop,
       h("a", { class: "btn small icon", href: "#", title: T("チャット画面で開く"), "aria-label": T("チャット画面で開く"), onclick: (e) => { e.preventDefault(); location.hash = chatHref(); } }, icon("open")),
       maxBtn, menuBtn,
       h("button", { class: "btn small icon tile-close", type: "button", title: T("グリッドから外す"), "aria-label": T("グリッドから外す"), onclick: () => root.dispatchEvent(new CustomEvent("tile-close", { bubbles: true })) }, icon("x")))
     : h("div", { class: "term-bar" },
-      h("a", { class: "btn small icon", href: listHash, "aria-label": T("戻る"), title: T("戻る"), onclick: (e) => { e.preventDefault(); goBack(); } }, icon("back")), titleEl, freshEl, waitEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
+      h("a", { class: "btn small icon", href: listHash, "aria-label": T("戻る"), title: T("戻る"), onclick: (e) => { e.preventDefault(); goBack(); } }, icon("back")), titleEl, roleEl, freshEl, waitEl, statusEl, diffBtn, termBtn, restartBtn, endBtn, menuBtn);
   if (compact) titleEl.addEventListener("dblclick", () => root.dispatchEvent(new CustomEvent("tile-max", { bubbles: true })));
   const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, T("読み込み中…")));
   const scroller = h("div", { class: "chat" }, log);
@@ -4686,6 +4856,12 @@ function chatView(id, { sid, key, compact = false, deviceName: devName = "" }) {
     const wc = waitChip(session);
     if (wc) { waitEl.className = wc.className; waitEl.title = wc.title; waitEl.textContent = wc.textContent; }
     waitEl.hidden = !wc;
+    const rc = roleChip(session);
+    if (rc) { roleEl.className = rc.className; roleEl.title = rc.title; roleEl.textContent = rc.textContent; }
+    // Only where the bar has room for it: on a phone (or a narrow pane) the
+    // title and the buttons already fill the bar, and the badge would push
+    // the menu off the edge. The list row and the session menu show it.
+    roleEl.hidden = !rc || bar.clientWidth < ROLE_BAR_MIN;
     if (compact) {
       root.classList.toggle("unseen", !!session?.unseen);
       root.classList.toggle("just-new", justNew(id, session));
