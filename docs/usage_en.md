@@ -969,6 +969,63 @@ What the tools do for orchestrators:
   `orchestrators` for the global one (per project orchestrator: its children
   counted per group, and the ones waiting on you).
 
+#### The orchestrator tree, child sessions and "waiting on you" (portal)
+
+The portal's session list keeps orchestrators in a fixed place and shows
+children under their parent.
+
+- **Global orchestrators** sit in a 統括 band at the very top — above pins,
+  watch later, 新着 and the date bands — oldest first; activity never moves
+  them. Their children that are in no project are indented under them; the
+  arrow on the row folds them away (remembered per browser).
+- **A project's orchestrator** is the first row of its project block, above
+  the block's pins. Inside a block a session is indented under its parent
+  when that parent is in the same block — two levels at most.
+- A row whose parent is not right above it carries the parent's ref as a
+  mark (e.g. A1). A child that is in a project stays in its project block,
+  not under the global orchestrator.
+- A row with children shows `子 12 判断待ち 4` (children, and how many wait
+  on you). Press it — or 子セッションだけ表示 in the session menu — to narrow
+  the list to that session and everything under it; すべてのセッションを表示
+  above the list goes back. A project band shows `子 N` too.
+- A row lifted into 新着 or put into あとで見る leaves the tree for that
+  block (orchestrators never do). In 更新順 only the global orchestrators
+  stay on top.
+- With no roles and no parents the list is what it was before.
+
+**The 子セッション pane.** Opening the chat of a session with a role (or
+with children) shows 子セッション on the right — in the tasks pane's place,
+covering it while open; on a phone a button in the chat bar opens it as a
+full sheet. Sections, top to bottom: 判断待ち / 作業中 / 報告あり / 終わり,
+filed the way `my_sessions` files them. 判断待ち holds every session under
+this one that waits on you. A project's orchestrator also gets
+このプロジェクトのほかのセッション (folded), a global one プロジェクトの統括
+(each project orchestrator with its counts). Children on other machines are
+included.
+
+**判断待ち (`#/inbox`).** Every session that waits on you — an approval, a
+question, a declared answer or action — from every machine, in one place
+(the bottom tab on a phone, the header's 要対応 N chip on a desktop),
+grouped by orchestrator and project, and answered on the card:
+
+| Waiting for | The card shows |
+|---|---|
+| an approval | the tool, what it is for, the command; 許可 / 常に許可 / 拒否 |
+| a question (AskUserQuestion), a choice on screen | the choices (the chat's own card) |
+| a declared `action` whose reply has a `! command` | the end of the reply and コマンドを実行する (after a confirm it runs inside that session) |
+| a declared `answer` / `action` | the note, the end of the reply, an input box |
+| a dialog before the session exists (folder trust) | the choices on screen |
+
+What you answer goes from the browser straight to that session; it never
+passes through an orchestrator (an orchestrator can't carry an approval).
+A card counts as read only once you press or type in it. At most six cards
+are open at a time; the rest are rows, opened with さらに表示.
+
+**依頼.** 依頼 in the session menu shows the brief ccdash kept when it
+started the session — the caller's own text, and the notes ccdash appended,
+apart — and the messages it received through `tell_session`, with who sent
+them. It is absent for a session with neither, and on an older collector.
+
 #### Notes for handed-over work (`ccdash brief`)
 
 A session that hands work to others with `start_session` would otherwise
