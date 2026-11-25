@@ -92,6 +92,10 @@ type Server struct {
 	msgRetry     map[string]time.Time
 	senderOnPeer func(ctx context.Context, deviceID, id string) (parent, role string, err error)
 
+	// login: this machine's Claude Code login and the sign-in the portal
+	// runs (login.go).
+	login loginRunner
+
 	// statusLines: latest relayed statusLine JSON per session (statusline.go).
 	statusMu    sync.Mutex
 	statusLines map[string]statusSnap
@@ -158,6 +162,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/hooks/post-tool-failure", hook(s.handlePostToolFailure))
 	s.mux.HandleFunc("/hooks/permission-request", hook(s.handlePermissionRequest))
 	s.mux.HandleFunc("/hooks/stop", hook(s.handleStop))
+	s.mux.HandleFunc("/hooks/stop-failure", hook(s.handleStopFailure))
 	s.mux.HandleFunc("/hooks/subagent-stop", hook(s.handleSubagentStop))
 	s.mux.HandleFunc("/hooks/notification", hook(s.handleNotification))
 	// Not rate-limited: it fires on every UI update of every running
@@ -170,6 +175,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/restart", wrap(s.handleRestart))
 	s.mux.HandleFunc("GET /api/restart", wrap(s.handleRestartState))
 	s.mux.HandleFunc("DELETE /api/restart", wrap(s.handleRestartCancel))
+	s.mux.HandleFunc("GET /api/login", wrap(s.handleLoginState))
+	s.mux.HandleFunc("GET /api/login/flow", wrap(s.handleLoginFlow))
+	s.mux.HandleFunc("POST /api/login/start", wrap(s.handleLoginStart))
+	s.mux.HandleFunc("POST /api/login/code", wrap(s.handleLoginCode))
+	s.mux.HandleFunc("POST /api/login/cancel", wrap(s.handleLoginCancel))
 
 	// Remote-mode API — consumed by internal/store.Remote so a TUI can run
 	// on a different host than the collector. Same rate-limit + token
@@ -311,6 +321,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	go s.hubLoop(ctx)
 	go s.attentionLoop(ctx)
 	go s.messageLoop(ctx)
+	go s.loginLoop(ctx)
 	errCh := make(chan error, len(lns))
 	for _, ln := range lns {
 		go func(l net.Listener) { errCh <- s.srv.Serve(l) }(ln)
@@ -454,6 +465,12 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 			ignored = map[string]bool{}
 		}
 		cfg, _ := settings.Load(ctx, s.db)
+		loginMarked := map[string]bool{}
+		if ids, err := s.db.LoginExpiredIDs(ctx); err == nil {
+			for _, id := range ids {
+				loginMarked[id] = true
+			}
+		}
 
 		for _, d := range discovered {
 			s.titler.note(d)
@@ -505,6 +522,12 @@ func (s *Server) refreshDiscovery(ctx context.Context) error {
 			}
 			if err := s.db.UpsertDiscoveredSession(ctx, sess); err != nil {
 				log.Printf("discovery upsert %s: %v", d.SessionID, err)
+			}
+			if !d.AuthFailedAt.IsZero() && !model.Headless(sess.Entrypoint) {
+				s.noteLoginFailure(ctx, d.SessionID, d.AuthFailedAt)
+			} else if loginMarked[d.SessionID] {
+				// The session went on (a new prompt, a /login inside it).
+				_ = s.db.ClearLoginMark(ctx, d.SessionID, "")
 			}
 		}
 	}
@@ -1000,6 +1023,34 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	if !model.Headless(headerVal(r, "X-Ccdash-Entrypoint")) {
 		kind, reason := stopAttention(wait, note)
 		_ = s.db.SetAttention(r.Context(), p.SessionID, kind, reason)
+	}
+	writeOK(w, nil)
+}
+
+// handleStopFailure: the turn ended on an API error instead of a Stop
+// (Claude Code's StopFailure hook). A login error flags the session for
+// the operator (login.go); any other ends the turn like a Stop.
+func (s *Server) handleStopFailure(w http.ResponseWriter, r *http.Request) {
+	p, raw, err := readPayload(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	s.ensureSession(r, p, model.StatusIdle)
+	_, _ = s.db.AppendEvent(r.Context(), &model.Event{
+		SessionID: p.SessionID,
+		EventType: model.EventStop,
+		Summary:   truncate("stop failure: "+p.Error, 80),
+		Payload:   raw,
+	})
+	if model.Headless(headerVal(r, "X-Ccdash-Entrypoint")) {
+		writeOK(w, nil)
+		return
+	}
+	if p.Error == "authentication_failed" {
+		s.noteLoginFailure(r.Context(), p.SessionID, time.Time{})
+	} else {
+		_ = s.db.SetAttention(r.Context(), p.SessionID, model.AttentionDone, "")
 	}
 	writeOK(w, nil)
 }

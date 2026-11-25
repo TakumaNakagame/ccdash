@@ -299,6 +299,8 @@ type watchState struct {
 	first       bool
 	restart     string            // pending / last outcome of the device's scheduled restart, last look
 	restartSeen bool              // restart holds a baseline
+	login       string            // "expired" / "soon" / "" at the last look
+	loginSeen   bool              // login holds a baseline
 	attention   map[string]string // session id → attention|reason last seen
 	lastSent    map[string]time.Time
 }
@@ -329,7 +331,16 @@ func (h *Hub) watchDevice(ctx context.Context, d Device, dc *deviceConn) {
 			if n, ok := restartNotice(d, rs, st); ok {
 				ns = append(ns, n)
 			}
-			h.storeSnapshot(d, sessions, rs)
+			// A collector older than the login notice answers 404: no state.
+			var ls *model.LoginState
+			var gotLogin model.LoginState
+			if getJSON(ctx, client, "/api/login", &gotLogin) == nil {
+				ls = &gotLogin
+			}
+			if n, ok := loginNotice(d, ls, st); ok {
+				ns = append(ns, n)
+			}
+			h.storeSnapshot(d, sessions, rs, ls)
 		}
 		for _, n := range ns {
 			b := h.badgeCount()
@@ -408,6 +419,9 @@ func watchOnce(ctx context.Context, c *http.Client, d Device, st *watchState) ([
 		now[s.SessionID] = sig
 		if st.first || st.attention[s.SessionID] == sig {
 			continue
+		}
+		if reason == model.LoginReason {
+			continue // one notice for the machine instead (loginNotice)
 		}
 		key := s.SessionID + ":" + s.Attention
 		if time.Since(st.lastSent[key]) < sessionCooldown {
@@ -512,10 +526,11 @@ type deviceSnapshot struct {
 	Device   Device
 	Sessions []model.Session
 	Restart  *model.RestartState // nil: the collector predates scheduled restarts
+	Login    *model.LoginState   // nil: the collector predates the login notice
 	At       time.Time
 }
 
-func (h *Hub) storeSnapshot(d Device, sessions []model.Session, rs *model.RestartState) {
+func (h *Hub) storeSnapshot(d Device, sessions []model.Session, rs *model.RestartState, ls *model.LoginState) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.snapshots == nil {
@@ -528,7 +543,45 @@ func (h *Hub) storeSnapshot(d Device, sessions []model.Session, rs *model.Restar
 			sessions[i].HostLetter = d.Letter
 		}
 	}
-	h.snapshots[d.ID] = deviceSnapshot{Device: d, Sessions: sessions, Restart: rs, At: time.Now()}
+	h.snapshots[d.ID] = deviceSnapshot{Device: d, Sessions: sessions, Restart: rs, Login: ls, At: time.Now()}
+}
+
+// loginNotice pushes once when a device's Claude Code login stops working
+// (or is about to reach its time limit): one notice for the machine, not
+// one per stopped session. Never the sign-in URL — the state carries none.
+// The first look is a baseline, like attention.
+func loginNotice(d Device, ls *model.LoginState, st *watchState) (notification, bool) {
+	sig := ""
+	if ls != nil {
+		switch {
+		case ls.Expired:
+			sig = "expired"
+		case ls.Soon:
+			sig = "soon"
+		}
+	}
+	prev, seen := st.login, st.loginSeen
+	st.login, st.loginSeen = sig, true
+	if !seen || sig == prev || sig == "" || (sig == "soon" && prev == "expired") {
+		return notification{}, false
+	}
+	n := notification{URL: "/#/login/" + url.PathEscape(d.ID), Tag: d.ID + ":login"}
+	if sig == "expired" {
+		n.Title = d.Name + " · ログイン切れ"
+		n.TitleEn = d.Name + " · Login expired"
+		n.Body = "Claude Code のログインが切れています。ccdash からログインし直せます。"
+		n.BodyEn = "Claude Code's login has expired. You can log in again from ccdash."
+		if k := len(ls.Sessions); k > 0 {
+			n.Body = fmt.Sprintf("Claude Code のログインが切れ、%d 件のセッションが止まっています。ccdash からログインし直せます。", k)
+			n.BodyEn = fmt.Sprintf("Claude Code's login has expired and %d sessions stopped. You can log in again from ccdash.", k)
+		}
+	} else {
+		n.Title = d.Name + " · ログインの期限が近い"
+		n.TitleEn = d.Name + " · Login expires soon"
+		n.Body = "Claude Code のログインの期限が近づいています（" + ls.ExpiresAt.Local().Format("1/2 15:04") + "）。ccdash からログインし直せます。"
+		n.BodyEn = "Claude Code's login expires soon (" + ls.ExpiresAt.Local().Format("Jan 2 15:04") + "). You can log in again from ccdash."
+	}
+	return n, true
 }
 
 // restartNotice pushes a warning when a device's collector schedules a

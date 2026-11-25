@@ -12,5 +12,7 @@ import (
 // collector and leave an untitled session in their list.
 func TestMain(m *testing.M) {
 	newPTYCommand = func(args ...string) *exec.Cmd { return exec.Command("sh", "-c", "cat") }
+	// Likewise `claude auth …` (login.go): never the real login.
+	newAuthCmd = func(args ...string) *exec.Cmd { return exec.Command("sh", "-c", "exit 3") }
 	os.Exit(m.Run())
 }
