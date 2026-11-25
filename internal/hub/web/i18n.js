@@ -220,6 +220,9 @@ const EN = {
   "再起動を予約中です": "A restart is scheduled",
   // login (paintLoginBar / loginDialog / loginCard)
   "ログインし直す": "Log in again",
+  "この端末の Claude Code にログインし直す": "Log this machine's Claude Code in again",
+  "今のログインは切れています。": "The current login has expired.",
+  "今のログインの期限: {0}": "The current login expires: {0}",
   "Claude Code のログインが切れています": "Claude Code's login has expired",
   "Claude Code のログインの期限が近づいています": "Claude Code's login expires soon",
   "止まっているセッション（{0} 件）:": "Stopped sessions ({0}):",

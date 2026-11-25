@@ -800,7 +800,7 @@ Claude Code keeps one login per machine. When it expires, that machine's session
 2. **Open the sign-in page** (or **Copy URL**) in any browser and allow it.
 3. Paste the code it shows and press **Send**. The account now signed in is shown.
 
-Every session on that machine works again. Sessions ccdash runs are told to go on; the others become "Logged in again: send the next prompt". The banner also shows 3 days before the login's time limit. It needs **Attach** on for that machine. The URL and the code are never stored.
+Every session on that machine works again. Sessions ccdash runs are told to go on; the others become "Logged in again: send the next prompt". The banner also shows 3 days before the login's time limit. To do it earlier, the key button on the machine's row (home) or above its session list opens the same dialog, with the current login's expiry. It needs **Attach** on for that machine. The URL and the code are never stored.
 
 ### Local portal (`ccdash web`)
 

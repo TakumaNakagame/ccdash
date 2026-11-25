@@ -43,6 +43,7 @@ ccdash の端末の画面では URL が折り返されて、コピーできな�
 5. **画面**
    - hub: `watchDevice` が `GET /api/login` も読み、`/api/devices` の `login`（expired / soon / ログイン中のときだけ）に載せる。プッシュはマシンごとに 1 回（`loginNotice`、URL は `#/login/<device>`）。セッションごとの「ログイン切れ」のプッシュは出さない。
    - ポータル: 上部の帯 `#loginbar`（`paintLoginBar`）→ `loginDialog`（URL の表示・開く・コピー、コードの入力欄、結果）。チャットには `loginCard`。古い collector（`/api/login/start` が無い）では「ccdash を更新するか /login を」と出す。チャットのカードは、collector の印が無くても transcript の最後の返事が「Please run /login」なら出る。
+   - 手動の入口: ホームの端末の行と、端末のセッション一覧の見出しに鍵のボタン（期限の前でもログインし直せる）。ダイアログの頭に今のログインの期限。
    - Android アプリも同じ（ccdash-android）。
    - MCP: `overview.login_expired`（ホストごと、止まったセッションの ref と url）。
    - TUI: セッション行の理由「ログイン切れ」だけ（ログインの操作はない）。
