@@ -159,6 +159,15 @@ type authStatus struct {
 	LoggedIn       bool   `json:"loggedIn"`
 	LoginExpiresAt string `json:"loginExpiresAt"`
 	Email          string `json:"email"`
+	AuthMethod     string `json:"authMethod"`
+	APIProvider    string `json:"apiProvider"`
+}
+
+// subscription reports whether this machine signs in with a Claude
+// account at all — not an API key, not Bedrock / Vertex / a gateway — so
+// "not logged in" from `claude auth status` means something to fix here.
+func (st authStatus) subscription() bool {
+	return (st.APIProvider == "" || st.APIProvider == "firstParty") && st.AuthMethod != "api_key"
 }
 
 var runAuthStatus = func(ctx context.Context) (authStatus, error) {
@@ -240,7 +249,7 @@ func (s *Server) checkLogin(ctx context.Context) {
 		s.login.mu.Unlock()
 		return
 	}
-	s.login.checked, s.login.checkErr = true, ""
+	s.login.checked, s.login.checkErr = st.subscription(), ""
 	s.login.loggedIn, s.login.expiresAt = st.LoggedIn, exp
 	s.login.mu.Unlock()
 

@@ -141,6 +141,22 @@ func TestStopFailureMarksLogin(t *testing.T) {
 	}
 }
 
+func TestAuthStatusSubscription(t *testing.T) {
+	for _, c := range []struct {
+		st   authStatus
+		want bool
+	}{
+		{authStatus{AuthMethod: "claude.ai", APIProvider: "firstParty"}, true},
+		{authStatus{AuthMethod: "none", APIProvider: "firstParty"}, true},
+		{authStatus{AuthMethod: "api_key", APIProvider: "firstParty"}, false},
+		{authStatus{AuthMethod: "none", APIProvider: "bedrock"}, false},
+	} {
+		if got := c.st.subscription(); got != c.want {
+			t.Errorf("%+v.subscription() = %v, want %v", c.st, got, c.want)
+		}
+	}
+}
+
 func TestParseAuthStatus(t *testing.T) {
 	out := "rc noise {\n" + `{"loggedIn": false, "authMethod": "none"}` + "\n"
 	st, err := parseAuthStatus(out)
