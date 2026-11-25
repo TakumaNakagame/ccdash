@@ -360,6 +360,12 @@ func (r *Remote) RestartStatus(ctx context.Context) (model.RestartState, error) 
 	return st, err
 }
 
+func (r *Remote) LoginStatus(ctx context.Context) (model.LoginState, error) {
+	var st model.LoginState
+	err := r.doJSON(ctx, 10*time.Second, http.MethodGet, "/api/login", nil, nil, &st)
+	return st, err
+}
+
 func (r *Remote) ScheduleRestart(ctx context.Context, by string, timeout time.Duration) (model.RestartState, error) {
 	if _, err := r.RestartStatus(ctx); err != nil { // see Local.ScheduleRestart
 		return model.RestartState{}, errNoScheduledRestart(err)

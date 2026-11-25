@@ -43,7 +43,7 @@ func TestPeerAccess(t *testing.T) {
 	if w.Code != 200 || self.ID != caller.ID || self.Name != "laptop" || self.Peer_access != PeerRead {
 		t.Fatalf("self = %d %s", w.Code, w.Body)
 	}
-	for _, p := range []string{"/api/devices", d + "/api/sessions", d + "/pty/", d + "/hub/info", d + "/api/sessions/abc/transcript", d + "/api/tasks", d + "/api/tasks/11", d + "/api/start-info?project=web"} {
+	for _, p := range []string{"/api/devices", d + "/api/sessions", d + "/pty/", d + "/hub/info", d + "/api/sessions/abc/transcript", d + "/api/tasks", d + "/api/tasks/11", d + "/api/start-info?project=web", d + "/api/login"} {
 		if w := serve(handler, "GET", p, "", auth); w.Code != 200 {
 			t.Errorf("read peer GET %s = %d, want 200", p, w.Code)
 		}
@@ -98,6 +98,9 @@ func TestPeerAccess(t *testing.T) {
 		// project's orchestrator model, not the orchestrator's own text.
 		{"POST", d + "/api/sessions/abc/role"}, {"POST", d + "/api/projects/orchestrator"},
 		{"PUT", d + "/api/settings/orchestrator_prompt"}, {"POST", d + "/pty/abc/restart"},
+		// Logging the machine's Claude Code in is the operator's: not
+		// the URL, not the code, not starting or cancelling it.
+		{"GET", d + "/api/login/flow"}, {"POST", d + "/api/login/start"}, {"POST", d + "/api/login/code"}, {"POST", d + "/api/login/cancel"},
 	} {
 		if w := serve(handler, c[0], c[1], `{}`, auth); w.Code != http.StatusForbidden {
 			t.Errorf("control peer %s %s = %d, want 403", c[0], c[1], w.Code)

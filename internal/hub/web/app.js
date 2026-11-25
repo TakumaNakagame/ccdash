@@ -282,6 +282,7 @@ async function copy(text) {
 // Stroke icons drawn after Lucide (ISC). docs/design.md: icons come from
 // here, never emoji. icon(name) is an inline SVG sized 1em in currentColor.
 const ICONS = {
+  key: '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>',
   bell: '<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>',
   "bell-off": '<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M17 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6 6 0 0 1 .258-1.742"/><path d="m2 2 20 20"/><path d="M8.668 3.01A6 6 0 0 1 18 8c0 2.687.77 4.653 1.707 6.05"/>',
   sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
@@ -432,6 +433,12 @@ function paneRatio(id) {
 let beforeGrid = "#/";
 
 function route() {
+  // #/login/<device> (the login push): the sign-in dialog over the home page.
+  const lm = /^#\/login\/([^/]+)$/.exec(location.hash);
+  if (lm) {
+    history.replaceState(null, "", "#/");
+    setTimeout(() => loginDialog(decodeURIComponent(lm[1])), 0);
+  }
   cleanup.forEach((f) => { try { f(); } catch {} });
   cleanup = [];
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
@@ -1807,6 +1814,7 @@ function restartBarDrop(id) {
 async function pollRestartBar() {
   let ds;
   try { ds = await api("/api/devices"); } catch { return; }
+  paintLoginBar(ds);
   const bar = $("#restartbar");
   const pend = ds.filter((d) => d.restart?.pending && !(restartBarHold.get(d.id) > Date.now()));
   bar.hidden = !pend.length;
@@ -1823,6 +1831,155 @@ async function pollRestartBar() {
         restartWaitText(d.id, d.restart)),
       cancel);
   }));
+}
+
+// ---- login bar / sign-in (docs/decisions/0010-relogin.md) ----
+// Claude Code keeps one login per machine. When it stops working, the
+// device's collector flags the sessions stopped on "Login expired · Please
+// run /login" and the hub carries the machine's state (/api/devices →
+// login). The bar names the machine; its button runs the sign-in on that
+// machine: the collector starts `claude auth login`, the dialog shows the
+// URL (open / copy) and takes the code back. The URL and the code never
+// leave this dialog (no toast, no storage).
+const LOGIN_REASON = "ログイン切れ";
+const loginBarHold = new Map(); // device id → until (ms): hide its note
+function paintLoginBar(ds) {
+  const bar = $("#loginbar");
+  if (!bar) return;
+  const due = ds.filter((d) => d.online && d.login && (d.login.expired || d.login.soon) && !(loginBarHold.get(d.id) > Date.now()));
+  bar.hidden = !due.length;
+  bar.replaceChildren(...due.map((d) => {
+    const l = d.login;
+    const go = h("button", { class: "btn primary", type: "button" }, T("ログインし直す"));
+    go.addEventListener("click", () => loginDialog(d.id, d.name));
+    const who = ds.length > 1 ? d.name + T(" の ") : "";
+    const title = l.expired ? who + T("Claude Code のログインが切れています") : who + T("Claude Code のログインの期限が近づいています");
+    const ss = l.sessions || [];
+    const detail = l.expired
+      ? (ss.length ? T("止まっているセッション（{0} 件）:", ss.length) : T("このマシンの Claude Code が使えません。"))
+      : T("期限: {0}", fmtDateTime(l.expires_at));
+    const links = ss.slice(0, 6).map((x) => {
+      const ref = (x.num ? sref({ num: x.num }, d.id) : "") || x.session_id.slice(0, 8);
+      return h("a", { class: "rn-wait", href: `#/d/${d.id}/s/${encodeURIComponent(x.session_id)}`, title: x.title || "" },
+        h("b", {}, ref), x.title ? h("span", { class: "rn-wait-title" }, " — " + x.title) : null);
+    });
+    return h("div", { class: "restart-note login-note", role: "status" }, icon("key"),
+      h("div", { class: "grow" },
+        h("div", { class: "rn-title" }, title),
+        h("div", { class: "muted small" }, detail, links.length ? h("div", { class: "rn-waits" }, ...links) : null)),
+      go);
+  }));
+}
+
+function fmtDateTime(v) {
+  const t = new Date(v);
+  if (isNaN(t)) return "";
+  return t.toLocaleString(LANG === "en" ? "en" : "ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+// loginDialog runs the sign-in on device id. Closing it before the end
+// cancels the sign-in there.
+async function loginDialog(id, name) {
+  name = name || await deviceName(id);
+  let flow = null, finished = false;
+  const step = h("div", { class: "login-steps" }, h("div", { class: "muted small" }, T("ログインを始めています…")));
+  const dlg = dialog((body, close) => {
+    body.append(h("h1", {}, T("{0} の Claude Code にログインし直す", name)),
+      h("div", { class: "muted small" }, T("このマシンでログインし直すと、このマシンのセッションはすべて使えるようになります。")),
+      step,
+      h("div", { class: "actions" }, h("button", { class: "btn", value: "cancel", formnovalidate: true }, T("閉じる"))));
+  });
+  const onClose = () => {
+    dlg.removeEventListener("close", onClose);
+    if (flow && !finished) dev(id).post("/api/login/cancel", {}).catch(() => {});
+  };
+  dlg.addEventListener("close", onClose);
+
+  const fail = (msg, old) => {
+    finished = true;
+    const again = h("button", { class: "btn primary", type: "button" }, T("やり直す"));
+    again.addEventListener("click", () => { dlg.close(); loginDialog(id, name); });
+    step.replaceChildren(h("div", { class: "login-err" }, msg), old ? null : h("div", { class: "actions" }, again));
+  };
+  const done = (f) => {
+    finished = true;
+    loginBarHold.set(id, Date.now() + 10000);
+    setTimeout(pollRestartBar, 500);
+    const refs = (xs) => (xs || []).join(" ");
+    step.replaceChildren(
+      h("div", { class: "login-ok" }, icon("check"), " ", f.account ? T("{0} でログインしました", f.account) : T("ログインしました")),
+      f.resumed?.length ? h("div", { class: "small" }, T("続きを指示したセッション: {0}", refs(f.resumed))) : null,
+      f.left?.length ? h("div", { class: "small" }, T("続きを送ってほしいセッション: {0}（ccdash の外で動いているか、作業中でした）", refs(f.left))) : null);
+  };
+  const show = (f) => {
+    flow = f;
+    if (f.state === "done") return done(f);
+    if (f.state === "failed" || f.state === "cancelled") return fail(f.error ? tr(f.error) : T("ログインできませんでした"));
+    if (f.state !== "url" || !f.url) return fail(T("ログインの URL が出ませんでした。このマシンで claude が動くか確かめてください。"));
+    const open = h("a", { class: "btn primary", href: f.url, target: "_blank", rel: "noopener noreferrer" }, icon("open"), " ", T("ログインのページを開く"));
+    const cp = h("button", { class: "btn", type: "button" }, T("URL をコピー"));
+    cp.addEventListener("click", () => copy(f.url));
+    const code = h("input", { type: "text", class: "login-code", autocomplete: "off", autocapitalize: "off", spellcheck: "false",
+      placeholder: T("コードを貼り付け") });
+    const send = h("button", { class: "btn primary", type: "button" }, T("送る"));
+    const submit = async () => {
+      const v = code.value.trim();
+      if (!v) return code.focus();
+      send.disabled = code.disabled = true;
+      send.textContent = T("確かめています…");
+      try {
+        const r = await dev(id).post("/api/login/code", { id: f.id, code: v });
+        if (r.state === "exchanging") return pollFlow();
+        show(r);
+      } catch (e) {
+        send.disabled = code.disabled = false;
+        send.textContent = T("送る");
+        toast(e.message);
+      }
+    };
+    send.addEventListener("click", submit);
+    code.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); submit(); } });
+    step.replaceChildren(
+      h("div", { class: "login-step" }, h("b", {}, "1. "), T("ページを開いて、ログインを許可してください（スマホのブラウザでもかまいません）。"),
+        h("div", { class: "login-url" }, f.url),
+        h("div", { class: "row-btns" }, open, cp)),
+      h("div", { class: "login-step" }, h("b", {}, "2. "), T("表示されたコードを貼り付けて送ってください。"),
+        h("div", { class: "row-btns" }, code, send)));
+  };
+  const pollFlow = async () => {
+    for (let i = 0; i < 40 && dlg.open; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const st = await dev(id).get("/api/login").catch(() => null);
+      const f = st?.flow;
+      if (f && f.id === flow?.id && f.state !== "exchanging") return show(f);
+    }
+    if (dlg.open) fail(T("ログインの結果がわかりませんでした。しばらくしてから状態を確かめてください。"));
+  };
+  try {
+    show(await dev(id).post("/api/login/start", {}));
+  } catch (e) {
+    // An older collector has no /api/login/start.
+    if (e.status === 404 || (e.status === 403 && /^not available through the hub$/.test(e.message))) {
+      fail(T("{0} の ccdash は古いため、ここからはログインできません。ccdash を更新するか、そのマシンのセッションで /login を実行してください。", name), true);
+    } else fail(e.message);
+  }
+}
+
+// loginCard: in a session's chat, a card when the session stopped on the
+// login error (the collector's mark, or — for an older collector — the
+// transcript's last reply).
+function loginCard(id, session, items, hosted) {
+  const marked = session?.attention === "needs_you" && session.attention_reason === LOGIN_REASON;
+  const last = items?.length ? items[items.length - 1] : null;
+  const said = last?.kind === "assistant" && /Please run \/login|Login expired/.test(last.text || "");
+  if (!marked && !said) return null;
+  const go = h("button", { class: "btn primary", type: "button" }, icon("key"), " ", T("ログインし直す"));
+  go.addEventListener("click", () => loginDialog(id));
+  return h("div", { class: "restart-note login-note chat-login" }, icon("key"),
+    h("div", { class: "grow" },
+      h("div", { class: "rn-title" }, T("Claude Code のログインが切れています")),
+      h("div", { class: "muted small" }, hosted ? T("ログインし直すと、このセッションに続きを指示します。") : T("ログインし直したら、このセッションに続きを送ってください。"))),
+    go);
 }
 
 // ---- working beam ----
@@ -5111,6 +5268,8 @@ function chatView(id, { sid, key, compact = false, decisionOnly = false, deviceN
   const log = h("div", { class: "chat-log" }, h("div", { class: "empty" }, T("読み込み中…")));
   const scroller = h("div", { class: "chat" }, log);
   const approvalsEl = h("div", { class: "chat-dock" });
+  const loginEl = h("div", { class: "chat-dock", hidden: true });
+  let loginSig = "";
   // Subagents: a bar under the header when the session has any; the list
   // opens below it.
   let agents = [], agentsOpen = false, agentTick = 0;
@@ -5297,7 +5456,7 @@ function chatView(id, { sid, key, compact = false, decisionOnly = false, deviceN
     statusLine.replaceChildren(...(fresh ? liveStatusParts(fresh, onModel) : lastUsage ? statusParts(lastUsage, onModel) : []));
   };
   root = h("div", { class: decisionOnly ? "chat-wrap decision" : compact ? "tile chat-wrap compact" : "chat-wrap" }, bar, decisionOnly ? reasonEl : null, agentBar, agentList, scroller,
-    h("div", { class: "chat-bottom" }, approvalsEl, promptEl, h("div", { class: "quick-bar" }, quickRow, statusLine), composer),
+    h("div", { class: "chat-bottom" }, loginEl, approvalsEl, promptEl, h("div", { class: "quick-bar" }, quickRow, statusLine), composer),
     compact ? h("div", { class: "tile-resize", title: T("ドラッグで大きさを変更") }) : null);
 
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
@@ -5688,6 +5847,16 @@ function chatView(id, { sid, key, compact = false, decisionOnly = false, deviceN
       }
     } else {
       render(atBottom());
+    }
+
+    // Stopped on Claude Code's login error: a card to log the machine in.
+    const lastItem = items.length ? items[items.length - 1] : null;
+    const lsig = JSON.stringify([session?.attention, session?.attention_reason, lastItem?.kind, lastItem?.text, hosted]);
+    if (lsig !== loginSig) {
+      loginSig = lsig;
+      const card = loginCard(id, session, items, hosted);
+      loginEl.replaceChildren(...(card ? [card] : []));
+      loginEl.hidden = !card;
     }
 
     // A decision card needs none of the rest but the screen prompt.

@@ -58,8 +58,8 @@ const (
 	loginWaitURL    = 30 * time.Second
 	loginWaitDone   = 30 * time.Second
 
-	keyLoginOKAt    = "login_ok_at"    // Unix s of the last login ccdash saw
-	keyLoginExpires = "login_expires"  // RFC 3339: the expiry `claude auth status` last said
+	keyLoginOKAt    = "login_ok_at"   // Unix s of the last login ccdash saw
+	keyLoginExpires = "login_expires" // RFC 3339: the expiry `claude auth status` last said
 )
 
 // newAuthCmd builds `claude auth …`. A variable so tests can swap it.
@@ -409,6 +409,8 @@ func (s *Server) readLoginOutput(p *loginProc, r io.Reader) {
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		line := strings.TrimSpace(ansiStrip(sc.Text()))
+		// The code prompt has no newline: it leads the next line.
+		line = strings.TrimSpace(strings.TrimPrefix(line, "Paste code here if prompted >"))
 		if line == "" {
 			continue
 		}
@@ -473,8 +475,8 @@ func (s *Server) loginEnded(p *loginProc, err, ctxErr error) {
 	default:
 		p.info.State = model.LoginFailed
 		p.info.Error = "ログインできませんでした"
-		if len(p.tail) > 0 {
-			p.info.Error += ": " + p.tail[len(p.tail)-1]
+		if len(p.tail) > 0 { // Claude Code's own words ("Couldn't log in: …")
+			p.info.Error = p.tail[len(p.tail)-1]
 		}
 	}
 	p.info.URL = ""
