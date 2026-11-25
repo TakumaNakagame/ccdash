@@ -676,6 +676,8 @@ function deviceRow(d) {
     d.letter ? h("span", { class: "num mono", title: T("このホストのセッション番号の頭文字（例: ") + d.letter + T("12）") }, d.letter) : null,
     h("div", { class: "grow" }, h("div", { class: "title" }, d.name), h("div", { class: "sub" }, sub)),
     d.peer_access ? h("span", { class: "chip", title: T("この端末の ccdash mcp から他の端末へアクセスできます") }, PEER_LABEL[d.peer_access]) : null,
+    d.online ? h("button", { class: "btn small icon", title: T("この端末の Claude Code にログインし直す"), "aria-label": T("この端末の Claude Code にログインし直す"),
+      onclick: (e) => { e.stopPropagation(); loginDialog(d.id, d.name); } }, icon("key")) : null,
     local ? null : h("button", { class: "btn small", onclick: (e) => { e.stopPropagation(); deviceMenu(d); } }, T("管理")));
 }
 
@@ -1507,6 +1509,7 @@ async function devicePage(opts = {}) {
   mount.append(h("div", { class: "page" + (opts.compact ? " compact" : "") },
     h("div", { class: "row" },
       h("h1", { class: "grow" }, single ? name : T("セッション")),
+      one ? h("button", { class: "btn icon", title: T("この端末の Claude Code にログインし直す"), onclick: () => loginDialog(one), "aria-label": T("この端末の Claude Code にログインし直す") }, icon("key")) : null,
       one ? h("button", { class: "btn icon", title: T("この端末の ccdash collector を再起動（ホスト中のセッションは自動で再開）"), onclick: () => restartCollector(one, last), "aria-label": T("collector を再起動") }, icon("restart")) : null,
       h("button", { class: "btn", title: T("スキル・コマンドを新しいセッションで実行（TUI の S）"),
         onclick: () => {
@@ -1883,9 +1886,17 @@ async function loginDialog(id, name) {
   name = name || await deviceName(id);
   let flow = null, finished = false;
   const step = h("div", { class: "login-steps" }, h("div", { class: "muted small" }, T("ログインを始めています…")));
+  // The login now: when it reaches its limit (for logging in before that).
+  const now = h("div", { class: "muted small", hidden: true });
+  dev(id).get("/api/login").then((st) => {
+    if (st?.expired) now.textContent = T("今のログインは切れています。");
+    else if (st?.expires_at) now.textContent = T("今のログインの期限: {0}", fmtDateTime(st.expires_at));
+    now.hidden = !now.textContent;
+  }).catch(() => {});
   const dlg = dialog((body, close) => {
     body.append(h("h1", {}, T("{0} の Claude Code にログインし直す", name)),
       h("div", { class: "muted small" }, T("このマシンでログインし直すと、このマシンのセッションはすべて使えるようになります。")),
+      now,
       step,
       h("div", { class: "actions" }, h("button", { class: "btn", value: "cancel", formnovalidate: true }, T("閉じる"))));
   });
