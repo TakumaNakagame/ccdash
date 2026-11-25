@@ -33,6 +33,7 @@ var Endpoints = map[string]string{
 	"PostToolUseFailure": "/hooks/post-tool-failure",
 	"PermissionRequest":  "/hooks/permission-request",
 	"Stop":               "/hooks/stop",
+	"StopFailure":        "/hooks/stop-failure",
 	"SubagentStop":       "/hooks/subagent-stop",
 	"Notification":       "/hooks/notification",
 }
@@ -248,6 +249,24 @@ func NeedsResync(path string) (bool, error) {
 	if isManagedStatusLine(settings["statusLine"]) {
 		if p, err := paths.StatusLineScriptPath(); err == nil {
 			if _, err := os.Stat(p); err != nil {
+				return true, nil
+			}
+		}
+	}
+	// An install from before an event was added (StopFailure, for the
+	// login-expired notice) gets the missing event on the next start.
+	managed := map[string]bool{}
+	for event, raw := range hooks {
+		arr, _ := raw.([]any)
+		for _, item := range arr {
+			if isManagedEntry(item) {
+				managed[event] = true
+			}
+		}
+	}
+	if len(managed) > 0 {
+		for event := range Endpoints {
+			if !managed[event] {
 				return true, nil
 			}
 		}

@@ -43,6 +43,11 @@ type Discovered struct {
 	// Prompts counts the operator-typed prompts, capped at PromptCap
 	// (enough to decide when a session is worth an automatic title).
 	Prompts int
+	// AuthFailedAt is when the turn ended on a login error ("Login
+	// expired · Please run /login": Claude Code's API-error entry with
+	// error "authentication_failed"), when that entry is the transcript's
+	// newest user / assistant message; zero otherwise.
+	AuthFailedAt time.Time
 }
 
 // PromptCap is where Discovered.Prompts stops counting.
@@ -106,7 +111,8 @@ func readTranscript(path string) (Discovered, error) {
 	if err != nil {
 		return d, err
 	}
-	d.LastModified, d.LastPrompt, d.Entrypoint = tailTimes(path, info)
+	t := tailTimes(path, info)
+	d.LastModified, d.LastPrompt, d.Entrypoint, d.AuthFailedAt = t.lastEntry, t.lastPrompt, t.entrypoint, t.authFailed
 	d.Prompts = countPrompts(path, info.Size())
 
 	f, err := os.Open(path)
@@ -166,30 +172,33 @@ type tailEntry struct {
 	lastEntry  time.Time
 	lastPrompt time.Time
 	entrypoint string
+	authFailed time.Time
 }
 
 // tailTimes returns the newest entry timestamp and the newest real user
-// prompt timestamp in the transcript, reading only its tail (transcripts
-// can be tens of MB). lastEntry falls back to the mtime, lastPrompt to
-// lastEntry, when not found.
-func tailTimes(path string, info os.FileInfo) (lastEntry, lastPrompt time.Time, entrypoint string) {
+// prompt timestamp in the transcript (plus the entrypoint and a trailing
+// login error), reading only its tail (transcripts can be tens of MB).
+// lastEntry falls back to the mtime, lastPrompt to lastEntry, when not
+// found.
+func tailTimes(path string, info os.FileInfo) tailEntry {
 	tailMu.Lock()
 	c, ok := tailCache[path]
 	tailMu.Unlock()
 	if ok && c.size == info.Size() && c.mtime.Equal(info.ModTime()) {
-		return c.lastEntry, c.lastPrompt, c.entrypoint
+		return c
 	}
-	lastEntry, lastPrompt, entrypoint = scanTail(path, info.Size())
-	if lastEntry.IsZero() {
-		lastEntry = info.ModTime()
+	c = scanTail(path, info.Size())
+	c.size, c.mtime = info.Size(), info.ModTime()
+	if c.lastEntry.IsZero() {
+		c.lastEntry = info.ModTime()
 	}
-	if lastPrompt.IsZero() {
-		lastPrompt = lastEntry
+	if c.lastPrompt.IsZero() {
+		c.lastPrompt = c.lastEntry
 	}
 	tailMu.Lock()
-	tailCache[path] = tailEntry{size: info.Size(), mtime: info.ModTime(), lastEntry: lastEntry, lastPrompt: lastPrompt, entrypoint: entrypoint}
+	tailCache[path] = c
 	tailMu.Unlock()
-	return lastEntry, lastPrompt, entrypoint
+	return c
 }
 
 // promptCache remembers, per transcript, how far countPrompts has read and
@@ -243,12 +252,13 @@ func countPrompts(path string, size int64) int {
 // scanTail reads growing windows from the end of the file until it has
 // seen both an entry timestamp and a real prompt (a long tool run after
 // the last prompt can be megabytes). Capped at 16 MiB.
-func scanTail(path string, size int64) (lastEntry, lastPrompt time.Time, entrypoint string) {
+func scanTail(path string, size int64) (t tailEntry) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
 	}
 	defer f.Close()
+	sawMessage := false
 	for win := int64(64 << 10); ; win *= 4 {
 		off := size - win
 		if off < 0 {
@@ -262,25 +272,47 @@ func scanTail(path string, size int64) (lastEntry, lastPrompt time.Time, entrypo
 		if off > 0 {
 			lines = lines[1:] // first line is likely cut mid-way
 		}
-		for i := len(lines) - 1; i >= 0 && lastPrompt.IsZero(); i-- {
-			if entrypoint == "" {
-				entrypoint = entrypointOf(lines[i])
+		t.lastEntry, t.lastPrompt, t.entrypoint, t.authFailed = time.Time{}, time.Time{}, "", time.Time{}
+		sawMessage = false
+		for i := len(lines) - 1; i >= 0 && t.lastPrompt.IsZero(); i-- {
+			if t.entrypoint == "" {
+				t.entrypoint = entrypointOf(lines[i])
 			}
 			ts, prompt := lineTimes([]byte(lines[i]))
 			if ts.IsZero() {
 				continue
 			}
-			if lastEntry.IsZero() {
-				lastEntry = ts
+			if !sawMessage && isMessageLine(lines[i]) {
+				sawMessage = true
+				if AuthFailedLine(lines[i]) {
+					t.authFailed = ts
+				}
+			}
+			if t.lastEntry.IsZero() {
+				t.lastEntry = ts
 			}
 			if prompt {
-				lastPrompt = ts
+				t.lastPrompt = ts
 			}
 		}
-		if !lastPrompt.IsZero() || off == 0 || win >= 16<<20 {
+		if !t.lastPrompt.IsZero() || off == 0 || win >= 16<<20 {
 			return
 		}
 	}
+}
+
+// isMessageLine reports whether a transcript line is a user or assistant
+// message (not a summary, a system entry or other bookkeeping).
+func isMessageLine(line string) bool {
+	return strings.Contains(line, `"type":"assistant"`) || strings.Contains(line, `"type":"user"`)
+}
+
+// AuthFailedLine reports whether a transcript line is Claude Code's
+// API-error entry for a login that no longer works ("Login expired ·
+// Please run /login", "OAuth token revoked · …", "Not logged in · …").
+func AuthFailedLine(line string) bool {
+	return strings.Contains(line, `"isApiErrorMessage":true`) &&
+		strings.Contains(line, `"error":"authentication_failed"`)
 }
 
 // entrypointOf pulls the "entrypoint" field out of a transcript line
@@ -466,4 +498,14 @@ func cleanTitle(s string) string {
 	// when the user was debugging an integration; mask before persisting
 	// the result as a session title.
 	return redact.String(strings.TrimSpace(s))
+}
+
+// AuthFailedAt is Discovered.AuthFailedAt for one transcript: when its
+// newest message is the login error, else zero.
+func AuthFailedAt(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return tailTimes(path, info).authFailed
 }

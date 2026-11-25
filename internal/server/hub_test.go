@@ -108,6 +108,19 @@ func TestHubAllowed(t *testing.T) {
 		{"GET", "/pty/abc/stream", off, false},
 		{"POST", "/approvals/12/decide", on, true},
 		{"POST", "/approvals/12/decide", off, false},
+		// Logging this machine's Claude Code in again: the state is a
+		// read, the sign-in itself is gated like starting a session.
+		{"GET", "/api/login", off, true},
+		{"GET", "/api/login/flow", on, true},
+		{"GET", "/api/login/flow", off, false},
+		{"POST", "/api/login/start", on, true},
+		{"POST", "/api/login/start", off, false},
+		{"POST", "/api/login/code", on, true},
+		{"POST", "/api/login/code", off, false},
+		{"POST", "/api/login/cancel", on, true},
+		{"GET", "/api/login/start", on, false},
+		{"POST", "/api/login", on, false},
+		{"POST", "/api/login/other", on, false},
 	}
 	for _, c := range cases {
 		r := httptest.NewRequest(c.method, c.path, nil)
@@ -239,6 +252,21 @@ func TestUploadName(t *testing.T) {
 	} {
 		if got := uploadName(c.sent, c.ct); got != c.want {
 			t.Errorf("uploadName(%q, %q) = %q, want %q", c.sent, c.ct, got, c.want)
+		}
+	}
+}
+
+// TestHubAllowedLoginNotForPeers: another joined device can't run the
+// sign-in on this machine or read its URL.
+func TestHubAllowedLoginNotForPeers(t *testing.T) {
+	on := settings.Defaults()
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/api/login/flow"}, {"POST", "/api/login/start"}, {"POST", "/api/login/code"}, {"POST", "/api/login/cancel"},
+	} {
+		r := httptest.NewRequest(c.method, c.path, nil)
+		r.Header.Set(tunnel.HeaderPeerID, "dev2")
+		if ok, _ := hubAllowed(r, on); ok {
+			t.Errorf("%s %s from a peer allowed", c.method, c.path)
 		}
 	}
 }

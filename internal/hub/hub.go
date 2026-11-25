@@ -715,6 +715,9 @@ type deviceView struct {
 	// Restart is the device's scheduled collector restart, while one is
 	// pending or just ended without running (the portal / app warn).
 	Restart *model.RestartState `json:"restart,omitempty"`
+	// Login is the device's Claude Code login while it needs the
+	// operator (expired, about to expire, or a sign-in under way).
+	Login *model.LoginState `json:"login,omitempty"`
 }
 
 func (h *Hub) handleListDevices(w http.ResponseWriter, r *http.Request) {
@@ -734,6 +737,9 @@ func (h *Hub) handleListDevices(w http.ResponseWriter, r *http.Request) {
 			v.Remote = pc.Remote
 			if rs := snaps[d.ID].Restart; rs != nil && (rs.Pending || rs.Last != "") {
 				v.Restart = rs
+			}
+			if ls := snaps[d.ID].Login; ls != nil && (ls.Expired || ls.Soon || ls.Flow != nil) {
+				v.Login = ls
 			}
 		}
 		out = append(out, v)

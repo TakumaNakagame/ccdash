@@ -784,6 +784,7 @@ func (s *Server) overview(ctx context.Context, hostArg string) (any, error) {
 	noteHosts(out, offline, errs)
 	var waiting []map[string]any
 	restarts := map[string]any{}
+	logins := map[string]any{}
 	usage := map[string]any{}
 	for _, h := range hs {
 		if ws, err := h.st.WaitingSpawns(ctx); err == nil {
@@ -798,6 +799,9 @@ func (s *Server) overview(ctx context.Context, hostArg string) (any, error) {
 		if rs, err := h.st.RestartStatus(ctx); err == nil && rs.Pending {
 			restarts[hostLabel(h)] = s.restartView(h, rs)
 		}
+		if ls, err := h.st.LoginStatus(ctx); err == nil && ls.Expired {
+			logins[hostLabel(h)] = s.loginView(h, ls)
+		}
 		if u, err := h.st.UsageSummary(ctx, 1); err == nil {
 			usage[hostLabel(h)] = map[string]any{
 				"usd_at_api_list_price": fmt.Sprintf("%.2f", u.Today.Cost),
@@ -809,6 +813,10 @@ func (s *Server) overview(ctx context.Context, hostArg string) (any, error) {
 	if len(waiting) > 0 {
 		out["new_sessions_waiting"] = waiting
 		out["new_sessions_waiting_note"] = "claudes started by ccdash that stopped at a dialog (e.g. Claude Code's folder-trust question) before they have a session; the operator answers it in ccdash (TUI row / portal 起動中)"
+	}
+	if len(logins) > 0 {
+		out["login_expired"] = logins
+		out["login_expired_note"] = "Claude Code's login stopped working on these hosts (keyed by host), so their sessions can't go on; the operator logs in again from ccdash (the portal's banner → ログインし直す) — you can't, so tell them"
 	}
 	// One host keeps the single-host shape.
 	if len(hs) == 1 {
@@ -1699,4 +1707,26 @@ func (s *Server) scheduleRestart(ctx context.Context, hostArg string, cancel boo
 		return nil, fmt.Errorf("schedule the restart on %s (is the ccdash collector running? it must run as `ccdash server` to restart itself): %w", hostLabel(h), err)
 	}
 	return withHost(s.restartView(h, rs)), nil
+}
+
+// loginView is one host's expired Claude Code login for overview: the
+// sessions stopped on it (refs + url). Never a sign-in URL — the state has
+// none.
+func (s *Server) loginView(h host, ls model.LoginState) map[string]any {
+	stopped := make([]map[string]any, len(ls.Sessions))
+	for i, x := range ls.Sessions {
+		row := map[string]any{"session": located{x: model.Session{SessionID: x.SessionID, Num: x.Num}, h: h}.ref()}
+		if x.Title != "" {
+			row["title"] = x.Title
+		}
+		if s.hubURL != "" {
+			row["url"] = s.hubURL + "/s/" + url.PathEscape(x.SessionID)
+		}
+		stopped[i] = row
+	}
+	out := map[string]any{"stopped_sessions": stopped}
+	if !ls.ExpiresAt.IsZero() {
+		out["expires_at"] = ls.ExpiresAt.Format(time.RFC3339)
+	}
+	return out
 }

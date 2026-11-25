@@ -246,3 +246,29 @@ func TestForwarderDeadCollector(t *testing.T) {
 		t.Errorf("forwarder took %v against a dead collector", d)
 	}
 }
+
+// TestNeedsResyncMissingEvent: an install from before an event was added
+// (StopFailure) is rewritten on the next collector start.
+func TestNeedsResyncMissingEvent(t *testing.T) {
+	in := newInstall(t, "http://127.0.0.1:9123")
+	if _, err := in.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := readSettings(in.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(settings["hooks"].(map[string]any), "StopFailure")
+	if err := writeSettings(in.Path, settings); err != nil {
+		t.Fatal(err)
+	}
+	if stale, _ := NeedsResync(in.Path); !stale {
+		t.Fatal("install without StopFailure: NeedsResync should be true")
+	}
+	if _, err := in.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if stale, _ := NeedsResync(in.Path); stale {
+		t.Fatal("after Apply: NeedsResync should be false")
+	}
+}

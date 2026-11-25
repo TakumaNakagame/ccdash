@@ -256,6 +256,9 @@ var (
 	// A message between a parent and a child session on two machines
 	// (message.go) — for peers only, see hubAllowed.
 	hubMessage = regexp.MustCompile(`^/api/sessions/[^/]+/message$`)
+	// The sign-in for this machine's Claude Code (login.go): the URL, the
+	// code, start and cancel.
+	hubLogin = regexp.MustCompile(`^/api/login/(flow|start|code|cancel)$`)
 )
 
 // hubAllowed reports whether a tunnel request may reach the mux.
@@ -270,7 +273,7 @@ func hubAllowed(r *http.Request, cfg settings.Settings) (bool, string) {
 		return true, ""
 	case r.Method == http.MethodPost && hubTaskEdit.MatchString(p) && p != "/api/tasks/sync" && p != "/api/tasks/import":
 		return true, ""
-	case r.Method == http.MethodGet && (p == "/pty/" || p == "/pty" || p == "/api/restart"):
+	case r.Method == http.MethodGet && (p == "/pty/" || p == "/pty" || p == "/api/restart" || p == "/api/login"):
 		return true, ""
 	case r.Method == http.MethodPut && p == "/api/brief-common", r.Method == http.MethodPost && hubProjectNote.MatchString(p):
 		// A person's edit in the portal. Same gate as starting a session:
@@ -288,6 +291,18 @@ func hubAllowed(r *http.Request, cfg settings.Settings) (bool, string) {
 		// same gate as starting one.
 		if r.Header.Get(tunnel.HeaderPeerID) != "" {
 			return false, "not available through the hub to another device: only the operator changes roles"
+		}
+		if !cfg.AttachEnabled {
+			return false, "attach is OFF on this device"
+		}
+		return true, ""
+	case hubLogin.MatchString(p) && (r.Method == http.MethodPost || p == "/api/login/flow" && r.Method == http.MethodGet):
+		// Logging Claude Code in again (login.go): the operator's, from the
+		// portal — never another joined device. It runs `claude auth login`
+		// here; with attach on the hub can already run claude with any
+		// prompt, so it has the same gate.
+		if r.Header.Get(tunnel.HeaderPeerID) != "" {
+			return false, "not available through the hub to another device: only the operator logs this machine in"
 		}
 		if !cfg.AttachEnabled {
 			return false, "attach is OFF on this device"

@@ -873,7 +873,7 @@ button.sent-file { width: 100%; font: inherit; color: inherit; cursor: pointer; 
 aside.viewer.side { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; width: var(--side-w, min(46vw, 760px)); display: flex; flex-direction: column;
   background: var(--panel); border-left: 1px solid var(--line); box-shadow: -12px 0 32px rgb(0 0 0 / .12); animation: side-in .22s cubic-bezier(.2, .8, .2, 1); }
 @keyframes side-in { from { transform: translateX(40px); opacity: 0; } }
-body.side-open header#top, body.side-open #restartbar, body.side-open main#view { margin-right: var(--side-w, min(46vw, 760px)); }
+body.side-open header#top, body.side-open #restartbar, body.side-open #loginbar, body.side-open main#view { margin-right: var(--side-w, min(46vw, 760px)); }
 aside.viewer.side .doc { padding: 22px 22px 40px; }
 
 /* Tile header: compact icon buttons so the title stays readable, also on
@@ -920,7 +920,7 @@ aside.viewer.side .doc { padding: 22px 22px 40px; }
 #taskpane .task-handle { position: absolute; z-index: 1; top: 0; bottom: 0; left: -7px; width: 12px; }
 body.tasks-resizing { cursor: col-resize; user-select: none; }
 body.tasks-resizing .task-handle::before, body.tasks-resizing .task-handle::after { background: var(--accent); }
-body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #restartbar, body.tasks-open:not(.side-open) main#view { margin-right: var(--tasks-w); }
+body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #restartbar, body.tasks-open:not(.side-open) #loginbar, body.tasks-open:not(.side-open) main#view { margin-right: var(--tasks-w); }
 .task-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 14px; min-height: 48px; border-bottom: 1px solid var(--line); font-weight: 700; }
 #taskpane .task-body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 8px 24px; }
 #taskpane .task-hosts { flex: none; margin: 0; padding: 8px 24px 6px 10px; border-bottom: 1px solid var(--line); }
@@ -982,8 +982,18 @@ body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #res
 
 /* Restart bar: a device's collector will restart (and resume its hosted
    sessions) once they are idle — a warning on every page, under the header. */
-#restartbar { padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
-#restartbar[hidden] { display: none; }
+#restartbar, #loginbar { padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
+#restartbar[hidden], #loginbar[hidden] { display: none; }
+.login-note > .ic { color: var(--bad); }
+.chat-login { margin: 0 0 8px; max-width: none; }
+.login-steps { margin: 12px 0; display: grid; gap: 14px; }
+.login-step { line-height: 1.5; }
+.login-url { margin: 6px 0; padding: 6px 8px; font-family: var(--mono); font-size: var(--fs-sm); word-break: break-all;
+  user-select: all; -webkit-user-select: all; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm); }
+.login-step .row-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; align-items: center; }
+.login-code { flex: 1 1 14em; min-width: 0; font-family: var(--mono); }
+.login-ok { font-weight: 600; color: var(--ok); }
+.login-err { color: var(--bad); }
 .restart-note { display: flex; align-items: center; gap: 10px; max-width: 960px; margin: 0 auto; padding: 8px 12px; line-height: 1.4;
   background: var(--panel); border: 1px solid color-mix(in srgb, var(--warn) 60%, var(--line)); border-radius: var(--r-md); }
 .restart-note + .restart-note { margin-top: 6px; }
@@ -999,8 +1009,8 @@ body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #res
 .restart-choices { margin: 8px 0 12px; padding-left: 18px; line-height: 1.6; }
 .restart-choices li + li { margin-top: 4px; }
 @media (max-width: 1023px) {
-  #restartbar { padding: 6px 10px; }
-  body.detail #restartbar { padding-top: max(6px, env(safe-area-inset-top)); }
+  #restartbar, #loginbar { padding: 6px 10px; }
+  body.detail #restartbar, body.detail #loginbar { padding-top: max(6px, env(safe-area-inset-top)); }
 }
 
 /* Multi-host: the host a session runs on is a quiet tag on its row; the
@@ -1134,7 +1144,7 @@ body.tasks-open:not(.side-open) header#top, body.tasks-open:not(.side-open) #res
    pane's place (it covers it while open); a full sheet on a phone. */
 #kidspane { position: fixed; z-index: 26; top: 0; right: 0; bottom: 0; width: var(--tasks-w); display: flex; flex-direction: column;
   background: var(--panel); border-left: 1px solid var(--line); }
-body.kids-open:not(.side-open) header#top, body.kids-open:not(.side-open) #restartbar, body.kids-open:not(.side-open) main#view { margin-right: var(--tasks-w); }
+body.kids-open:not(.side-open) header#top, body.kids-open:not(.side-open) #restartbar, body.kids-open:not(.side-open) #loginbar, body.kids-open:not(.side-open) main#view { margin-right: var(--tasks-w); }
 .kids-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 10px 24px; background: var(--bg); }
 .kids-head, .inbox-head { display: flex; align-items: center; gap: 8px; margin: 14px 4px 6px; font-size: var(--fs-sm); font-weight: 600; color: var(--muted); }
 .kids-head .count, .inbox-head .count, .inbox-page h1 .count { font-weight: 400; font-variant-numeric: tabular-nums; }
@@ -1166,7 +1176,7 @@ body.kids-open:not(.side-open) header#top, body.kids-open:not(.side-open) #resta
 @media (max-width: 1023px) {
   /* A sheet over the chat; dialogs (the confirm of a ! command) open above it. */
   #kidspane { left: 0; width: auto; z-index: 40; border-left: 0; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
-  body.kids-open:not(.side-open) header#top, body.kids-open:not(.side-open) #restartbar, body.kids-open:not(.side-open) main#view { margin-right: 0; }
+  body.kids-open:not(.side-open) header#top, body.kids-open:not(.side-open) #restartbar, body.kids-open:not(.side-open) #loginbar, body.kids-open:not(.side-open) main#view { margin-right: 0; }
   .chat-wrap.decision .dec-head { padding-top: 8px; }
 }
 @media (pointer: coarse) { .kid-row { padding-top: 12px; padding-bottom: 12px; } .kids-toggle { min-height: 40px; } }

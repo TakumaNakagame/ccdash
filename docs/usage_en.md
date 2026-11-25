@@ -792,6 +792,16 @@ What the portal may do is limited by the device's own settings: with
 decide approvals; with **Hub connection** off the device is offline.
 - **On a phone**: swipe right to go back (session → device list → board; from the left edge too when installed as an app, elsewhere in the browser, whose own gesture owns the edge). Opening a session no longer pops the keyboard.
 
+### When Claude Code's login expires
+
+Claude Code keeps one login per machine. When it expires, that machine's sessions stop on "Login expired · Please run /login" and ccdash marks them "Login expired" (needs you). The portal and the app show a banner ("Claude Code's login has expired" on that machine) and one push per machine.
+
+1. Press **Log in again** on the banner (or the card in the session's chat). The machine's collector runs `claude auth login` and shows the sign-in URL.
+2. **Open the sign-in page** (or **Copy URL**) in any browser and allow it.
+3. Paste the code it shows and press **Send**. The account now signed in is shown.
+
+Every session on that machine works again. Sessions ccdash runs are told to go on; the others become "Logged in again: send the next prompt". The banner also shows 3 days before the login's time limit. It needs **Attach** on for that machine. The URL and the code are never stored.
+
 ### Local portal (`ccdash web`)
 
 The portal for this machine only, on `127.0.0.1`, with no hub server —

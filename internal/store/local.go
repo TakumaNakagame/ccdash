@@ -264,6 +264,12 @@ func (l *Local) RestartStatus(ctx context.Context) (model.RestartState, error) {
 	return st, err
 }
 
+func (l *Local) LoginStatus(ctx context.Context) (model.LoginState, error) {
+	var st model.LoginState
+	err := l.callCollector(ctx, http.MethodGet, "/api/login", nil, &st)
+	return st, err
+}
+
 func (l *Local) ScheduleRestart(ctx context.Context, by string, timeout time.Duration) (model.RestartState, error) {
 	// An older collector ignores {"when":"idle"} and restarts at once; it
 	// has no GET /api/restart, so ask that first.

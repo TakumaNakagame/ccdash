@@ -7,7 +7,10 @@ package i18n
 var en = map[string]string{
 	// Labels stored or sent in Japanese (model.WaitLabel, attention
 	// reasons, internal/tasks labels, restart waits).
-	"回答待ち":  "Awaiting answer",
+	"回答待ち": "Awaiting answer",
+	// attention reasons for Claude Code's login (server/login.go)
+	"ログイン切れ": "Login expired",
+	"ログインし直しました: 続きを送ってください": "Logged in again: send the next prompt",
 	"作業待ち":  "Awaiting action",
 	"報告":    "Report",
 	"自動で続行": "Continuing",

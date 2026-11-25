@@ -113,7 +113,7 @@ func TestBoard(t *testing.T) {
 		{SessionID: "c", Status: model.StatusIdle, Attention: model.AttentionDone},
 		{SessionID: "d", Status: model.StatusIdle},
 		{SessionID: "e", Status: model.StatusStopped, Unseen: true}, // NEW without a done flag
-	}, nil)
+	}, nil, nil)
 	if n := hub.badgeCount(); n != 3 {
 		t.Fatalf("badgeCount = %d, want 3 (b, c, e)", n)
 	}
@@ -178,8 +178,8 @@ func TestPushSubscribeAndKey(t *testing.T) {
 // reports it, asks for a login first, and says so when nobody has it.
 func TestSessionLink(t *testing.T) {
 	hub := newTestHub(t, true)
-	hub.storeSnapshot(Device{ID: "d1"}, []model.Session{{SessionID: "x"}}, nil)
-	hub.storeSnapshot(Device{ID: "d2"}, []model.Session{{SessionID: "abc-123"}}, nil)
+	hub.storeSnapshot(Device{ID: "d1"}, []model.Session{{SessionID: "x"}}, nil, nil)
+	hub.storeSnapshot(Device{ID: "d2"}, []model.Session{{SessionID: "abc-123"}}, nil, nil)
 	w := serve(hub.Handler(), "GET", "/s/abc-123", "", nil)
 	if w.Code != http.StatusFound || w.Header().Get("Location") != "/#/d/d2/s/abc-123" {
 		t.Fatalf("link = %d %q", w.Code, w.Header().Get("Location"))
@@ -222,5 +222,32 @@ func TestRestartNotice(t *testing.T) {
 	restartNotice(d, pending, st)
 	if _, ok := restartNotice(d, &model.RestartState{Last: "cancelled", LastAt: at}, st); ok {
 		t.Error("cancel pushed")
+	}
+}
+
+// TestLoginNotice: one push per machine when its login stops working, none
+// on the baseline look or while it stays expired, and never a URL.
+func TestLoginNotice(t *testing.T) {
+	d := Device{ID: "d1", Name: "haruna"}
+	st := newWatchState()
+	expired := &model.LoginState{Expired: true, Sessions: []model.LoginSession{{SessionID: "a"}, {SessionID: "b"}}}
+	if _, ok := loginNotice(d, &model.LoginState{}, st); ok {
+		t.Fatal("baseline look pushed")
+	}
+	n, ok := loginNotice(d, expired, st)
+	if !ok || !strings.Contains(n.Title, "ログイン切れ") || !strings.Contains(n.Body, "2 件") || n.URL != "/#/login/d1" {
+		t.Fatalf("expired notice = %+v, %v", n, ok)
+	}
+	if strings.Contains(n.Body, "http") {
+		t.Fatalf("notice carries a URL: %q", n.Body)
+	}
+	if _, ok := loginNotice(d, expired, st); ok {
+		t.Fatal("pushed again while still expired")
+	}
+	if _, ok := loginNotice(d, &model.LoginState{}, st); ok {
+		t.Fatal("pushed on recovery")
+	}
+	if _, ok := loginNotice(d, nil, st); ok {
+		t.Fatal("pushed for an old collector")
 	}
 }

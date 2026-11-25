@@ -238,6 +238,9 @@ type Store interface {
 	RestartStatus(ctx context.Context) (model.RestartState, error)
 	ScheduleRestart(ctx context.Context, by string, timeout time.Duration) (model.RestartState, error)
 	CancelRestart(ctx context.Context) (model.RestartState, error)
+	// LoginStatus is the machine's Claude Code login (GET /api/login):
+	// whether it stopped working and which sessions stopped on it.
+	LoginStatus(ctx context.Context) (model.LoginState, error)
 
 	// SetParent makes parent the session's parent, overwriting the one it
 	// had (adopt_session); "" clears it (release_session). parentHost
