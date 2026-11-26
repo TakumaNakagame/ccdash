@@ -676,9 +676,45 @@ function deviceRow(d) {
     d.letter ? h("span", { class: "num mono", title: T("このホストのセッション番号の頭文字（例: ") + d.letter + T("12）") }, d.letter) : null,
     h("div", { class: "grow" }, h("div", { class: "title" }, d.name), h("div", { class: "sub" }, sub)),
     d.peer_access ? h("span", { class: "chip", title: T("この端末の ccdash mcp から他の端末へアクセスできます") }, PEER_LABEL[d.peer_access]) : null,
+    d.online ? updateChip(d) : null,
     d.online ? h("button", { class: "btn small icon", title: T("この端末の Claude Code にログインし直す"), "aria-label": T("この端末の Claude Code にログインし直す"),
       onclick: (e) => { e.stopPropagation(); loginDialog(d.id, d.name); } }, icon("key")) : null,
     local ? null : h("button", { class: "btn small", onclick: (e) => { e.stopPropagation(); deviceMenu(d); } }, T("管理")));
+}
+
+// ---- ccdash update (docs/decisions/0011-auto-update.md) ----
+// The hub carries each device's version and update state (/api/devices →
+// update): a chip on the device's row, and the Update button when a newer
+// release is out. The collector downloads it itself (no Claude involved)
+// and restarts once no hosted session is busy.
+function updateChip(d) {
+  const u = d.update;
+  if (!u) return null; // an older collector: updated by hand once
+  if (u.running) return h("span", { class: "chip" }, T("更新中…"));
+  if (u.installed && u.restart_needed) return h("span", { class: "chip pend", title: T("入れ替えました。この collector は自分では再起動できないので、動かしている所から再起動してください。") }, T("再起動が要る（{0}）", u.installed));
+  if (u.installed) return h("span", { class: "chip", title: T("作業中のセッションが終わり次第、再起動して新しい版にします。") }, T("再起動待ち（{0}）", u.installed));
+  if (!u.available) return u.auto && u.auto !== "off" ? h("span", { class: "chip", title: T("毎晩 3〜5 時に新しい版を見て、自動で更新します（{0}）", u.auto) }, T("自動更新")) : null;
+  return h("button", { class: "btn small primary", title: T("{0} → {1}", u.current, u.latest),
+    onclick: (e) => { e.stopPropagation(); updateDialog(d); } }, T("更新 {0}", u.latest));
+}
+
+function updateDialog(d) {
+  const u = d.update;
+  dialog((body, close) => {
+    const go = h("button", { class: "btn primary", type: "button" }, T("更新する"));
+    go.addEventListener("click", async () => {
+      go.disabled = true;
+      try {
+        await dev(d.id).post("/api/update", {});
+        close();
+        toast(T("{0} の ccdash を更新しています。終わり次第、セッションが空いたら再起動します", d.name), 6000);
+      } catch (e) { toast(e.message); go.disabled = false; }
+    });
+    body.append(h("h1", {}, T("{0} の ccdash を更新しますか？", d.name)),
+      h("div", { class: "muted small" }, T("{0} → {1}（{2}）", u.current, u.latest, u.channel)),
+      h("div", { class: "muted small" }, T("collector が GitHub のリリースを取ってきて入れ替え、作業中のセッションが終わってから再起動します。ホスト中のセッションは自動で再開されます。")),
+      h("div", { class: "actions" }, h("button", { class: "btn", value: "cancel", formnovalidate: true }, T("やめる")), go));
+  });
 }
 
 function showToken(body, close, title, res) {

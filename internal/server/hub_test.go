@@ -121,6 +121,13 @@ func TestHubAllowed(t *testing.T) {
 		{"GET", "/api/login/start", on, false},
 		{"POST", "/api/login", on, false},
 		{"POST", "/api/login/other", on, false},
+		// Updating this collector's ccdash: the state is a read, the
+		// update is gated like a restart.
+		{"GET", "/api/update", off, true},
+		{"POST", "/api/update", on, true},
+		{"POST", "/api/update", off, false},
+		{"PUT", "/api/update", on, false},
+		{"PUT", "/api/settings/auto_update", on, false},
 	}
 	for _, c := range cases {
 		r := httptest.NewRequest(c.method, c.path, nil)
@@ -262,6 +269,7 @@ func TestHubAllowedLoginNotForPeers(t *testing.T) {
 	on := settings.Defaults()
 	for _, c := range []struct{ method, path string }{
 		{"GET", "/api/login/flow"}, {"POST", "/api/login/start"}, {"POST", "/api/login/code"}, {"POST", "/api/login/cancel"},
+		{"POST", "/api/update"},
 	} {
 		r := httptest.NewRequest(c.method, c.path, nil)
 		r.Header.Set(tunnel.HeaderPeerID, "dev2")

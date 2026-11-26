@@ -517,6 +517,14 @@ curl -H "Authorization: Bearer $TOKEN" \
 ポータルにできることは端末側の設定で制限される: **Attach** OFF なら閲覧のみ、**Approval blocking** OFF なら承認不可、**Hub connection** OFF なら端末はオフライン扱い。
 - **スマホでの操作**: 横に右スワイプすると前の画面に戻ります (セッション → 端末の一覧 → ボード。ホーム画面に追加したアプリでは画面の左端からも、ブラウザでは左端以外から)。セッションを開いてもキーボードは自動では出ません。
 
+### ccdash の更新
+
+ポータルとアプリの端末の行に、新しい版があると「更新 v…」のボタンが出ます。押すと、その端末の collector が GitHub のリリースを取ってきて入れ替え、作業中のセッションが終わってから再起動します（ホスト中のセッションは自動で再開）。Claude は使わないので、Claude のログインが切れていても更新できます。端末側で **Attach** が ON のときだけ使えます。
+
+毎晩自動で更新させるには、その端末で `ccdash update auto dev`（rc 版も）か `ccdash update auto stable` を実行します（TUI の設定の **Auto update** でも同じ）。3〜5 時に新しい版があれば入れ替え、プッシュで知らせます。やめるときは `ccdash update auto off`。TUI に組み込まれた collector（`ccdash` / `ccdash -k`）は自分では再起動できないので、「再起動が要る」と出ます。
+
+この機能より前の collector は、いちど端末で `ccdash update --channel dev` を手で実行してください。
+
 ### Claude Code のログインが切れたとき
 
 Claude Code のログインはマシンごとです。切れると、そのマシンのセッションが「Login expired · Please run /login」で止まり、ccdash では「ログイン切れ」(要対応) になります。ポータルとアプリの上部に「haruna の Claude Code のログインが切れています」の帯が出て、プッシュ通知もマシンごとに 1 回届きます。

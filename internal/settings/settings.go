@@ -107,6 +107,10 @@ type Settings struct {
 	// UpdateChannel is what the update check / `u` / `ccdash update`
 	// follow: "stable" (tagged releases) or "dev" (pre-releases too).
 	UpdateChannel string
+	// AutoUpdate lets the collector update itself once a night
+	// (internal/server/update.go): "off", or the channel to follow
+	// ("stable" / "dev").
+	AutoUpdate string
 	// Language of the TUI's and CLI's own words (internal/i18n): "auto"
 	// (from $LANG), "en" or "ja". The portal has its own, per user.
 	Language string
@@ -271,6 +275,7 @@ const (
 	legacyKeyPaneSplit  = "pane_split"
 	keyTimeFormat       = "time_format"
 	keyUpdateChannel    = "update_channel"
+	keyAutoUpdate       = "auto_update"
 	keyLanguage         = "language"
 	keyInvertListScroll = "invert_list_scroll"
 	keyAutoArchiveDays  = "auto_archive_days"
@@ -311,6 +316,7 @@ func Defaults() Settings {
 		TasksPane:     true,
 		TimeFormat:    "relative",
 		UpdateChannel: "stable",
+		AutoUpdate:    "off",
 		Language:      "auto",
 
 		AutoArchiveDays:    7,
@@ -423,6 +429,11 @@ func loadPairs(out *Settings) []loadPair {
 		{keyUpdateChannel, func(v string) {
 			if v == "stable" || v == "dev" {
 				out.UpdateChannel = v
+			}
+		}},
+		{keyAutoUpdate, func(v string) {
+			if v == "off" || v == "stable" || v == "dev" {
+				out.AutoUpdate = v
 			}
 		}},
 	}
@@ -658,6 +669,7 @@ func AllSpecs() []Spec {
 		{Key: keyTimeFormat, Label: "Session time", Help: "How the session list shows each session's last prompt time: relative (4m, 2h) or absolute (09/30 18:45).", Kind: KindEnum, Options: []string{"relative", "absolute"}},
 		{Key: keyLanguage, Label: "Language", Help: "Language of the TUI's and CLI's own text — task pane, header counts, `ccdash tasks` output: auto = from $LANG (ja* = Japanese, else English), en, ja. The web portal has its own under 表示 / Display.", Kind: KindEnum, Options: []string{"auto", "en", "ja"}},
 		{Key: keyUpdateChannel, Label: "Update channel", Help: "What the update check, u and `ccdash update` follow: stable = tagged releases only, dev = pre-releases (rc) too.", Kind: KindEnum, Options: []string{"stable", "dev"}},
+		{Key: keyAutoUpdate, Label: "Auto update", Help: "Update ccdash by itself once a night (03:00–05:00) and restart once no hosted session is busy: off, or the channel to follow (stable / dev). The portal's Update button works either way.", Kind: KindEnum, Options: []string{"off", "stable", "dev"}},
 		{Key: keyVerticalAutoCols, Label: "Vertical auto threshold (cols)", Help: "Width in columns below which auto-layout flips to vertical. Lower = stay horizontal longer; higher = go vertical sooner.", Kind: KindInt, Min: 40, Max: 240},
 		// Risk-bearing toggles
 		{Key: keyApproveEnabled, Label: "Approval blocking", Help: "When OFF, ccdash never holds PermissionRequest hooks — Claude prompts you in the terminal as it would without ccdash, and the a/A/d shortcuts are disabled", Kind: KindBool},
@@ -771,6 +783,8 @@ func Get(s Settings, key string) any {
 		return s.Language
 	case keyUpdateChannel:
 		return s.UpdateChannel
+	case keyAutoUpdate:
+		return s.AutoUpdate
 	case keyInvertListScroll:
 		return s.InvertListScroll
 	case keyAutoArchiveDays:
@@ -874,6 +888,8 @@ func Set(ctx context.Context, st Store, s Settings, key string, value any) (Sett
 		s.Language = value.(string)
 	case keyUpdateChannel:
 		s.UpdateChannel = value.(string)
+	case keyAutoUpdate:
+		s.AutoUpdate = value.(string)
 	case keyInvertListScroll:
 		s.InvertListScroll = value.(bool)
 	case keyAutoArchiveDays:

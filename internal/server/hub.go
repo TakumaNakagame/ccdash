@@ -273,7 +273,7 @@ func hubAllowed(r *http.Request, cfg settings.Settings) (bool, string) {
 		return true, ""
 	case r.Method == http.MethodPost && hubTaskEdit.MatchString(p) && p != "/api/tasks/sync" && p != "/api/tasks/import":
 		return true, ""
-	case r.Method == http.MethodGet && (p == "/pty/" || p == "/pty" || p == "/api/restart" || p == "/api/login"):
+	case r.Method == http.MethodGet && (p == "/pty/" || p == "/pty" || p == "/api/restart" || p == "/api/login" || p == "/api/update"):
 		return true, ""
 	case r.Method == http.MethodPut && p == "/api/brief-common", r.Method == http.MethodPost && hubProjectNote.MatchString(p):
 		// A person's edit in the portal. Same gate as starting a session:
@@ -291,6 +291,18 @@ func hubAllowed(r *http.Request, cfg settings.Settings) (bool, string) {
 		// same gate as starting one.
 		if r.Header.Get(tunnel.HeaderPeerID) != "" {
 			return false, "not available through the hub to another device: only the operator changes roles"
+		}
+		if !cfg.AttachEnabled {
+			return false, "attach is OFF on this device"
+		}
+		return true, ""
+	case r.Method == http.MethodPost && p == "/api/update":
+		// Updating this collector's ccdash (update.go): the operator's
+		// button. It only installs the official release of the channel
+		// (fixed repository, sha256 checked) and restarts when idle — what
+		// POST /api/restart already may — so attach gates it; never a peer.
+		if r.Header.Get(tunnel.HeaderPeerID) != "" {
+			return false, "not available through the hub to another device: only the operator updates ccdash here"
 		}
 		if !cfg.AttachEnabled {
 			return false, "attach is OFF on this device"

@@ -792,6 +792,14 @@ What the portal may do is limited by the device's own settings: with
 decide approvals; with **Hub connection** off the device is offline.
 - **On a phone**: swipe right to go back (session → device list → board; from the left edge too when installed as an app, elsewhere in the browser, whose own gesture owns the edge). Opening a session no longer pops the keyboard.
 
+### Updating ccdash
+
+When a newer release is out, the machine's row in the portal and the app shows an **Update v…** button. The machine's collector downloads the GitHub release, installs it and restarts once the working sessions finish (hosted sessions resume by themselves). Claude takes no part, so it works even when Claude's login has expired. It needs **Attach** on for that machine.
+
+To update every night, run `ccdash update auto dev` (rc builds too) or `ccdash update auto stable` on the machine (or set **Auto update** in the TUI settings): between 03:00 and 05:00 it installs a newer release and sends a push. `ccdash update auto off` turns it off. A collector inside a TUI (`ccdash` / `ccdash -k`) can't restart itself and shows "Restart needed".
+
+A collector older than this feature has to be updated by hand once: `ccdash update --channel dev`.
+
 ### When Claude Code's login expires
 
 Claude Code keeps one login per machine. When it expires, that machine's sessions stop on "Login expired · Please run /login" and ccdash marks them "Login expired" (needs you). The portal and the app show a banner ("Claude Code's login has expired" on that machine) and one push per machine.
