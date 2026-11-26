@@ -454,8 +454,48 @@ too. Set it with:
 	}
 	c.Flags().StringVar(&channelFlag, "channel", "stable",
 		"release channel for this run: 'stable' for tagged releases, 'dev' to include pre-releases (default: the saved default channel)")
-	c.AddCommand(updateChannelCmd())
+	c.AddCommand(updateChannelCmd(), updateAutoCmd())
 	return c
+}
+
+// updateAutoCmd shows or sets the auto_update setting: the collector
+// updates itself once a night and restarts when idle.
+func updateAutoCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "auto [off|stable|dev]",
+		Short: "Show or set the nightly self-update (off / stable / dev)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			d, err := openDB()
+			if err != nil {
+				return err
+			}
+			defer d.Close()
+			st := store.NewLocal(d)
+			cur, _ := settings.Load(cmd.Context(), st)
+			if len(args) == 0 {
+				fmt.Println(cur.AutoUpdate)
+				return nil
+			}
+			v := strings.ToLower(strings.TrimSpace(args[0]))
+			if v != "off" {
+				ch, err := selfupdate.ParseChannel(v)
+				if err != nil {
+					return err
+				}
+				v = string(ch)
+			}
+			if _, err := settings.Set(cmd.Context(), st, cur, "auto_update", v); err != nil {
+				return err
+			}
+			if v == "off" {
+				fmt.Println("ccdash: nightly self-update is off (the portal's Update button still works)")
+			} else {
+				fmt.Printf("ccdash: the collector now updates itself every night (03:00–05:00) from the %s channel and restarts once no hosted session is busy\n", v)
+			}
+			return nil
+		},
+	}
 }
 
 // updateChannelCmd shows or sets the default update channel (the

@@ -301,6 +301,8 @@ type watchState struct {
 	restartSeen bool              // restart holds a baseline
 	login       string            // "expired" / "soon" / "" at the last look
 	loginSeen   bool              // login holds a baseline
+	update      string            // the last update attempt's signature at the last look
+	updateSeen  bool              // update holds a baseline
 	attention   map[string]string // session id → attention|reason last seen
 	lastSent    map[string]time.Time
 }
@@ -340,7 +342,16 @@ func (h *Hub) watchDevice(ctx context.Context, d Device, dc *deviceConn) {
 			if n, ok := loginNotice(d, ls, st); ok {
 				ns = append(ns, n)
 			}
-			h.storeSnapshot(d, sessions, rs, ls)
+			// A collector older than the Update button answers 404: no state.
+			var us *model.UpdateState
+			var gotUpdate model.UpdateState
+			if getJSON(ctx, client, "/api/update", &gotUpdate) == nil {
+				us = &gotUpdate
+			}
+			if n, ok := updateNotice(d, us, st); ok {
+				ns = append(ns, n)
+			}
+			h.storeSnapshot(d, sessions, rs, ls, us)
 		}
 		for _, n := range ns {
 			b := h.badgeCount()
@@ -527,10 +538,11 @@ type deviceSnapshot struct {
 	Sessions []model.Session
 	Restart  *model.RestartState // nil: the collector predates scheduled restarts
 	Login    *model.LoginState   // nil: the collector predates the login notice
+	Update   *model.UpdateState  // nil: the collector predates the Update button
 	At       time.Time
 }
 
-func (h *Hub) storeSnapshot(d Device, sessions []model.Session, rs *model.RestartState, ls *model.LoginState) {
+func (h *Hub) storeSnapshot(d Device, sessions []model.Session, rs *model.RestartState, ls *model.LoginState, us *model.UpdateState) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.snapshots == nil {
@@ -543,7 +555,40 @@ func (h *Hub) storeSnapshot(d Device, sessions []model.Session, rs *model.Restar
 			sessions[i].HostLetter = d.Letter
 		}
 	}
-	h.snapshots[d.ID] = deviceSnapshot{Device: d, Sessions: sessions, Restart: rs, Login: ls, At: time.Now()}
+	h.snapshots[d.ID] = deviceSnapshot{Device: d, Sessions: sessions, Restart: rs, Login: ls, Update: us, At: time.Now()}
+}
+
+// updateNotice pushes once when a device's ccdash updated itself (the
+// nightly auto_update) or an update failed. A press of the Update button
+// is pushed too: it may finish after the operator left the page.
+func updateNotice(d Device, us *model.UpdateState, st *watchState) (notification, bool) {
+	sig := ""
+	if us != nil && us.Last != nil {
+		sig = us.Last.At.String()
+	}
+	prev, seen := st.update, st.updateSeen
+	st.update, st.updateSeen = sig, true
+	if !seen || sig == prev || sig == "" || us.Last.To == "" && us.Last.OK {
+		return notification{}, false
+	}
+	l := us.Last
+	n := notification{URL: "/#/", Tag: d.ID + ":update"}
+	switch {
+	case !l.OK:
+		n.Title, n.TitleEn = d.Name+" · ccdash を更新できませんでした", d.Name+" · ccdash update failed"
+		n.Body, n.BodyEn = l.Error, l.Error
+	case l.To == l.From || us.Installed == "":
+		return notification{}, false // nothing new was installed
+	case us.RestartNeeded:
+		n.Title, n.TitleEn = d.Name+" · ccdash を "+l.To+" に更新", d.Name+" · ccdash updated to "+l.To
+		n.Body = "入れ替えました。この collector は自分では再起動できないので、動かしている所から再起動してください。"
+		n.BodyEn = "Installed. This collector can't restart itself: restart it from where it runs."
+	default:
+		n.Title, n.TitleEn = d.Name+" · ccdash を "+l.To+" に更新", d.Name+" · ccdash updated to "+l.To
+		n.Body = "作業中のセッションが終わり次第、再起動して新しい版にします。ホスト中のセッションは自動で再開されます。"
+		n.BodyEn = "It restarts into the new version once the working sessions finish; hosted sessions resume by themselves."
+	}
+	return n, true
 }
 
 // loginNotice pushes once when a device's Claude Code login stops working

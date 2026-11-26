@@ -113,7 +113,7 @@ func TestBoard(t *testing.T) {
 		{SessionID: "c", Status: model.StatusIdle, Attention: model.AttentionDone},
 		{SessionID: "d", Status: model.StatusIdle},
 		{SessionID: "e", Status: model.StatusStopped, Unseen: true}, // NEW without a done flag
-	}, nil, nil)
+	}, nil, nil, nil)
 	if n := hub.badgeCount(); n != 3 {
 		t.Fatalf("badgeCount = %d, want 3 (b, c, e)", n)
 	}
@@ -178,8 +178,8 @@ func TestPushSubscribeAndKey(t *testing.T) {
 // reports it, asks for a login first, and says so when nobody has it.
 func TestSessionLink(t *testing.T) {
 	hub := newTestHub(t, true)
-	hub.storeSnapshot(Device{ID: "d1"}, []model.Session{{SessionID: "x"}}, nil, nil)
-	hub.storeSnapshot(Device{ID: "d2"}, []model.Session{{SessionID: "abc-123"}}, nil, nil)
+	hub.storeSnapshot(Device{ID: "d1"}, []model.Session{{SessionID: "x"}}, nil, nil, nil)
+	hub.storeSnapshot(Device{ID: "d2"}, []model.Session{{SessionID: "abc-123"}}, nil, nil, nil)
 	w := serve(hub.Handler(), "GET", "/s/abc-123", "", nil)
 	if w.Code != http.StatusFound || w.Header().Get("Location") != "/#/d/d2/s/abc-123" {
 		t.Fatalf("link = %d %q", w.Code, w.Header().Get("Location"))
@@ -248,6 +248,36 @@ func TestLoginNotice(t *testing.T) {
 		t.Fatal("pushed on recovery")
 	}
 	if _, ok := loginNotice(d, nil, st); ok {
+		t.Fatal("pushed for an old collector")
+	}
+}
+
+// TestUpdateNotice: one push per update attempt that installed something
+// or failed; none on the baseline, for a no-op, or for an old collector.
+func TestUpdateNotice(t *testing.T) {
+	d := Device{ID: "d1", Name: "haruna"}
+	st := newWatchState()
+	at := time.Date(2026, 11, 26, 3, 10, 0, 0, time.UTC)
+	if _, ok := updateNotice(d, &model.UpdateState{}, st); ok {
+		t.Fatal("baseline pushed")
+	}
+	ok1 := &model.UpdateState{Installed: "v2", Last: &model.UpdateResult{At: at, From: "v1", To: "v2", By: "auto", OK: true}}
+	n, ok := updateNotice(d, ok1, st)
+	if !ok || !strings.Contains(n.Title, "v2") {
+		t.Fatalf("installed notice = %+v %v", n, ok)
+	}
+	if _, ok := updateNotice(d, ok1, st); ok {
+		t.Fatal("pushed twice")
+	}
+	noop := &model.UpdateState{Last: &model.UpdateResult{At: at.Add(time.Hour), From: "v2", To: "v2", OK: true}}
+	if _, ok := updateNotice(d, noop, st); ok {
+		t.Fatal("no-op pushed")
+	}
+	fail := &model.UpdateState{Last: &model.UpdateResult{At: at.Add(2 * time.Hour), From: "v2", OK: false, Error: "rate limited"}}
+	if n, ok := updateNotice(d, fail, st); !ok || n.Body != "rate limited" {
+		t.Fatalf("failure notice = %+v %v", n, ok)
+	}
+	if _, ok := updateNotice(d, nil, st); ok {
 		t.Fatal("pushed for an old collector")
 	}
 }

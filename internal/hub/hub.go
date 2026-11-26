@@ -718,6 +718,9 @@ type deviceView struct {
 	// Login is the device's Claude Code login while it needs the
 	// operator (expired, about to expire, or a sign-in under way).
 	Login *model.LoginState `json:"login,omitempty"`
+	// Update is the device's ccdash version and update (the Update
+	// button); nil for a collector older than it.
+	Update *model.UpdateState `json:"update,omitempty"`
 }
 
 func (h *Hub) handleListDevices(w http.ResponseWriter, r *http.Request) {
@@ -741,6 +744,7 @@ func (h *Hub) handleListDevices(w http.ResponseWriter, r *http.Request) {
 			if ls := snaps[d.ID].Login; ls != nil && (ls.Expired || ls.Soon || ls.Flow != nil) {
 				v.Login = ls
 			}
+			v.Update = snaps[d.ID].Update
 		}
 		out = append(out, v)
 	}

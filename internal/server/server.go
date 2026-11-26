@@ -95,6 +95,8 @@ type Server struct {
 	// login: this machine's Claude Code login and the sign-in the portal
 	// runs (login.go).
 	login loginRunner
+	// upd: this collector's own ccdash update (update.go).
+	upd updater
 
 	// statusLines: latest relayed statusLine JSON per session (statusline.go).
 	statusMu    sync.Mutex
@@ -180,6 +182,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/login/start", wrap(s.handleLoginStart))
 	s.mux.HandleFunc("POST /api/login/code", wrap(s.handleLoginCode))
 	s.mux.HandleFunc("POST /api/login/cancel", wrap(s.handleLoginCancel))
+	s.mux.HandleFunc("GET /api/update", wrap(s.handleUpdateState))
+	s.mux.HandleFunc("POST /api/update", wrap(s.handleUpdate))
 
 	// Remote-mode API — consumed by internal/store.Remote so a TUI can run
 	// on a different host than the collector. Same rate-limit + token
@@ -322,6 +326,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	go s.attentionLoop(ctx)
 	go s.messageLoop(ctx)
 	go s.loginLoop(ctx)
+	go s.updateLoop(ctx)
 	errCh := make(chan error, len(lns))
 	for _, ln := range lns {
 		go func(l net.Listener) { errCh <- s.srv.Serve(l) }(ln)
